@@ -6,6 +6,7 @@ from claude_agent_sdk import ResultMessage
 
 from hallux.config import Hardware
 from hallux.machine import SYSTEM_PROMPT, Key, Machine
+from hallux.protocol import Action, FieldState
 
 
 def result(text, *, error=False):
@@ -68,6 +69,31 @@ class FakeTerminal:
 
     def size(self):
         return 100, 30
+
+    # block mode: forms are recorded, actions come from the same script as the keys
+    forms = None
+    ended = 0
+    texts = None
+
+    async def show_form(self, screen, form):
+        self.forms = (self.forms or []) + [(screen, form)]
+        self.texts = {f.id: f.text for f in form.fields if f.text is not None} | (self.texts or {})
+
+    async def next_action(self):
+        key = self.keys.pop(0)
+        if isinstance(key, type) and issubclass(key, BaseException):
+            raise key
+        return key
+
+    async def end_form(self):
+        if self.forms and self.ended < len(self.forms):
+            self.ended = len(self.forms)
+
+    def field_text(self, id):
+        return self.texts[id]
+
+    def field_saved(self, id):
+        pass
 
 
 def screen(text, prompt="user@hallux:~$ ", tail=""):
@@ -184,3 +210,71 @@ def test_options(tmp_path):
     assert list(options.mcp_servers) == ["hallux"]
     assert "mcp__hallux__read_file" in options.allowed_tools
     assert all(name.startswith("mcp__hallux__") for name in options.allowed_tools)
+
+
+NANO = ('<screen>\n  GNU nano 7.2   hello.txt\n</screen><prompt></prompt>'
+        '<form keys="C-o C-x" focus="text" keymap="nano">'
+        '<editor id="text" top="3" left="1" height="20" file="hello.txt"/></form>')
+
+
+def test_block_mode_nano_session(tmp_path):
+    (tmp_path / "home" / "user").mkdir(parents=True)
+    (tmp_path / "home" / "user" / "hello.txt").write_text("hi\n")
+    model = FakeModel(screen(""),
+                      NANO,
+                      '<screen>\n  File Name to Write: </screen><prompt></prompt>'
+                      '<form keys="C-c"><editor id="text"/><line id="name" top="23" left="21">'
+                      'hello.txt</line></form>',
+                      '<screen>\n  GNU nano 7.2   hello.txt\n</screen><prompt></prompt>'
+                      '<form keys="C-o C-x"><editor id="text"/></form>',
+                      screen("", prompt="user@hallux:~$ "),
+                      screen("", prompt="", tail="<halt/>"))
+    edited = FieldState("text", "hi\nthere\n", (2, 6), modified=True, changed=True)
+    terminal = FakeTerminal(
+        "nano hello.txt",
+        Action("C-o", "text", (edited,)),
+        Action("Enter", "name", (FieldState("text", edited.text, (2, 6), True, False),
+                                 FieldState("name", "hello.txt", (1, 10), False, False))),
+        Action("C-x", "text", (FieldState("text", edited.text, (2, 6), False, False),)),
+        EOFError)
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+
+    async def cd_home_then_run():
+        read_line = terminal.read_line
+
+        async def typing(prompt, default=""):
+            machine.disk.chdir("/home/user")             # what the AI's boot does
+            return await read_line(prompt, default)
+        terminal.read_line = typing
+        await machine.run()
+
+    asyncio.run(cd_home_then_run())
+    first_screen, first_form = terminal.forms[0]
+    assert first_screen == "  GNU nano 7.2   hello.txt\n"
+    assert first_form.fields[0].text == "hi\n"           # loaded from the disk, not the AI
+    assert first_form.keymap == "nano" and first_form.keys == ("C-o", "C-x")
+    _, _, ctrl_o, enter, ctrl_x, _ = model.sessions[0]
+    assert ctrl_o.startswith('<action key="C-o" focus="text" ')
+    assert '<field id="text" cursor="2:6" modified="yes">hi\nthere\n</field>' in ctrl_o
+    assert '<field id="text" cursor="2:6" modified="yes" unchanged="yes"></field>' in enter
+    assert ctrl_x.startswith('<action key="C-x" ')
+    assert terminal.ended == 3                            # the shell screen came back
+    assert terminal.prompts[-1][0] == "user@hallux:~$ "   # and the shell's prompt with it
+
+
+def test_block_mode_survives_a_model_failure(tmp_path, capsys):
+    model = FakeModel(screen(""), NANO, result("overloaded", error=True),
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("nano hello.txt", Action("C-x", "text", ()), EOFError)
+    run(tmp_path, model, terminal)
+    assert terminal.ended == 1                            # thrown out of the form, not stuck
+    assert terminal.prompts[-1][0] == "user@hallux:~$ "
+    assert "overloaded" in capsys.readouterr().err
+
+
+def test_a_click_reports_where_it_landed(tmp_path):
+    model = FakeModel(screen(""), NANO, screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("nano x", Action("click", "text", (), row=24, col=3))
+    run(tmp_path, model, terminal)
+    click = model.sessions[0][2]
+    assert click.startswith('<action key="click" focus="text" row="24" col="3" ')

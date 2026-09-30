@@ -277,3 +277,14 @@ def test_memory_on_first_boot(tmp_path):
     assert disk.memory_edit("", "# hallux memory\n") == {"ok": True, "size": 16}
     assert (tmp_path / ".hallux" / "memory.md").read_text() == "# hallux memory\n"
     assert os.listdir(tmp_path / ".hallux") == ["memory.md"]
+
+
+def test_read_text_for_editors(disk, root, monkeypatch):
+    assert disk.read_text("/home/user/notes.md") == "hello\n"
+    (root / "blob").write_bytes(b"\x00\x01")
+    with pytest.raises(ValueError):
+        disk.read_text("/blob")
+    monkeypatch.setattr(hallux.disk, "EDIT_LIMIT", 3)
+    fails(errno.EFBIG, lambda: disk.read_text("/home/user/notes.md", hallux.disk.EDIT_LIMIT))
+    fails(errno.ENOENT, disk.read_text, "/nope")
+    fails(errno.ENOENT, disk.read_text, "/.hallux/memory.md")

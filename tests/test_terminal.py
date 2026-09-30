@@ -44,3 +44,32 @@ def test_ctrl_c_and_ctrl_d():
         typed("half a line\x03")
     with pytest.raises(EOFError):
         typed("\x04")
+
+
+def test_the_prompt_and_block_mode_share_the_keyboard(tmp_path):
+    """Everything typed at once: a command line, then editing in nano, then Ctrl-D."""
+    from test_machine import FakeModel, screen
+
+    from hallux.config import Hardware
+    from hallux.machine import Machine
+
+    (tmp_path / "notes.txt").write_text("hi\n")
+    model = FakeModel(
+        screen(""),
+        '<screen>\n  GNU nano 7.2   notes.txt\n</screen><prompt></prompt>'
+        '<form keys="C-x" keymap="nano"><editor id="text" top="2" file="notes.txt"/></form>',
+        screen("", prompt="$ "),
+        screen("logout\n", prompt="", tail="<halt/>"))
+
+    async def main():
+        with create_pipe_input() as pipe:
+            terminal = Terminal(input=pipe, output=DummyOutput())
+            machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+            pipe.send_text("nano notes.txt\r" "x\x18" "\x04")
+            await asyncio.wait_for(machine.run(), 10)
+
+    asyncio.run(main())
+    boot, nano, ctrl_x, eof = model.sessions[0]
+    assert nano.endswith(">nano notes.txt</input>")
+    assert ctrl_x.startswith('<action key="C-x"') and ">xhi\n</field>" in ctrl_x
+    assert eof.startswith("<eof ")

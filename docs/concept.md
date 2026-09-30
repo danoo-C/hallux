@@ -202,7 +202,8 @@ There are three kinds of commands:
   and switch it off again when they exit. The two costs:
   - **Every click is a model round trip**, so clicking feels like remote desktop over a slow
     connection. That's fine for buttons, menus and games, and useless for dragging.
-  - **Clicks need raw input mode**, described below.
+  - **Clicks go through block mode or raw mode**, both described below. In block mode, a
+    click inside a field just moves the cursor locally.
 
 ### Three layers, just like a real Linux terminal
 
@@ -248,6 +249,50 @@ Mouse mode `1000` reports presses, releases and the wheel. `1002` adds dragging.
 
 The one catch: running `cat` on a file that literally contains control-picture characters would
 turn them into real control bytes. That's rare, and it's acceptable.
+
+### Block mode: full-screen programs without a model call per key
+
+Your first live test showed the problem. `nano hello.txt` drew a convincing nano, but you
+couldn't use it. Sending every keypress to the AI isn't an option either, because each round
+trip takes seconds and costs money.
+
+This was solved in the 1970s. An **IBM 3270** mainframe terminal didn't send keystrokes. The
+mainframe sent a screen with **fields** on it, the terminal let you edit those fields by
+itself, and it only contacted the mainframe when you pressed Enter or a function key. Hallux
+does the same (`hallux/blockmode.py`):
+
+```text
+<screen>
+  GNU nano 7.2              hello.txt
+</screen><prompt></prompt><form keys="C-o C-x C-w" focus="text" keymap="nano">
+<editor id="text" top="3" left="1" height="21" width="120" file="/home/user/hello.txt"/>
+</form>
+```
+
+- **The AI draws the whole screen** and declares fields on it:
+  - `<editor>`: multi-line text.
+  - `<line>`: a single line, where Enter acts. Used for prompts and search boxes.
+  - `<pager>`: read-only scrolling text, for `less` and `man`. A pager plus Enter makes a menu.
+- **You type, move, scroll and click inside the fields locally**, with no model calls. A
+  `keymap` adds local editing keys:
+  - `nano`: ^K cuts, ^U pastes, ^Y/^V page, M-U undoes.
+  - `vi`: vi keys, with `:` as the action key that opens a command line.
+  - `emacs`: the default.
+- **Only action keys go to the AI** (`^O`, `^X`, `^W`, `q`, ...), plus clicks outside the fields
+  and Ctrl-C. The action carries each field's text and cursor position. Text the AI has already
+  seen is left out, so a nano session costs only a few AI calls.
+- **`file="..."` fields are filled from the disk by the terminal,** so a file's contents never
+  pass through the AI. The `save_field` tool writes a field's exact text back. That keeps big
+  files cheap, and the AI can never garble them by retyping.
+- **The screen stays up while the AI thinks.** The next form replaces it in place, for example
+  nano's `File Name to Write:` as a `<line>` on the status row. A reply without a form ends
+  block mode and brings the shell back.
+
+The design principle holds: the terminal only echoes and edits **your own typing**, inside
+fields the AI created, just as it already does at the prompt. Everything else is the AI's.
+
+Raw mode, described next, is still the plan for programs that genuinely need every key or
+live updates, such as action games and `top`.
 
 ### Input: cooked mode and raw mode
 
@@ -496,9 +541,10 @@ The rules for all of them:
   `os.listdir()` becomes `list_dir`. Only the *printed* output is imagined.
 - **Line-based interactive programs just work**, because the AI owns the prompt. The `python3`
   REPL (`>>>` / `...`), `sqlite3`, `bc` and text adventures all keep state within the session.
-- **Full-screen programs** (`htop`, `mc`, `vim`, `less`, invented games with menus) use the
-  alternate screen and raw mode, and the mouse if they support it. See
-  [the terminal](#the-terminal-colors-clearing-and-the-mouse).
+- **Full-screen programs** (`nano`, `vim`, `less`, `man`, invented games with menus) run in
+  [block mode](#block-mode-full-screen-programs-without-a-model-call-per-key). You edit
+  locally and the AI only hears about action keys. Programs that need every key (`top`,
+  action games) will get raw mode.
 - **Installs are bookkeeping.** `apt install cowsay` or `pip install requests` prints a
   believable install log (with a `␍` progress bar) and records the package in memory. After
   that, `import requests` works inside simulated Python. There is **no real network**, so
@@ -619,6 +665,7 @@ wraps them as SDK tools. `tests/` covers both.
 | `copy` | `src`, `dst`, `recursive` | `cp [-r]`. Copies symlinks as links, so nothing from outside the root gets copied in. |
 | `memory_read` | — | Boot: read `/.hallux/memory.md` |
 | `memory_edit` | `old`, `new` | Update one part of memory. An empty `old` appends. It writes atomically, so a crash never leaves half a memory. |
+| `save_field` | `field`, `path` | Block mode: writes a field's exact text to a file (nano's `^O`, vim's `:w`). |
 
 There is **no "run command" tool**, and that's the whole point. Errors come back as errno names
 (`{"error": "ENOENT"}`), and the AI turns them into bash messages, or into haiku if a rule says so.

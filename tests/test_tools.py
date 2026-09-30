@@ -70,3 +70,36 @@ def test_errors_are_errno_names_without_host_paths(tools, root):
         assert str(root) not in result["content"][0]["text"]
     payload, is_error = call(tools, "edit_file", path="/home/user/notes.md", old="bye", new="x")
     assert is_error and "0 times" in payload["error"]
+
+
+class Screen:
+    """Stands in for the terminal's block-mode fields."""
+
+    def __init__(self, **texts):
+        self.texts, self.saved = texts, []
+
+    def field_text(self, id):
+        if id not in self.texts:
+            raise ValueError(f"no field {id!r} on the screen")
+        return self.texts[id]
+
+    def field_saved(self, id):
+        self.saved.append(id)
+
+
+def test_save_field_only_exists_with_block_mode(root):
+    assert "save_field" not in {t.name for t in build_tools(Disk(root))}
+    _, allowed = build_server(Disk(root), fields=Screen())
+    assert "mcp__hallux__save_field" in allowed and len(allowed) == 14
+
+
+def test_save_field_writes_exactly_what_the_user_typed(root):
+    screen = Screen(text="hi\nthere")
+    tools = {t.name: t for t in build_tools(Disk(root), fields=screen)}
+    assert call(tools, "save_field", field="text", path="/home/user/hello.txt") == (
+        {"ok": True, "size": 8, "lines": 2}, False)
+    assert (root / "home" / "user" / "hello.txt").read_text() == "hi\nthere"
+    assert screen.saved == ["text"]
+    payload, is_error = call(tools, "save_field", field="nope", path="/x")
+    assert is_error and "no field 'nope'" in payload["error"]
+    assert call(tools, "save_field", field="text", path="/.hallux/memory.md")[0] == {"error": "ENOENT"}

@@ -1,4 +1,4 @@
-from hallux.protocol import Reply, decode, envelope, parse
+from hallux.protocol import Field, Reply, decode, envelope, parse
 
 
 def test_envelope():
@@ -43,3 +43,42 @@ def test_parse_survives_a_broken_format():
     assert parse("<screen>\nx\n<prompt>$ </prompt>") == Reply(screen="x\n", prompt="$ ")
     assert parse("<screen>\nx\n</screen>") == Reply(screen="x\n", prompt=None)
     assert parse("just text") == Reply(screen="just text", prompt=None)
+
+
+FORM_REPLY = '''<screen>
+  GNU nano 7.2        hello.txt
+</screen><prompt></prompt><form keys="C-o C-x C-w" focus="text" keymap="nano">
+<editor id="text" top="3" height="20" width="120" file="/home/user/hello.txt" cursor="2:5" style="fg:#ffb6c1" lang="python"/>
+<line id="name" top="23" left="21" width="60">hello.txt</line>
+<pager id="man">
+a < b && c > d </pager>
+<editor id="empty"></editor>
+</form>'''
+
+
+def test_parse_a_form():
+    reply = parse(FORM_REPLY)
+    assert reply.screen == "  GNU nano 7.2        hello.txt\n" and reply.prompt == ""
+    form = reply.form
+    assert form.keys == ("C-o", "C-x", "C-w") and form.focus == "text" and form.keymap == "nano"
+    editor, line, pager, empty = form.fields
+    assert editor == Field("editor", "text", top=3, left=1, width=120, height=20, text=None,
+                           file="/home/user/hello.txt", cursor=(2, 5), style="fg:#ffb6c1",
+                           lang="python")
+    assert (line.kind, line.text, line.height, line.width) == ("line", "hello.txt", 1, 60)
+    assert pager.text == "a < b && c > d "             # the body is literal text
+    assert (pager.width, pager.height) == (0, 0)       # 0: to the edge of the screen
+    assert empty.text == ""                            # empty body: empty; <x/>: keep
+
+
+def test_forms_only_count_after_the_prompt():
+    reply = parse('<screen>\n<form keys="q"><line id="a">hi</line></form>\n</screen><prompt>$ </prompt>')
+    assert reply.form is None and reply.screen.startswith("<form")   # cat of an HTML file
+    assert parse('<screen>\n</screen><prompt></prompt><form keys="q"></form>').form is None
+    assert parse('<screen>\n</screen><prompt></prompt><form><line top="x">a</line></form>').form is None
+
+
+def test_bad_form_values_fall_back():
+    form = parse('<screen>\n</screen><prompt></prompt><form keymap="emacsvi">'
+                 '<line id="a" top="x" cursor="nope">a</line></form>').form
+    assert form.keymap == "emacs" and form.fields[0].top == 1 and form.fields[0].cursor is None

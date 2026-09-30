@@ -6,6 +6,7 @@ of its own; see docs/concept.md, "The terminal".
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import signal
 import sys
@@ -21,7 +22,7 @@ from claude_agent_sdk import (
 
 from hallux.config import Hardware
 from hallux.disk import Disk
-from hallux.protocol import Reply, envelope, parse
+from hallux.protocol import Action, Form, Reply, envelope, parse
 from hallux.tools import SERVER, build_server
 
 log = logging.getLogger("hallux")
@@ -43,6 +44,18 @@ class Terminal(Protocol):
 
     def size(self) -> tuple[int, int]: ...
 
+    # block mode: full-screen programs with editable fields (hallux.blockmode)
+    async def show_form(self, screen: str, form: Form) -> None: ...
+
+    async def next_action(self) -> Action:
+        """Wait for an action key or click. Raises EOFError if the form can't go on."""
+
+    async def end_form(self) -> None: ...
+
+    def field_text(self, id: str) -> str: ...
+
+    def field_saved(self, id: str) -> None: ...
+
 
 class Machine:
     def __init__(self, root: Path, hardware: Hardware, terminal: Terminal,
@@ -54,7 +67,7 @@ class Machine:
         self.prompt = ""
 
     def options(self) -> ClaudeAgentOptions:
-        server, allowed = build_server(self.disk)
+        server, allowed = build_server(self.disk, fields=self.terminal)
         hw = self.hardware
         return ClaudeAgentOptions(
             system_prompt=SYSTEM_PROMPT,
@@ -79,37 +92,90 @@ class Machine:
         """One boot-to-shutdown lifetime. Returns True if the machine wants to reboot."""
         self.disk.cwd = "/"
         async with self.client_factory(options=self.options()) as client:   # empty RAM
-            reply = await self.send(client, "boot", fatal=True)
-            restore = ""                         # the line to put back after Ctrl-L
-            while not (reply.halt or reply.reboot):
+            try:
+                reply = await self.send(client, "boot", fatal=True)
+                restore = ""                     # the line to put back after Ctrl-L
+                while not (reply.halt or reply.reboot):
+                    if reply.form is not None:   # a full-screen program in block mode
+                        reply = await self.block_mode(client, reply)
+                        continue
+                    try:
+                        line = await self.terminal.read_line(self.prompt, restore)
+                    except EOFError:
+                        reply = await self.send(client, "eof", halt_on_error=True)
+                        continue
+                    except KeyboardInterrupt:
+                        restore = ""
+                        reply = await self.send(client, "signal", "SIGINT")
+                        continue
+                    if isinstance(line, Key):
+                        restore = line.line
+                        reply = await self.send(client, "key", line.line, name=line.name)
+                    else:
+                        restore = ""
+                        reply = await self.send(client, "input", line)
+                return reply.reboot
+            finally:
+                await self.terminal.end_form()
+
+    async def block_mode(self, client: ClaudeSDKClient, reply: Reply) -> Reply:
+        """Show the AI's form, let the user work in it, send back the action they end with."""
+        await self.terminal.show_form(reply.screen, self.load_files(reply.form))
+        try:
+            action = await self.terminal.next_action()
+        except EOFError:                          # the full-screen app died: back to the shell
+            log.error("block mode ended unexpectedly")
+            await self.terminal.end_form()
+            return await self.send(client, "signal", "SIGINT")
+        attrs: dict[str, object] = {"key": action.key}
+        if action.focus:
+            attrs["focus"] = action.focus
+        if action.row is not None:
+            attrs |= {"row": action.row, "col": action.col}
+        return await self.send(client, "action", self.field_report(action), **attrs)
+
+    def load_files(self, form: Form) -> Form:
+        """Fill file="..." fields from the disk: the text never passes through the AI."""
+        fields = []
+        for field in form.fields:
+            if field.file and field.text is None:
                 try:
-                    line = await self.terminal.read_line(self.prompt, restore)
-                except EOFError:
-                    reply = await self.send(client, "eof", halt_on_error=True)
-                    continue
-                except KeyboardInterrupt:
-                    restore = ""
-                    reply = await self.send(client, "signal", "SIGINT")
-                    continue
-                if isinstance(line, Key):
-                    restore = line.line
-                    reply = await self.send(client, "key", line.line, name=line.name)
-                else:
-                    restore = ""
-                    reply = await self.send(client, "input", line)
-            return reply.reboot
+                    field = dataclasses.replace(field, text=self.disk.read_text(field.file))
+                except FileNotFoundError:
+                    field = dataclasses.replace(field, text="")            # a new file
+                except (OSError, ValueError) as e:
+                    log.warning("can't load %s into a field: %s", field.file, e)
+                    field = dataclasses.replace(field, text="")
+            fields.append(field)
+        return dataclasses.replace(form, fields=tuple(fields))
+
+    @staticmethod
+    def field_report(action: Action) -> str:
+        """The fields as the user left them. Text the AI has already seen is left out."""
+        parts = []
+        for state in action.fields:
+            attrs = {"id": state.id, "cursor": f"{state.cursor[0]}:{state.cursor[1]}",
+                     "modified": "yes" if state.modified else "no"}
+            if not state.changed:
+                attrs["unchanged"] = "yes"
+            parts.append(envelope("field", state.text if state.changed else "", **attrs))
+        return "".join(f"\n{part}" for part in parts) + ("\n" if parts else "")
 
     async def send(self, client: ClaudeSDKClient, tag: str, body: str = "", *,
                    fatal: bool = False, halt_on_error: bool = False, **attrs: object) -> Reply:
-        """Send one envelope, show the AI's screen, remember its prompt."""
+        """Send one envelope and show the reply: a screen and a prompt, or a form."""
         text, interrupted = await self.exchange(client, self.envelope(tag, body, **attrs))
         if interrupted:                          # Ctrl-C while the AI was working
             text, _ = await self.exchange(client, self.envelope("signal", "SIGINT"))
         if text is None:                         # the model failed; the error went to stderr
             if fatal:
                 raise SystemExit(1)
+            await self.terminal.end_form()       # never leave anyone stuck in a form
             return Reply(screen="", prompt=None, halt=halt_on_error)
         reply = parse(text)
+        if reply.form is not None:               # block mode shows it; the shell prompt stays
+            return reply
+        await self.terminal.end_form()
         self.terminal.write(reply.screen)
         if reply.prompt is not None:
             self.prompt = reply.prompt

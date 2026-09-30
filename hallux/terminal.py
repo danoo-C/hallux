@@ -15,7 +15,9 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 
+from hallux.blockmode import BlockMode
 from hallux.machine import Key
+from hallux.protocol import Action, Form
 
 # Escape sequences other than colors (SGR): prompt_toolkit must print them as-is, zero-width.
 NON_SGR_ESCAPE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-ln-z]")
@@ -36,6 +38,7 @@ class Terminal:
 
         self.session: PromptSession = PromptSession(
             history=InMemoryHistory(), key_bindings=keys, input=input, output=output)
+        self.block = BlockMode(input=input, output=output)
 
     async def read_line(self, prompt: str, default: str = "") -> str | Key:
         return await self.session.prompt_async(ANSI(zero_width(prompt)), default=default)
@@ -46,3 +49,18 @@ class Terminal:
 
     def size(self) -> tuple[int, int]:
         return tuple(shutil.get_terminal_size())
+
+    async def show_form(self, screen: str, form: Form) -> None:
+        await self.block.show(screen, form)
+
+    async def next_action(self) -> Action:
+        return await self.block.next_action()
+
+    async def end_form(self) -> None:
+        await self.block.end()
+
+    def field_text(self, id: str) -> str:
+        return self.block.field_text(id)
+
+    def field_saved(self, id: str) -> None:
+        self.block.field_saved(id)

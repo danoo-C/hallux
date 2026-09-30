@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "claude-agent-sdk",
     "prompt_toolkit>=3.0",
+    "pygments",                 # syntax colors in block-mode editors
 ]
 
 [project.optional-dependencies]

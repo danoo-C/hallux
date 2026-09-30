@@ -22,6 +22,7 @@ from pathlib import Path
 HIDDEN_NAME = ".hallux"
 READ_LIMIT = 64 * 1024        # bytes returned per read_file call
 FIND_LIMIT = 1000             # entries returned per find call
+EDIT_LIMIT = 1024 * 1024      # biggest file a block-mode editor loads
 
 
 def _fail(code: int) -> OSError:
@@ -123,6 +124,16 @@ class Disk:
         if truncated:
             result["next_offset"] = offset + len(data)
         return result
+
+    def read_text(self, path: str, limit: int = EDIT_LIMIT) -> str:
+        """A whole text file, for an editor field. Binary or huge files are refused."""
+        real = self.real(path)
+        if real.stat().st_size > limit:
+            raise _fail(errno.EFBIG)
+        data = real.read_bytes()
+        if b"\0" in data:
+            raise ValueError("binary file")
+        return data.decode("utf-8", "replace")
 
     def find(self, path: str = ".", pattern: str = "*") -> dict:
         base = self.real(path)

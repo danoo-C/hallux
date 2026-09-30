@@ -15,12 +15,21 @@ A short plan. The design behind every step is in [concept.md](concept.md).
   whiteouts, and the reboot test.
 - [ ] **4. The `hallux` command:** rules, dotfile changes, listing and forgetting rules.
 - [ ] **5. Programs:** script simulation, the Python REPL, package installs, program cards.
-- [ ] **6. Raw mode and the mouse:** full-screen programs, key and click events, clean exits.
+- [x] **6. Block mode:**
+  - full-screen programs as 3270-style forms: `editor`, `line` and `pager` fields,
+    edited locally;
+  - only action keys and clicks reach the AI;
+  - `file=` fields loaded from the disk, and the `save_field` tool;
+  - `nano`, `vi` and `emacs` keymaps;
+  - pagers as menus. The code is in `hallux/blockmode.py`.
+- [ ] **6b. Raw mode:** every key to the AI, for programs that need it (`top`, action games),
+  with live updates (`<tick/>`).
+- [ ] **6c. Status bar, hard exit, key rule:** the proposal is in
+  [light-and-keys.md](light-and-keys.md) (open questions first).
 - [ ] **7. Prompt tuning:** the diff test and the reboot test, run on each model.
-- [ ] **8. Polish:** streaming, Ctrl-C, a log file, window resizing.
+- [ ] **8. Polish:** streaming, Ctrl-C while the AI works, window resizing.
 - [ ] **Later:**
   - AI tab completion;
-  - live programs (`<tick/>`);
   - partial redraws;
   - a "CPU" subagent;
   - a standalone MCP server;

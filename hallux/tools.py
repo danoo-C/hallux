@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import errno
 import json
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from claude_agent_sdk import SdkMcpTool, ToolAnnotations, create_sdk_mcp_server, tool
 from claude_agent_sdk.types import McpSdkServerConfig
@@ -19,6 +19,14 @@ READS = ToolAnnotations(readOnlyHint=True, maxResultSizeChars=200_000)
 PATH = {"type": "string", "description": "Path inside the machine, absolute or relative to the cwd."}
 TEXT = {"type": "string"}
 FLAG = {"type": "boolean"}
+
+
+class Fields(Protocol):
+    """The block-mode fields on screen (hallux.terminal.Terminal provides them)."""
+
+    def field_text(self, id: str) -> str: ...     # raises ValueError for an unknown field
+
+    def field_saved(self, id: str) -> None: ...
 
 
 def schema(required: dict[str, dict], optional: dict[str, dict] | None = None) -> dict:
@@ -39,14 +47,27 @@ def run(op: Callable[[], Any]) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": is_error}
 
 
-def build_tools(disk: Disk) -> list[SdkMcpTool]:
+def build_tools(disk: Disk, fields: Fields | None = None) -> list[SdkMcpTool]:
     def make(name: str, description: str, input_schema: dict, method: Callable,
              annotations: ToolAnnotations | None = None) -> SdkMcpTool:
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
             return run(lambda: method(**args))
         return tool(name, description, input_schema, annotations)(handler)
 
-    return [
+    def save_field(field: str, path: str) -> dict:
+        text = fields.field_text(field)
+        result = disk.write_file(path, text)
+        fields.field_saved(field)
+        lines = text.count("\n") + (not text.endswith("\n") and text != "")
+        return result | {"lines": lines}
+
+    block_mode = [] if fields is None else [
+        make("save_field",
+             "Block mode: write a field's current text, exactly as the user left it, to a "
+             "file (nano's ^O, vim's :w). Returns size and lines.",
+             schema({"field": TEXT, "path": PATH}), save_field),
+    ]
+    return block_mode + [
         make("list_dir",
              "List a directory, hidden entries included: name, mode (drwxr-xr-x), size, mtime "
              "(local time) and, for symlinks, target. For ls and globbing.",
@@ -99,7 +120,7 @@ def build_tools(disk: Disk) -> list[SdkMcpTool]:
     ]
 
 
-def build_server(disk: Disk) -> tuple[McpSdkServerConfig, list[str]]:
+def build_server(disk: Disk, fields: Fields | None = None) -> tuple[McpSdkServerConfig, list[str]]:
     """The MCP server for ClaudeAgentOptions.mcp_servers, and the names for allowed_tools."""
-    tools = build_tools(disk)
+    tools = build_tools(disk, fields)
     return create_sdk_mcp_server(SERVER, tools=tools), [f"mcp__{SERVER}__{t.name}" for t in tools]
