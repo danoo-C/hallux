@@ -10,6 +10,7 @@ readme = { file = "README.MD", content-type = "text/markdown" }
 requires-python = ">=3.11"
 dependencies = [
     "claude-agent-sdk",
+    "prompt_toolkit>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -27,3 +28,6 @@ testpaths = ["tests"]
 # hallux.py and install.py as top-level modules.
 [tool.setuptools.packages.find]
 include = ["hallux*"]
+
+[tool.setuptools.package-data]
+hallux = ["prompt.md"]

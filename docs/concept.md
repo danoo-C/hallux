@@ -253,9 +253,10 @@ turn them into real control bytes. That's rare, and it's acceptable.
 
 **Cooked mode** is the default, used at the prompt:
 
-- The tty reads a whole line with `readline` and sends it as `<input>`. Arrow keys and backspace
-  work locally, because line editing is the keyboard side, just like the kernel's line editing
-  in real Linux.
+- The tty reads a whole line with `prompt_toolkit` and sends it as `<input>`. Arrow keys,
+  backspace and ↑/↓ recall of what you typed work locally, because line editing is the keyboard
+  side, just like the kernel's line editing in real Linux. prompt_toolkit is async, so it shares
+  the event loop with the SDK client. It also measures colored prompts correctly.
 - Mouse reporting is **off**, so your terminal app's selection, copy and paste, and scrollback
   work normally.
 
@@ -310,10 +311,10 @@ Rules that make clicks reliable:
 | You press | Cooked mode (the prompt) | Raw mode (a full-screen program) |
 |---|---|---|
 | Enter | Sends the line as `<input>` | `<key>Enter</key>` |
-| Ctrl-C | Interrupts the model (`client.interrupt()`) and sends `<signal>SIGINT</signal>`. The AI prints `^C` and a new prompt. | `<key>C-c</key>`. The program decides what happens, like in real raw mode. |
+| Ctrl-C | At the prompt: sends `<signal>SIGINT</signal>`, and the AI shows a fresh prompt. While the AI is working: interrupts it (`client.interrupt()`) first, then sends the signal, and the AI prints `^C` and a new prompt. | `<key>C-c</key>`. The program decides what happens, like in real raw mode. |
 | Ctrl-D | `<eof/>`: bash prints `exit` and halts; Python leaves the REPL | `<key>C-d</key>` |
-| Ctrl-L | readline would clear the screen itself, so rebind it to send `clear` to the AI | `<key>C-l</key>` |
-| Tab, ↑ / ↓ | readline handles them for now. AI completion and history are on the roadmap. | `<key>Tab</key>`, `<key>Up</key>`, ... |
+| Ctrl-L | Sends `<key name="C-l">typed line</key>`. The AI clears the screen and redraws the prompt, and the terminal puts the typed line back. | `<key>C-l</key>` |
+| Tab, ↑ / ↓ | prompt_toolkit handles them for now. AI completion and history are on the roadmap. | `<key>Tab</key>`, `<key>Up</key>`, ... |
 | Mouse | Your terminal app's own selection and scrolling | `<mouse .../>` events |
 | Resizing the window | The new size goes with the next envelope | Same. An immediate redraw (SIGWINCH) is on the roadmap. |
 
@@ -322,7 +323,7 @@ Rules that make clicks reliable:
 - **No local prompt.** It doesn't know the prompt. It only knows what the AI last sent.
 - **No fast path.** Even `pwd`, `clear` and an empty Enter go to the model.
 - **No meta-commands.** Debug output, tool calls and cost go to a log file
-  (`tail -f ~/.hallux.log` in a second window), never to the screen.
+  (`tail -f ~/hallux-world/.hallux/hallux.log` in a second window), never to the screen.
 - **The only exception:** if the model can't be reached (no network, expired login), the tty
   prints one line to stderr. That's the "hardware" failing, not the machine talking.
 
@@ -537,6 +538,7 @@ layers win:
    model = "claude-sonnet-5-5"
    effort = "low"
    fallback_model = "claude-haiku-4-5"   # used if the main model is unavailable
+max_budget_usd = 1.00                 # optional: the machine stops after spending this per boot
    ```
 3. **Command-line flags**, for a one-off run:
    ```bash
