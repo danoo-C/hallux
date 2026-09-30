@@ -20,6 +20,9 @@ dev = [
 [project.scripts]
 hallux = "hallux.app:main"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 # Only the hallux/ package. Without this, setuptools would also pick up the root-level
 # hallux.py and install.py as top-level modules.
 [tool.setuptools.packages.find]

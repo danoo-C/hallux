@@ -599,18 +599,24 @@ startup cost even worse.
 
 ### The tools (MCP server)
 
+These are implemented in `hallux/disk.py`, the filesystem logic, and `hallux/tools.py`, which
+wraps them as SDK tools. `tests/` covers both.
+
 | Tool | Arguments | Used for |
 |---|---|---|
-| `list_dir` | `path` | `ls`, globbing. Returns name, mode (`drwxr-xr-x`), size and mtime, so `ls -la` needs one call. |
-| `read_file` | `path` (+ later `offset`, `limit`) | `cat`, reading scripts, copy-up checks. Capped at 64 KB, and binary files are flagged. |
+| `list_dir` | `path` | `ls`, globbing. Returns name, mode (`drwxr-xr-x`), size, mtime (local ISO time) and symlink target, so `ls -la` needs one call. |
+| `stat` | `path` | `ls -l <file>`, `ls -d`, `test -e/-f/-d`. Describes the path itself without following symlinks. |
+| `read_file` | `path`, `offset` | `cat`, reading scripts, copy-up checks. Returns 64 KB per call; when `truncated`, continue from `next_offset`. Never splits a UTF-8 character, and flags binary files. |
+| `find` | `path`, `pattern` | `find`, `grep -r` (then `read_file`). Returns up to 1000 entries with their type. |
 | `write_file` | `path`, `content`, `append` | `>`, `>>`, `touch`, `tee`, program output files, copy-up |
 | `edit_file` | `path`, `old`, `new` | `sed -i`, editing `~/.bashrc` for `hallux` changes |
 | `make_dir` | `path`, `parents` | `mkdir [-p]` |
-| `chdir` | `path` | `cd`. Validates the path and updates the tty's `cwd`. |
-| `remove`, `move`, `copy` | ... | `rm`, `mv`, `cp` |
-| `find` *(optional)* | `path`, `glob` | Saves many round trips for `find` and `grep -r` |
+| `chdir` | `path` | `cd`. Validates the path and updates the `cwd` that relative paths resolve against. |
+| `remove` | `path`, `recursive` | `rm [-r]`. Removes a symlink itself, never its target. `rm -rf /` empties the machine but keeps its memory. |
+| `move` | `src`, `dst` | `mv`. Moves into `dst` if it's a directory, and refuses to move a directory into itself. |
+| `copy` | `src`, `dst`, `recursive` | `cp [-r]`. Copies symlinks as links, so nothing from outside the root gets copied in. |
 | `memory_read` | — | Boot: read `/.hallux/memory.md` |
-| `memory_edit` | `old`, `new` | Update one part of memory. An empty `old` appends. |
+| `memory_edit` | `old`, `new` | Update one part of memory. An empty `old` appends. It writes atomically, so a crash never leaves half a memory. |
 
 There is **no "run command" tool**, and that's the whole point. Errors come back as errno names
 (`{"error": "ENOENT"}`), and the AI turns them into bash messages, or into haiku if a rule says so.
@@ -629,10 +635,10 @@ def to_real(path: str) -> Path:
     return real
 ```
 
-This was tested against these cases:
+`tests/test_disk.py` tests this against these cases:
 
 - `..` above the root clamps to `/`, like a real shell.
-- A symlink pointing outside `ROOT` is refused.
+- A symlink pointing outside `ROOT` is refused for every operation.
 - `/.hallux`, including `config.toml` and a symlink pointing into it, looks like it doesn't exist.
 
 ### The system prompt: this is where the magic is
@@ -714,7 +720,11 @@ change it, so say that it's set in .hallux/config.toml outside the machine.
 
 ## Minimal sketch
 
-This is untested against a live model and a real TTY. It compiles, and the following were
+This sketch shows the whole design in one file. The real implementation is being built in
+`hallux/`, following [the roadmap](roadmap.md). The sketch's tools section is already replaced
+by `hallux/disk.py` and `hallux/tools.py`.
+
+The sketch is untested against a live model and a real TTY. It compiles, and the following were
 tested with a stubbed SDK:
 
 - the path jail and the hidden `/.hallux` folder (including `config.toml`);
@@ -1128,27 +1138,7 @@ and the tools. Running them on each model is also the best way to choose your de
 
 ## Roadmap
 
-1. **Tools and jail.** All file tools plus the memory tools, with unit tests for escapes (`..`,
-   absolute paths, symlinks, `/.hallux`).
-2. **The tty in cooked mode.**
-   - Envelopes, the reply parser, control pictures, colored prompts.
-   - Boot, `<halt/>` and `<reboot/>`.
-   - Configuration: flags and `config.toml`.
-3. **First boot and memory.** First-boot creation, the memory format, copy-up and whiteouts, and
-   the reboot test.
-4. **The `hallux` command.** Rules, dotfile changes, `hallux` alone, forgetting a rule.
-5. **Programs.** Script simulation, the Python REPL, package installs, program cards.
-6. **Raw mode and the mouse.** Full-screen programs, the alternate screen, key and click events,
-   type-ahead, clean exits and `reset`.
-7. **Prompt iteration** with the diff test and the reboot test, run on each model.
-8. **Polish.** Streaming, Ctrl-C signals, a log file with tool calls and cost, SIGWINCH redraws.
-9. **Stretch goals:**
-   - AI tab completion and history.
-   - `<tick/>` events so live programs like `top` or a clock can update.
-   - Partial screen updates.
-   - A stronger "CPU" subagent for simulating programs.
-   - A standalone MCP server, so the same machine can be mounted in Claude Code.
-   - Several users sharing one machine.
+The step-by-step plan, with progress, is in [roadmap.md](roadmap.md).
 
 ## Open decisions
 
