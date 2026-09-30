@@ -1,1 +1,1 @@
-"""Hallux: a hallucinated shell. See CONCEPT.md for the design."""
+"""Hallux: a hallucinated shell. See docs/concept.md for the design."""
