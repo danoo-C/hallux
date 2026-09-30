@@ -162,3 +162,114 @@ def test_keys_typed_while_the_ai_thinks_go_into_the_next_screen():
     first, second = session(script)
     assert first.key == "C-o" and first.fields[0].text == EDITOR.text
     assert second.key == "C-x" and second.fields[0].text == "abc" + EDITOR.text
+
+
+def hooked_session(script, bar=None):
+    """Like session(), with hallux's status bar and the hard exit and Ctrl-C hooks."""
+    calls = []
+
+    def ctrl_c(waiting):
+        calls.append(("ctrl-c", waiting))
+        return waiting                                 # while the AI thinks: it interrupts
+
+    async def main():
+        with create_pipe_input() as pipe:
+            block = BlockMode(input=pipe, output=DummyOutput(), bar=bar,
+                              power_cut=lambda: calls.append("cut"), ctrl_c=ctrl_c)
+            try:
+                return await script(block, pipe.send_text), calls
+            finally:
+                await block.end()
+    return asyncio.run(asyncio.wait_for(main(), 10))
+
+
+def test_the_hard_exit_works_even_while_the_ai_thinks():
+    async def script(block, keys):
+        await block.show("", Form((EDITOR,), keys=("C-x",)))
+        keys("\x1b[3;6~")                              # Ctrl+Shift+Del
+        await asyncio.sleep(0.2)
+        keys(CTRL["X"])
+        await next_action(block)                       # now the AI is thinking
+        keys("\x1b[3;6~")
+        await asyncio.sleep(0.2)
+
+    _, calls = hooked_session(script)
+    assert calls == ["cut", "cut"]
+
+
+def test_ctrl_c_is_an_action_or_interrupts_the_ai():
+    async def script(block, keys):
+        await block.show("", Form((EDITOR,), keys=()))
+        keys("\x03")
+        first = await next_action(block)               # at rest: an action for the AI
+        keys("\x03")                                   # while it thinks: an interrupt
+        await asyncio.sleep(0.2)
+        await block.show("", Form((Field("editor", "text"),), keys=()))
+        keys("\x03")
+        return first, await next_action(block)
+
+    (first, third), calls = hooked_session(script)
+    assert first.key == third.key == "C-c"
+    assert calls == [("ctrl-c", False), ("ctrl-c", True), ("ctrl-c", False)]
+
+
+def test_block_mode_has_the_status_bar_below_the_screen():
+    from hallux.statusbar import StatusBar
+    pager = Field("pager", "man", text="\n".join(f"line {i}" for i in range(100)))
+
+    async def script(block, keys):
+        await block.show("", Form((pager,), keys=("q",)))
+        keys("Gq")                                     # jump to the end, then act
+        return await next_action(block)
+
+    action, _ = hooked_session(script, bar=StatusBar("claude-opus-5-5", "low"))
+    assert action.key == "q" and action.fields[0].cursor[0] == 100    # G: the last line
+
+
+# ---------------------------------------------------------------- fitting the screen
+
+from hallux.blockmode import fit_screen  # noqa: E402
+
+
+def test_a_screen_drawn_too_tall_still_shows_its_bottom_lines():
+    """The live bug: 31 rows drawn for a 29-row screen hid nano's help lines."""
+    lines = ["TITLE"] + [""] * 27 + ["[ New File ]", "^G Help  ^O Write Out", "^X Exit"]
+    editor = Field("editor", "text", top=3, height=24).with_defaults()
+    screen, tops = fit_screen(lines, [], 29, [editor])
+    assert len(screen) == 29 and screen[0] == "TITLE"
+    assert screen[-3:] == ["[ New File ]", "^G Help  ^O Write Out", "^X Exit"]
+    assert tops == {"text": 3}                         # rows 27-28 went, nothing above moved
+
+
+def test_fields_move_up_with_their_text():
+    lines = ["TITLE", "", ""] + ["body"] * 3 + ["", "", "Save modified buffer? "]
+    answer = Field("line", "yn", top=9, left=23).with_defaults()      # beside the question
+    screen, tops = fit_screen(lines, [], 7, [answer])
+    assert screen[tops["yn"] - 1] == "Save modified buffer? "
+
+
+def test_the_footer_is_pinned_to_the_bottom():
+    footer = ["[ New File ]", "^G Help", "^X Exit"]
+    editor = Field("editor", "text", top=3, height=0).with_defaults()
+    answer = Field("line", "yn", top=-3, left=23).with_defaults()
+    screen, tops = fit_screen(["TITLE"], footer, 10, [editor, answer])
+    assert screen == ["TITLE"] + [""] * 6 + footer
+    assert tops == {"text": 3, "yn": 8}                # -3: third row from the bottom
+
+
+def test_colored_rows_are_not_blank_and_the_footer_always_wins():
+    bar = "\x1b[48;5;205m" + " " * 20 + "\x1b[0m"      # a colored bar made of spaces
+    screen, _ = fit_screen(["a", bar, "b", "c"], ["KEYS"], 3, [])
+    assert screen == ["a", bar, "KEYS"]                # cut short; the keys survive
+
+
+def test_block_mode_lays_out_a_footer():
+    footer_form = Form((Field("editor", "text", top=2, height=0, text="hi\n"),), keys=("C-x",),
+                       footer="[ New File ]\n^X Exit\n")
+
+    async def script(block, keys):
+        await block.show("TITLE\n", footer_form)
+        keys(CTRL["X"])
+        return await next_action(block)
+
+    assert session(script).key == "C-x"

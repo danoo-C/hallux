@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import replace
 from typing import Callable
 
 from prompt_toolkit.application import Application, get_app
@@ -18,7 +19,7 @@ from prompt_toolkit.filters import Condition, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import DynamicKeyBindings, KeyBindings
 from prompt_toolkit.key_binding.bindings.scroll import scroll_page_down, scroll_page_up
-from prompt_toolkit.layout import DynamicContainer, Float, FloatContainer, Layout, Window
+from prompt_toolkit.layout import DynamicContainer, Float, FloatContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
@@ -26,6 +27,9 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import TextArea
 
 from hallux.protocol import Action, Field, FieldState, Form
+from hallux.statusbar import StatusBar
+
+POWER_CUT_KEY = "c-s-delete"
 
 SPECIAL_KEYS = {
     "Enter": "enter", "Escape": "escape", "Tab": "tab", "Backspace": "backspace",
@@ -69,6 +73,49 @@ def _style(style: str) -> str:
         return ""
 
 
+SGR_RESET = re.compile(r"\x1b\[0?m")
+
+
+def _blank(line: str) -> bool:
+    """Nothing to see: only spaces (any other escape code, like a colored bar, counts)."""
+    return not SGR_RESET.sub("", line).strip()
+
+
+def fit_screen(lines: list[str], footer: list[str], rows: int,
+               fields: list[Field]) -> tuple[list[str], dict[str, int]]:
+    """Lay the AI's screen out on exactly `rows` rows. Returns the rows and each field's top.
+
+    The footer is pinned to the bottom, so the AI never has to count rows. If the screen is
+    still too tall (models miscount), blank rows that no field covers are dropped from the
+    bottom up, and fields below them move up with the text they belong to. If that isn't
+    enough, the screen is cut short: the footer, with its keys, always stays.
+    """
+    footer = footer[-rows:]
+    room = rows - len(footer)
+    covered = set()
+    for f in fields:
+        if f.top > 0:
+            height = f.height or max(1, room - f.top + 1)
+            covered.update(range(f.top, f.top + height))
+    excess = len(lines) - room
+    dropped = []
+    for row in range(len(lines), 0, -1):
+        if excess <= 0:
+            break
+        if row not in covered and _blank(lines[row - 1]):
+            dropped.append(row)
+            excess -= 1
+    kept = [line for row, line in enumerate(lines, 1) if row not in dropped][:room]
+    screen = kept + [""] * (room - len(kept)) + footer
+    tops = {}
+    for f in fields:
+        if f.top < 0:                                  # counted from the bottom
+            tops[f.id] = max(1, rows + f.top + 1)
+        else:
+            tops[f.id] = max(1, f.top - sum(1 for row in dropped if row < f.top))
+    return screen, tops
+
+
 class Background(FormattedTextControl):
     """The AI's screen behind the fields. Clicks on it go to the AI."""
 
@@ -84,8 +131,13 @@ class Background(FormattedTextControl):
 
 
 class BlockMode:
-    def __init__(self, input=None, output=None) -> None:      # tests pass a pipe and a dummy
-        self.input, self.output = input, output
+    def __init__(self, input=None, output=None, bar: StatusBar | None = None,
+                 power_cut: Callable[[], None] = lambda: None,
+                 ctrl_c: Callable[[bool], bool] = lambda waiting: False) -> None:
+        self.input, self.output = input, output         # tests pass a pipe and a dummy
+        self.bar = bar                                  # hallux's status bar, the bottom row
+        self.power_cut = power_cut                      # the hard exit
+        self.ctrl_c = ctrl_c                            # every Ctrl-C; True means "consumed"
         self.app: Application | None = None
         self.running: asyncio.Task | None = None
         self.form: Form | None = None
@@ -108,6 +160,7 @@ class BlockMode:
 
     async def show(self, screen: str, form: Form) -> None:
         """Show a form, or update the one on screen. Fields whose text is None keep theirs."""
+        form = replace(form, fields=tuple(f.with_defaults() for f in form.fields))
         self.form = form
         self._build_areas(form)
         self.container = self._layout(screen, form)
@@ -120,7 +173,7 @@ class BlockMode:
             self.running = asyncio.create_task(self.app.run_async(handle_sigint=False))
             processor = self.app.key_processor         # keys typed while the AI thinks wait
             process_keys = processor.process_keys      # in the queue for the next screen
-            processor.process_keys = lambda: None if self.waiting else process_keys()
+            processor.process_keys = lambda: self._hold_keys() if self.waiting else process_keys()
         self.app.editing_mode = EditingMode.VI if form.keymap == "vi" else EditingMode.EMACS
         focus = self.areas.get(form.focus or "") or next(
             (self.areas[f.id] for f in form.fields if f.kind != "pager"), self.areas[form.fields[0].id])
@@ -173,6 +226,10 @@ class BlockMode:
         self.areas, self.kinds, self.seen, self.baseline = {}, {}, {}, {}
         self.waiting = False
 
+    def invalidate(self) -> None:
+        if self.app is not None:
+            self.app.invalidate()
+
     def field_text(self, id: str) -> str:
         if id not in self.areas:
             raise ValueError(f"no field {id!r} on the screen")
@@ -221,14 +278,35 @@ class BlockMode:
 
     def _layout(self, screen: str, form: Form) -> FloatContainer:
         size = lambda: get_app().output.get_size()                   # noqa: E731
+        bar_rows = 1 if self.bar else 0
+        rows = max(1, self._screen_size().rows - bar_rows)
+        lines = screen.split("\n")
+        footer = (form.footer or "").split("\n") if form.footer else []
+        for part in (lines, footer):
+            if part and part[-1] == "":                # the newline that ends the last row
+                part.pop()
+        body, tops = fit_screen(lines, footer, rows, list(form.fields))
         floats = []
         for f in form.fields:
+            top = tops[f.id]
             width = f.width or (lambda f=f: max(1, size().columns - f.left + 1))
-            height = f.height or (lambda f=f: max(1, size().rows - f.top + 1))
-            floats.append(Float(content=self.areas[f.id], top=f.top - 1, left=f.left - 1,
+            height = f.height or (lambda top=top: max(1, rows - len(footer) - top + 1))
+            floats.append(Float(content=self.areas[f.id], top=top - 1, left=f.left - 1,
                                 width=width, height=height))
-        background = Window(Background(screen, self._click), wrap_lines=False)
-        return FloatContainer(content=background, floats=floats)
+        background = Window(Background("\n".join(body), self._click), wrap_lines=False)
+        screen_area = FloatContainer(content=background, floats=floats)
+        if self.bar is None:
+            return screen_area
+        bar = FormattedTextControl(lambda: self.bar.fragments(size().columns))
+        return HSplit([screen_area, Window(bar, height=1)])
+
+    def _screen_size(self):
+        output = self.app.output if self.app is not None else self.output
+        if output is None:
+            import shutil
+            columns, rows = shutil.get_terminal_size()
+            return type("Size", (), {"rows": rows, "columns": columns})
+        return output.get_size()
 
     # ---------------------------------------------------------------- keys and clicks
 
@@ -254,6 +332,7 @@ class BlockMode:
         kb.add("G", filter=pager)(lambda e: setattr(e.current_buffer, "cursor_position",
                                                     len(e.current_buffer.text)))
 
+        kb.add(POWER_CUT_KEY, eager=True)(lambda e: self.power_cut())
         kb.add("enter", filter=line, eager=True)(self._action("Enter"))       # 3270 Enter
         if "Enter" in form.keys:                         # a pager as a menu: the cursor's
             kb.add("enter", filter=pager, eager=True)(self._action("Enter"))  # line is the pick
@@ -286,6 +365,8 @@ class BlockMode:
 
     def _action(self, name: str) -> Callable:
         def handle(event) -> None:
+            if name == "C-c" and self.ctrl_c(False):
+                return
             self._send(Action(key=name, focus=getattr(self._focused(), "id", None)))
         return handle
 
@@ -307,8 +388,20 @@ class BlockMode:
                 changed=text != self.seen.get(f.id)))
             self.seen[f.id] = text                     # the AI is about to see it
         self.actions.put_nowait(Action(action.key, action.focus, tuple(states), action.row, action.col))
-        queue = self.app.key_processor.input_queue    # keys typed right after the action key
-        self.held, _ = list(queue), queue.clear()      # wait for the AI's next screen
+        self._hold_keys()                              # keys typed right after the action key
+
+    def _hold_keys(self) -> None:
+        """While the AI thinks, keys wait for its next screen. Only the hard exit and Ctrl-C
+        (which can interrupt the AI) are acted on right away."""
+        queue = self.app.key_processor.input_queue
+        while queue:
+            press = queue.popleft()
+            if press.key == POWER_CUT_KEY:
+                self.power_cut()
+            elif press.key == "c-c" and self.ctrl_c(True):
+                continue
+            else:
+                self.held.append(press)
 
     def _release_keys(self) -> None:
         self.app.key_processor.input_queue.extendleft(reversed(self.held))

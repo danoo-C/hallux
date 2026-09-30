@@ -1,25 +1,32 @@
 """The machine loop, driven by a scripted keyboard and a fake model."""
 import asyncio
+import contextlib
 
 import pytest
-from claude_agent_sdk import ResultMessage
+from claude_agent_sdk import AssistantMessage, ResultMessage, ToolUseBlock
 
 from hallux.config import Hardware
 from hallux.machine import SYSTEM_PROMPT, Key, Machine
 from hallux.protocol import Action, FieldState
 
 
-def result(text, *, error=False):
-    return ResultMessage(subtype="error_during_execution" if error else "success",
-                         duration_ms=1, duration_api_ms=1, is_error=error, num_turns=1,
-                         session_id="s", result=text, total_cost_usd=0.001)
+def result(text, *, error=False, total=0.001, tools=()):
+    """A model turn: optional tool calls, then the result (the SDK reports a running total)."""
+    message = ResultMessage(subtype="error_during_execution" if error else "success",
+                            duration_ms=1500, duration_api_ms=1, is_error=error, num_turns=1,
+                            session_id="s", result=text, total_cost_usd=total)
+    calls = [AssistantMessage(content=[ToolUseBlock(id=str(i), name=f"mcp__hallux__{name}",
+                                                    input=args)], model="m")
+             for i, (name, args) in enumerate(tools)]
+    return calls + [message]
 
 
 class FakeModel:
     """Hands out scripted results, one per message, across as many sessions as it's asked for."""
 
     def __init__(self, *results):
-        self.results = [r if isinstance(r, ResultMessage) else result(r) for r in results]
+        self.results = [r if isinstance(r, list) else result(r) for r in results]
+        self.interrupts = 0
         self.sessions = []                   # the messages each session received
         self.options = []
 
@@ -43,19 +50,41 @@ class FakeClient:
         self.model.sessions[-1].append(message)
 
     async def receive_response(self):
-        yield self.model.results.pop(0)
+        for message in self.model.results.pop(0):
+            yield message
 
     async def interrupt(self):
-        pass
+        self.model.interrupts += 1
 
 
 class FakeTerminal:
     """Types the scripted keys; records what was shown."""
 
-    def __init__(self, *keys):
+    status_bar = False
+
+    def __init__(self, *keys, ctrl_c_while_busy=()):
         self.keys = list(keys)
         self.screen = ""
         self.prompts = []                    # (prompt, restored line) per read
+        self.statuses = []                   # every set_status call
+        self.activities = []                 # what each busy period was about
+        self.ctrl_c_while_busy = list(ctrl_c_while_busy)   # per busy period: press Ctrl-C?
+
+    async def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    @contextlib.asynccontextmanager
+    async def busy(self, interrupt, activity="thinking…"):
+        self.activities.append(activity)
+        if self.ctrl_c_while_busy and self.ctrl_c_while_busy.pop(0):
+            interrupt()
+        yield
+
+    def set_status(self, **changes):
+        self.statuses.append(changes)
 
     async def read_line(self, prompt, default=""):
         self.prompts.append((prompt, default))
@@ -118,7 +147,7 @@ def test_boot_input_and_halt(tmp_path):
     assert boot.startswith('<boot cwd="/" time="') and 'cols="100" rows="30"' in boot
     assert boot.endswith("></boot>")
     assert ls.startswith("<input ") and ls.endswith(">ls</input>")
-    assert eof.startswith("<eof ")
+    assert eof.startswith('<key name="C-d" ') and eof.endswith("></key>")
 
 
 def test_reboot_starts_a_fresh_session(tmp_path):
@@ -138,9 +167,8 @@ def test_the_prompt_comes_from_the_ai(tmp_path):
     model = FakeModel(screen("", prompt="user@hallux:~$ "),
                       screen("hallux: prompt saved to ~/.bashrc\n", prompt="␛[35mcow daysi moo>␛[0m "),
                       screen("Python 3.11.2\n", prompt=">>> "),
-                      screen("broken reply without a prompt"),       # keeps ">>> "
+                      result("broken reply without a prompt"),       # keeps ">>> "
                       screen("", prompt="", tail="<halt/>"))
-    model.results[3] = result("broken reply without a prompt")
     terminal = FakeTerminal('hallux i want my prompt to be "cow daysi moo> "', "python3", "x", "exit")
     run(tmp_path, model, terminal)
     assert [p for p, _ in terminal.prompts] == [
@@ -154,9 +182,9 @@ def test_keys_go_to_the_ai(tmp_path):
                       screen("", prompt="", tail="<halt/>"))
     terminal = FakeTerminal(KeyboardInterrupt, Key("C-l", "ls -l"), EOFError)
     run(tmp_path, model, terminal)
-    _, sigint, ctrl_l, _ = model.sessions[0]
-    assert sigint.startswith("<signal ") and sigint.endswith(">SIGINT</signal>")
-    assert ctrl_l.startswith('<key name="C-l" ') and ctrl_l.endswith(">ls -l</key>")
+    _, ctrl_c, ctrl_l, _ = model.sessions[0]
+    assert ctrl_c.startswith('<key name="C-c" cursor="0" ') and ctrl_c.endswith("></key>")
+    assert ctrl_l.startswith('<key name="C-l" cursor="0" ') and ctrl_l.endswith(">ls -l</key>")
     assert terminal.screen == "\x1b[H\x1b[2J"
     assert terminal.prompts[2] == ("user@hallux:~$ ", "ls -l")      # the typed line comes back
 
@@ -253,6 +281,9 @@ def test_block_mode_nano_session(tmp_path):
     assert first_screen == "  GNU nano 7.2   hello.txt\n"
     assert first_form.fields[0].text == "hi\n"           # loaded from the disk, not the AI
     assert first_form.keymap == "nano" and first_form.keys == ("C-o", "C-x")
+    kept = terminal.forms[1][1].fields[0]                  # <editor id="text"/> after ^O
+    assert (kept.top, kept.left, kept.height, kept.text) == (3, 1, 20, None)   # same place,
+    assert kept.file == "hello.txt"                        # same file, the user's text kept
     _, _, ctrl_o, enter, ctrl_x, _ = model.sessions[0]
     assert ctrl_o.startswith('<action key="C-o" focus="text" ')
     assert '<field id="text" cursor="2:6" modified="yes">hi\nthere\n</field>' in ctrl_o
@@ -278,3 +309,55 @@ def test_a_click_reports_where_it_landed(tmp_path):
     run(tmp_path, model, terminal)
     click = model.sessions[0][2]
     assert click.startswith('<action key="click" focus="text" row="24" col="3" ')
+
+
+def test_keys_and_the_line_that_comes_back(tmp_path):
+    model = FakeModel(screen(""),
+                      screen("") + "<edit>cat /etc/</edit>",       # Tab: the AI completes
+                      screen(""),                                   # Ctrl-C drops the line
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal(Key("Tab", "cat /et", cursor=7),
+                            Key("C-c", "rm -rf", cursor=6, keep_line=False), "exit")
+    run(tmp_path, model, terminal)
+    _, tab, ctrl_c, _ = model.sessions[0]
+    assert tab.startswith('<key name="Tab" cursor="7" ') and tab.endswith(">cat /et</key>")
+    assert [default for _, default in terminal.prompts] == ["", "cat /etc/", ""]
+
+
+def test_ctrl_c_while_the_ai_works_interrupts_it(tmp_path):
+    model = FakeModel(screen(""),
+                      screen("half an answer"),                     # cut off, never shown
+                      screen("^C\n"),
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("sleep 100", "exit", ctrl_c_while_busy=[False, True])
+    run(tmp_path, model, terminal)
+    _, sleep, ctrl_c, _ = model.sessions[0]
+    assert model.interrupts == 1
+    assert ctrl_c.startswith('<key name="C-c" interrupted="yes" ') and ctrl_c.endswith("></key>")
+    assert "half an answer" not in terminal.screen and "^C\n" in terminal.screen
+
+
+def test_the_status_bar_follows_the_work(tmp_path):
+    model = FakeModel(result(screen(""), total=0.07),
+                      result(screen("hallux\n"), total=0.09,
+                             tools=[("read_file", {"path": "/etc/hostname"}),
+                                    ("memory_edit", {"old": "", "new": "x"})]),
+                      result(screen("", prompt="", tail="<halt/>"), total=0.1))
+    terminal = FakeTerminal("cat /etc/hostname", "exit")
+    machine = run(tmp_path, model, terminal)
+    assert terminal.activities == ["booting…", "thinking…", "thinking…"]
+    assert {"activity": "reading /etc/hostname", "tools": 1} in terminal.statuses
+    assert {"activity": "remembering…", "tools": 2} in terminal.statuses
+    costs = [s["cost"] for s in terminal.statuses if "cost" in s]
+    assert costs == pytest.approx([0.07, 0.09, 0.1])            # a running total, not a sum
+    assert machine.spent == pytest.approx(0.1)
+
+
+def test_model_errors_go_to_the_status_bar(tmp_path, capsys):
+    model = FakeModel(screen(""), result("overloaded", error=True),
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("ls", "exit")
+    terminal.status_bar = True
+    run(tmp_path, model, terminal)
+    assert {"error": "overloaded"} in terminal.statuses
+    assert capsys.readouterr().err == ""                        # nothing scribbled on screen

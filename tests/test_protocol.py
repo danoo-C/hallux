@@ -1,4 +1,4 @@
-from hallux.protocol import Field, Reply, decode, envelope, parse
+from hallux.protocol import Field, Form, Reply, decode, envelope, parse, resolve
 
 
 def test_envelope():
@@ -62,12 +62,14 @@ def test_parse_a_form():
     form = reply.form
     assert form.keys == ("C-o", "C-x", "C-w") and form.focus == "text" and form.keymap == "nano"
     editor, line, pager, empty = form.fields
-    assert editor == Field("editor", "text", top=3, left=1, width=120, height=20, text=None,
+    assert editor == Field("editor", "text", top=3, left=None, width=120, height=20, text=None,
                            file="/home/user/hello.txt", cursor=(2, 5), style="fg:#ffb6c1",
                            lang="python")
-    assert (line.kind, line.text, line.height, line.width) == ("line", "hello.txt", 1, 60)
+    assert (line.kind, line.text, line.height, line.width) == ("line", "hello.txt", None, 60)
     assert pager.text == "a < b && c > d "             # the body is literal text
-    assert (pager.width, pager.height) == (0, 0)       # 0: to the edge of the screen
+    assert (pager.width, pager.height) == (None, None)  # not given
+    assert (pager.with_defaults().width, pager.with_defaults().height) == (0, 0)   # to the edge
+    assert line.with_defaults().height == 1
     assert empty.text == ""                            # empty body: empty; <x/>: keep
 
 
@@ -81,4 +83,51 @@ def test_forms_only_count_after_the_prompt():
 def test_bad_form_values_fall_back():
     form = parse('<screen>\n</screen><prompt></prompt><form keymap="emacsvi">'
                  '<line id="a" top="x" cursor="nope">a</line></form>').form
-    assert form.keymap == "emacs" and form.fields[0].top == 1 and form.fields[0].cursor is None
+    assert form.keymap == "emacs" and form.fields[0].cursor is None
+    assert form.fields[0].top is None and form.fields[0].with_defaults().top == 1
+
+
+def test_the_ai_can_rewrite_the_typed_line():
+    assert parse("<screen>\n</screen><prompt>$ </prompt><edit>cat /etc/</edit>").edit == "cat /etc/"
+    assert parse("<screen>\n</screen><prompt>$ </prompt><edit></edit>").edit == ""
+    assert parse("<screen>\n</screen><prompt>$ </prompt>").edit is None
+
+
+def form_of(reply):
+    return parse("<screen>\n</screen><prompt></prompt>" + reply).form
+
+
+def test_a_kept_field_keeps_what_the_ai_does_not_restate():
+    """The live bug: after ^X, <editor id="text"/> jumped to the top-left and covered nano."""
+    opened, to_load = resolve(form_of(
+        '<form keys="C-x"><editor id="text" top="2" left="1" height="46" width="0" '
+        'file="hello.txt"></editor></form>'), {})
+    assert to_load == {"text"}                                  # a new field: load its file
+    on_screen = {f.id: f for f in opened.fields}
+    save_prompt, to_load = resolve(form_of(
+        '<form keys="C-c"><editor id="text"/>'
+        '<line id="yn" top="48" left="23" width="20" style="bg:#ffffff"></line></form>'), on_screen)
+    editor, yn = save_prompt.fields
+    assert (editor.top, editor.left, editor.height, editor.width) == (2, 1, 46, 0)
+    assert editor.file == "hello.txt" and editor.text is None   # keeps the user's text
+    assert to_load == set()                                     # ... and never reloads it
+    assert (yn.top, yn.left, yn.height, yn.text) == (48, 23, 1, "")
+
+
+def test_repeating_the_file_keeps_unsaved_edits_but_a_new_file_loads():
+    on_screen = {"text": Field("editor", "text", top=2, file="a.txt").with_defaults()}
+    same, to_load = resolve(form_of('<form><editor id="text" file="a.txt"></editor></form>'), on_screen)
+    assert to_load == set() and same.fields[0].text is None
+    other, to_load = resolve(form_of('<form><editor id="text" file="b.txt"/></form>'), on_screen)
+    assert to_load == {"text"} and other.fields[0].file == "b.txt"
+    replaced, to_load = resolve(form_of('<form><editor id="text">new text</editor></form>'), on_screen)
+    assert to_load == set() and replaced.fields[0].text == "new text"
+
+
+def test_forms_can_have_a_footer_and_rows_from_the_bottom():
+    form = form_of('<form keys="C-x"><footer>\n␛[7m^X␛[0m Exit\n^O Write\n</footer>'
+                   '<editor id="t" top="3" height="0"/><line id="yn" top="-3" left="23"></line></form>')
+    assert form.footer == "\x1b[7m^X\x1b[0m Exit\n^O Write\n"
+    editor, yn = form.fields
+    assert (editor.top, editor.height) == (3, 0) and yn.top == -3
+    assert yn.with_defaults().top == -3 and Field("line", "x").with_defaults().top == 1

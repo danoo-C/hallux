@@ -24,8 +24,14 @@ A short plan. The design behind every step is in [concept.md](concept.md).
   - pagers as menus. The code is in `hallux/blockmode.py`.
 - [ ] **6b. Raw mode:** every key to the AI, for programs that need it (`top`, action games),
   with live updates (`<tick/>`).
-- [ ] **6c. Status bar, hard exit, key rule:** the proposal is in
-  [light-and-keys.md](light-and-keys.md) (open questions first).
+- [x] **6c. Status bar, hard exit, key rule:**
+  - a bottom status bar with activity, model, cost and a spinner (`hallux/statusbar.py`);
+  - Ctrl+Shift+Del and Ctrl-C ×3 as the hard exit;
+  - keys for the machine (Ctrl-C, Tab, Ctrl-Z, ...) are sent to the AI, which may answer with
+    `<edit>`;
+  - the keyboard is read even while the AI works.
+
+  The design is in [light-and-keys.md](light-and-keys.md).
 - [ ] **7. Prompt tuning:** the diff test and the reboot test, run on each model.
 - [ ] **8. Polish:** streaming, Ctrl-C while the AI works, window resizing.
 - [ ] **Later:**

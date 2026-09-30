@@ -10,10 +10,13 @@
 
 ## Principles
 
-1. **Every character on screen comes from the AI.** There are no shortcuts and no local fast
-   paths. The Python program is a dumb terminal: it only passes keys and clicks in and text out.
-   The only characters it doesn't get from the AI are the ones you type, which your terminal
-   echoes like any real terminal does.
+1. **Every character on the machine's screen comes from the AI.** There are no shortcuts and
+   no local fast paths. The Python program is a dumb terminal: it only passes keys and clicks
+   in and text out. There are two exceptions:
+   - the characters you type, which your terminal echoes like any real terminal does;
+   - hallux's **status bar** on the bottom row, which is the front panel of the case and not
+     part of the machine's screen. The AI never draws there. See
+     [light-and-keys.md](light-and-keys.md).
 2. **The disk is real.** Whatever a command does to files, like `echo hi > a.txt`, `rm`, or a
    Python script that writes `out.txt`, really happens in the root folder.
 3. **Everything else is imagined, and consistent.** The OS, kernel, CPU, network, processes,
@@ -284,6 +287,16 @@ does the same (`hallux/blockmode.py`):
 - **`file="..."` fields are filled from the disk by the terminal,** so a file's contents never
   pass through the AI. The `save_field` tool writes a field's exact text back. That keeps big
   files cheap, and the AI can never garble them by retyping.
+- **The AI never has to count rows.** A `<footer>` in the form is pinned to the bottom, which
+  is where status and help lines belong. `height="0"` fields stretch down to it, and
+  a negative `top` counts from the bottom. If the AI still draws too many rows, blank rows
+  that no field covers are dropped from the bottom up (fields below move up with their text).
+  If that's not enough, the footer is kept and the screen is cut. (In a live test, nano's help
+  lines had fallen off: 31 rows drawn for a 29-row screen.)
+- **A field the AI shows again keeps whatever it doesn't restate:** position, size, style,
+  file, and your text. So `<editor id="text"/>` means "leave the editor as it is", and a
+  repeated `file=` never reloads the file over unsaved edits. (Before this rule, the
+  "Save modified buffer?" screen dropped the editor to the top-left, where it covered nano.)
 - **The screen stays up while the AI thinks.** The next form replaces it in place, for example
   nano's `File Name to Write:` as a `<line>` on the status row. A reply without a form ends
   block mode and brings the shell back.
@@ -353,15 +366,34 @@ Rules that make clicks reliable:
 
 ### Keys and signals
 
-| You press | Cooked mode (the prompt) | Raw mode (a full-screen program) |
+The key rule (implemented in `hallux/terminal.py`):
+
+| Who owns the key | Keys | What happens |
 |---|---|---|
-| Enter | Sends the line as `<input>` | `<key>Enter</key>` |
-| Ctrl-C | At the prompt: sends `<signal>SIGINT</signal>`, and the AI shows a fresh prompt. While the AI is working: interrupts it (`client.interrupt()`) first, then sends the signal, and the AI prints `^C` and a new prompt. | `<key>C-c</key>`. The program decides what happens, like in real raw mode. |
-| Ctrl-D | `<eof/>`: bash prints `exit` and halts; Python leaves the REPL | `<key>C-d</key>` |
-| Ctrl-L | Sends `<key name="C-l">typed line</key>`. The AI clears the screen and redraws the prompt, and the terminal puts the typed line back. | `<key>C-l</key>` |
-| Tab, ↑ / ↓ | prompt_toolkit handles them for now. AI completion and history are on the roadmap. | `<key>Tab</key>`, `<key>Up</key>`, ... |
-| Mouse | Your terminal app's own selection and scrolling | `<mouse .../>` events |
-| Resizing the window | The new size goes with the next envelope | Same. An immediate redraw (SIGWINCH) is on the roadmap. |
+| **The keyboard side** (local) | Printable characters, Backspace, Delete, arrows, Home/End, ↑/↓ recall, Ctrl-A/E/K/U/W, and Ctrl-D on a non-empty line | Line editing, instantly, like the kernel's line editing |
+| **The machine** (the AI decides) | Ctrl-C, Ctrl-D on an empty line, Ctrl-Z, Ctrl-\\, Ctrl-L, Ctrl-R, Ctrl-S, Ctrl-O, Ctrl-G, Ctrl-Q, Ctrl-V, Ctrl-X, Tab, Alt-., F1–F12 | Sent as `<key name="C-c" cursor="7">the typed line</key>` |
+| **hallux** (never reaches the AI) | Ctrl+Shift+Del, or Ctrl-C three times within a second | The hard exit: hallux quits at once, whatever the AI is doing |
+
+More details:
+- **Line-ending keys:** Ctrl-C, Ctrl-D, Ctrl-Z and Ctrl-\\ end the line. The terminal echoes
+  `^C`, `^Z` or `^\` the way the kernel's tty driver would, and the next prompt starts empty.
+- **Other keys work in place:** the prompt line is replaced by the AI's answer and your line
+  comes back. The AI can put different text back with `<edit>…</edit>`, for Tab completion,
+  Alt-. and Ctrl-R.
+- **Ctrl-C while the AI is working:** the AI's turn is interrupted (`client.interrupt()`).
+  The AI then receives `<key name="C-c" interrupted="yes">` and prints `^C` and a new prompt.
+- **Block mode:** a form's action keys, and Ctrl-C always. While the AI thinks, Ctrl-C
+  interrupts it.
+- **hallux reads the keyboard all the time,** and the terminal stays in raw mode for the whole
+  session:
+  - keys typed while the AI works wait for the next prompt instead of being echoed into its
+    output;
+  - a Ctrl-C can never turn into a real SIGINT that crashes hallux;
+  - the hard exit works at any moment.
+- **Mouse:** in the shell, your terminal app's own selection and scrolling. In block mode,
+  clicks outside the fields go to the AI.
+- **Resizing the window:** the new size goes with the next envelope, and the status bar moves
+  to the new bottom row.
 
 ### What the tty never does
 
@@ -369,8 +401,9 @@ Rules that make clicks reliable:
 - **No fast path.** Even `pwd`, `clear` and an empty Enter go to the model.
 - **No meta-commands.** Debug output, tool calls and cost go to a log file
   (`tail -f ~/hallux-world/.hallux/hallux.log` in a second window), never to the screen.
-- **The only exception:** if the model can't be reached (no network, expired login), the tty
-  prints one line to stderr. That's the "hardware" failing, not the machine talking.
+- **It doesn't draw on the machine's screen.** hallux's own messages go to the status bar,
+  including model failures such as a network problem or an expired login. That's the
+  hardware talking, not the machine. With `status_bar = false`, they go to stderr instead.
 
 Two raw-mode gotchas the sketch already handles:
 

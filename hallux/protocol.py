@@ -6,7 +6,8 @@ The AI answers every envelope with
     ...exactly what the terminal shows...
     </screen><prompt>user@hallux:~$ </prompt>
 
-optionally followed by control tags (<halt/>, <reboot/>, <tty mode="raw"/>) and, for a
+optionally followed by control tags (<halt/>, <reboot/>, <tty mode="raw"/>), the line to
+put back at the prompt (<edit>cat /etc/</edit>, for Tab completion and friends) and, for a
 full-screen program in block mode, a <form> of editable fields (see Form). It writes
 control characters as Unicode control pictures ("␛" for ESC), which decode() turns into
 real bytes.
@@ -15,31 +16,42 @@ from __future__ import annotations
 
 import html
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 # U+2400..U+241F picture the C0 control characters 0x00..0x1F; U+2421 pictures DEL.
 CONTROL_PICTURES = {0x2400 + c: c for c in range(32)} | {0x2421: 0x7F}
 TTY_TAG = re.compile(r'<tty\s+mode="(raw|cooked)"\s*/>')
 FORM_START = re.compile(r"</prompt>(?:\s*<(?:halt|reboot)/>|\s*<tty[^>]*/>)*\s*<form\b")
 FIELD_TAG = re.compile(r"<(editor|line|pager)\b([^>]*?)(/>|>(.*?)</\1>)", re.DOTALL)
+FOOTER_TAG = re.compile(r"<footer>(.*?)</footer>", re.DOTALL)
 ATTRIBUTE = re.compile(r'([\w-]+)="([^"]*)"')
 KEYMAPS = ("emacs", "nano", "vi")
 
 
 @dataclass(frozen=True)
 class Field:
-    """An editable box on a block-mode screen, like a field on an IBM 3270 terminal."""
+    """An editable box on a block-mode screen, like a field on an IBM 3270 terminal.
+
+    None means "not given": a field the AI shows again keeps what it had (see resolve()),
+    a new field gets the defaults (see with_defaults()).
+    """
     kind: str                     # "editor" (multi-line), "line" (Enter acts) or "pager"
     id: str
-    top: int = 1                  # 1-based screen position
-    left: int = 1
-    width: int = 0                # 0: to the right edge
-    height: int = 1               # 0: to the bottom edge
+    top: int | None = None        # 1-based row (default 1); negative counts from the bottom
+    left: int | None = None       # (default 1)
+    width: int | None = None      # 0: to the right edge (default)
+    height: int | None = None     # 0: down to the footer or the bottom (default; 1 for a line)
     text: str | None = None       # None: keep what the field holds (or load `file`)
     file: str | None = None       # fill the field from this file on the machine's disk
-    cursor: tuple[int, int] | None = None     # (line, column), 1-based
-    style: str = ""               # prompt_toolkit style, e.g. "fg:#ffb6c1 bg:#1e1e1e"
+    cursor: tuple[int, int] | None = None     # (line, column), 1-based: move the cursor
+    style: str | None = None      # prompt_toolkit style, e.g. "fg:#ffb6c1 bg:#1e1e1e"
     lang: str | None = None       # syntax highlighting, e.g. "python"
+
+    def with_defaults(self) -> Field:
+        return replace(self, top=self.top or 1, left=max(1, self.left or 1),
+                       width=self.width or 0,
+                       height=self.height if self.height is not None else (1 if self.kind == "line" else 0),
+                       style=self.style or "")
 
 
 @dataclass(frozen=True)
@@ -48,6 +60,7 @@ class Form:
     keys: tuple[str, ...] = ()    # action keys that go to the AI, e.g. ("C-o", "C-x")
     focus: str | None = None      # the id of the field that gets the cursor
     keymap: str = "emacs"         # local editing keys: "emacs", "nano" or "vi"
+    footer: str | None = None     # lines pinned to the bottom of the screen (status, help)
 
 
 @dataclass(frozen=True)
@@ -78,6 +91,7 @@ class Reply:
     reboot: bool = False
     tty: str | None = None        # "raw" or "cooked" when the AI switches modes
     form: Form | None = field(default=None)
+    edit: str | None = None       # the line to put back at the prompt (Tab completion...)
 
 
 def envelope(tag: str, body: str = "", **attrs: object) -> str:
@@ -116,6 +130,7 @@ def parse(text: str) -> Reply:
         reboot="<reboot/>" in tail,
         tty=tty[1] if tty else None,
         form=form,
+        edit=decode(tail.partition("<edit>")[2].partition("</edit>")[0]) if "<edit>" in tail else None,
     )
 
 
@@ -123,8 +138,12 @@ def parse_form(text: str) -> Form | None:
     """Read <form keys=".." focus=".." keymap=".."> with <editor>, <line> and <pager> fields."""
     head, _, body = text.partition(">")
     attrs = _attributes(head)
+    body = body.rpartition("</form>")[0] or body
+    footer = FOOTER_TAG.search(body)
+    if footer:
+        body = body[:footer.start()] + body[footer.end():]
     fields = []
-    for match in FIELD_TAG.finditer(body.rpartition("</form>")[0] or body):
+    for match in FIELD_TAG.finditer(body):
         kind, raw_attrs, closing, content = match.groups()
         a = _attributes(raw_attrs)
         if not a.get("id"):
@@ -132,32 +151,66 @@ def parse_form(text: str) -> Form | None:
         fields.append(Field(
             kind=kind,
             id=a["id"],
-            top=_int(a.get("top"), 1),
-            left=_int(a.get("left"), 1),
-            width=_int(a.get("width"), 0),
-            height=_int(a.get("height"), 1 if kind == "line" else 0),
+            top=_row(a.get("top")),
+            left=_int(a.get("left")),
+            width=_int(a.get("width")),
+            height=_int(a.get("height")),
             text=None if closing == "/>" else content.removeprefix("\n"),   # <x/> keeps
             file=a.get("file"),
             cursor=_cursor(a.get("cursor")),
-            style=a.get("style", ""),
+            style=a.get("style"),
             lang=a.get("lang"),
         ))
     if not fields:
         return None
     keymap = attrs.get("keymap", "emacs")
     return Form(fields=tuple(fields), keys=tuple(attrs.get("keys", "").split()),
-                focus=attrs.get("focus"), keymap=keymap if keymap in KEYMAPS else "emacs")
+                focus=attrs.get("focus"), keymap=keymap if keymap in KEYMAPS else "emacs",
+                footer=decode(footer[1].removeprefix("\n")) if footer else None)
 
 
 def _attributes(text: str) -> dict[str, str]:
     return {name: html.unescape(value) for name, value in ATTRIBUTE.findall(text)}
 
 
-def _int(value: str | None, default: int) -> int:
+def resolve(form: Form, previous: dict[str, Field]) -> tuple[Form, set[str]]:
+    """Complete a form against the fields already on screen.
+
+    A field the AI shows again keeps whatever it doesn't restate: position, size, style,
+    file, and the text the user typed (an empty body keeps it too; only a body replaces it).
+    Returns the form and the ids of the fields to fill from their `file`: new fields, or a
+    different file. Repeating file="..." never reloads it over unsaved edits.
+    """
+    fields, to_load = [], set()
+    for f in form.fields:
+        before = previous.get(f.id)
+        if before is not None and before.kind == f.kind:
+            kept = {name: getattr(before, name)
+                    for name in ("top", "left", "width", "height", "style", "lang", "file")
+                    if getattr(f, name) is None}
+            new_file = f.file is not None and f.file != before.file
+            f = replace(f, **kept, text=f.text or None)
+            if new_file and f.text is None:
+                to_load.add(f.id)
+        elif f.file and not f.text:
+            to_load.add(f.id)
+        fields.append(f.with_defaults())
+    return replace(form, fields=tuple(fields)), to_load
+
+
+def _row(value: str | None) -> int | None:
+    """A row: 1, 2, ... from the top, or -1, -2, ... from the bottom. 0 means not given."""
     try:
-        return max(0, int(value)) if value is not None else default
+        return int(value) or None if value is not None else None
     except ValueError:
-        return default
+        return None
+
+
+def _int(value: str | None) -> int | None:
+    try:
+        return max(0, int(value)) if value is not None else None
+    except ValueError:
+        return None
 
 
 def _cursor(value: str | None) -> tuple[int, int] | None:

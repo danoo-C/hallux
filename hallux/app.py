@@ -41,9 +41,11 @@ def main() -> None:
     logging.getLogger("hallux").info("power on: %s", hardware)
 
     from hallux.machine import Machine          # imported late: pulls in the SDK
+    from hallux.statusbar import StatusBar
     from hallux.terminal import Terminal        # and prompt_toolkit
+    bar = StatusBar(hardware.model, hardware.model_effort) if hardware.status_bar else None
     try:
-        asyncio.run(Machine(root, hardware, Terminal()).run())
+        asyncio.run(Machine(root, hardware, Terminal(bar)).run())
     except Exception as e:                      # the SDK or the CLI failed: "hardware" error
         logging.getLogger("hallux").exception("crash")
         sys.exit(f"hallux: {e}")

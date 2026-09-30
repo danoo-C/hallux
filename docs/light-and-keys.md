@@ -1,7 +1,20 @@
 # Status bar, hard exit and keys
 
-**Status:** proposal, no code yet. Every question comes with my recommendation, so you can
-answer "OK" or overrule it. The ones that shape the design most are **Q1, Q2, Q7 and Q9**.
+**Status:** implemented and live-tested (roadmap step 6c). Every recommendation
+below was accepted, with two changes:
+
+- **Tab goes to the AI now** instead of later (Q10). The same key mechanism covers it, and an
+  `<edit>` reply puts the completed line back.
+- **hallux keeps the terminal in raw mode for the whole session,** not only while the AI
+  thinks. A test in a real pseudo-terminal showed that a Ctrl-C landing in the moment between
+  two prompts became a real SIGINT and crashed hallux.
+
+Where it lives in the code:
+- `hallux/statusbar.py`: the bar.
+- `hallux/terminal.py`: the key rule, the keyboard watcher and the hard exit.
+- `hallux/blockmode.py`: the bar, the hard exit and Ctrl-C in full-screen programs.
+
+The rest of this file is the proposal as discussed.
 
 ## In short
 
