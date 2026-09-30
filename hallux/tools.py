@@ -87,8 +87,10 @@ def build_tools(disk: Disk, fields: Fields | None = None) -> list[SdkMcpTool]:
              schema({}, {"path": PATH, "pattern": TEXT}), disk.find, READS),
         make("write_file",
              "Create or overwrite a file with text; append=true adds to the end (>>). "
-             "The parent directory must exist.",
-             schema({"path": PATH, "content": TEXT}, {"append": FLAG}), disk.write_file),
+             "The parent directory must exist, unless parents=true creates it (for files the "
+             "machine makes itself, like copy-up; not for the user's redirects).",
+             schema({"path": PATH, "content": TEXT}, {"append": FLAG, "parents": FLAG}),
+             disk.write_file),
         make("edit_file",
              "Replace exactly one occurrence of old with new in a file (sed -i, dotfiles).",
              schema({"path": PATH, "old": TEXT, "new": TEXT}), disk.edit_file),

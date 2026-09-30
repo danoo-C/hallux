@@ -117,7 +117,9 @@ class Machine:
         self.session_spent = 0.0
         async with self.client_factory(options=self.options()) as client:   # empty RAM
             try:
-                reply = await self.send(client, "boot", fatal=True, activity="booting…")
+                body, first = self.boot_report()
+                reply = await self.send(client, "boot", body, first="yes" if first else "no",
+                                        fatal=True, activity="booting…", new_machine=first)
                 restore = ""                     # the line to put back at the next prompt
                 while not (reply.halt or reply.reboot):
                     if reply.form is not None:   # a full-screen program in block mode
@@ -142,6 +144,17 @@ class Machine:
                 return reply.reboot
             finally:
                 await self.terminal.end_form()
+
+    def boot_report(self) -> tuple[str, bool]:
+        """What <boot> carries: the memory and the machine's defining files, so a normal boot
+        needs no tools. A new machine (no memory yet) first gets an empty directory tree."""
+        memory = self.disk.memory_read()["text"]
+        first = not memory.strip()
+        if first:
+            self.disk.lay_skeleton()
+        parts = [envelope("memory", "\n" + memory)] if not first else []
+        parts += [envelope("file", text, path=path) for path, text in self.disk.boot_files().items()]
+        return "".join(f"\n{part}" for part in parts) + ("\n" if parts else ""), first
 
     async def block_mode(self, client: ClaudeSDKClient, reply: Reply) -> Reply:
         """Show the AI's form, let the user work in it, send back the action they end with."""
@@ -191,7 +204,8 @@ class Machine:
 
     async def send(self, client: ClaudeSDKClient, tag: str, body: str = "", *,
                    fatal: bool = False, halt_on_error: bool = False,
-                   activity: str = "thinking…", **attrs: object) -> Reply:
+                   activity: str = "thinking…", new_machine: bool = False,
+                   **attrs: object) -> Reply:
         """Send one envelope and show the reply: a screen and a prompt, or a form."""
         text, interrupted = await self.exchange(client, self.envelope(tag, body, **attrs),
                                                 activity, fatal)
@@ -204,6 +218,12 @@ class Machine:
             await self.leave_block_mode()        # never leave anyone stuck in a form
             return Reply(screen="", prompt=None, halt=halt_on_error)
         reply = parse(text)
+        self.apply_writes(reply, new_machine)
+        if reply.cwd:                            # cd without a tool call (boot, cd ~)
+            try:
+                self.disk.chdir(reply.cwd)
+            except (OSError, ValueError) as e:
+                log.warning("can't change to %s: %s", reply.cwd, e)
         if reply.form is not None:               # block mode shows it; the shell prompt stays
             return reply
         await self.leave_block_mode()
@@ -213,6 +233,21 @@ class Machine:
         else:
             log.warning("reply without <prompt>; keeping the previous prompt")
         return reply
+
+    def apply_writes(self, reply: Reply, new_machine: bool = False) -> None:
+        """Files (and, for a new machine, the whole memory) the AI wrote in its answer."""
+        if reply.memory is not None:
+            if new_machine:
+                self.disk.memory_edit("", reply.memory)
+            else:
+                log.warning("ignored a whole new memory outside a first boot")
+        for write in reply.files:
+            try:
+                self.disk.write_file(write.path, write.content, append=write.append, parents=True)
+                log.info("   wrote %s (%d characters)", write.path, len(write.content))
+            except (OSError, ValueError) as e:
+                log.warning("can't write %s: %s", write.path, e)
+                self.terminal.set_status(error=f"couldn't write {write.path}")
 
     async def leave_block_mode(self) -> None:
         self.fields = {}

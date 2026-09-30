@@ -131,3 +131,10 @@ def test_forms_can_have_a_footer_and_rows_from_the_bottom():
     editor, yn = form.fields
     assert (editor.top, editor.height) == (3, 0) and yn.top == -3
     assert yn.with_defaults().top == -3 and Field("line", "x").with_defaults().top == 1
+
+
+
+def test_the_ai_can_change_the_working_directory():
+    assert parse("<screen>\n</screen><prompt>$ </prompt><cwd>/home/user</cwd>").cwd == "/home/user"
+    assert parse("<screen>\n</screen><prompt>$ </prompt><cwd> </cwd>").cwd is None
+    assert parse("<screen>\n</screen><prompt>$ </prompt>").cwd is None

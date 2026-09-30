@@ -23,6 +23,12 @@ HIDDEN_NAME = ".hallux"
 READ_LIMIT = 64 * 1024        # bytes returned per read_file call
 FIND_LIMIT = 1000             # entries returned per find call
 EDIT_LIMIT = 1024 * 1024      # biggest file a block-mode editor loads
+BOOT_FILE_LIMIT = 8 * 1024    # biggest file handed to the AI at boot
+# An empty Linux directory tree for a new machine, so its first writes can't fail.
+SKELETON = ("etc", "home/user", "root", "tmp", "var/log", "usr/local/bin")
+# Small files that define the machine; the AI gets them with <boot>, so booting needs no tools.
+BOOT_FILES = ("/etc/hostname", "/etc/os-release", "/etc/motd", "/etc/issue", "/etc/passwd",
+              "/root/.bashrc")
 
 
 def _fail(code: int) -> OSError:
@@ -155,8 +161,11 @@ class Disk:
 
     # ------------------------------------------------------------------ writing
 
-    def write_file(self, path: str, content: str, append: bool = False) -> dict:
+    def write_file(self, path: str, content: str, append: bool = False,
+                   parents: bool = False) -> dict:
         real = self.real(path)
+        if parents:
+            real.parent.mkdir(parents=True, exist_ok=True)
         with real.open("a" if append else "w", encoding="utf-8", newline="") as f:
             f.write(content)
         return {"ok": True, "size": real.stat().st_size}
@@ -240,6 +249,29 @@ class Disk:
         if target.is_dir():
             target = self._check(target.resolve() / source.name)
         return target
+
+    # ------------------------------------------------------------------ booting
+
+    def lay_skeleton(self) -> None:
+        """Give a new machine an empty Linux directory tree."""
+        for folder in SKELETON:
+            self._check(self.root / folder).mkdir(parents=True, exist_ok=True)
+
+    def boot_files(self) -> dict[str, str]:
+        """The machine's defining files that exist: BOOT_FILES and every home's .bashrc."""
+        paths = list(BOOT_FILES)
+        homes = self.root / "home"
+        if homes.is_dir():
+            paths += sorted(f"/home/{h.name}/.bashrc" for h in homes.iterdir() if h.is_dir())
+        files = {}
+        for path in paths:
+            try:
+                real = self.real(path)
+                if real.is_file() and real.stat().st_size <= BOOT_FILE_LIMIT:
+                    files[path] = real.read_text(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                continue
+        return files
 
     # ------------------------------------------------------------------ memory
 

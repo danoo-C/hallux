@@ -288,3 +288,20 @@ def test_read_text_for_editors(disk, root, monkeypatch):
     fails(errno.EFBIG, lambda: disk.read_text("/home/user/notes.md", hallux.disk.EDIT_LIMIT))
     fails(errno.ENOENT, disk.read_text, "/nope")
     fails(errno.ENOENT, disk.read_text, "/.hallux/memory.md")
+
+
+
+def test_write_file_can_create_the_parent_folders(disk, root):
+    fails(errno.ENOENT, disk.write_file, "/etc/apt/sources.list", "deb x")
+    disk.write_file("/etc/apt/sources.list", "deb x", parents=True)
+    assert (root / "etc" / "apt" / "sources.list").read_text() == "deb x"
+    fails(errno.ENOENT, disk.write_file, "/.hallux/x/y", "z", parents=True)
+
+
+def test_skeleton_and_boot_files(disk, root):
+    disk.lay_skeleton()
+    assert all((root / f).is_dir() for f in ("etc", "home/user", "root", "tmp", "var/log"))
+    (root / "etc" / "hostname").write_text("hallux\n")
+    (root / "etc" / "passwd").write_bytes(b"x" * (hallux.disk.BOOT_FILE_LIMIT + 1))   # too big
+    (root / "home" / "user" / ".bashrc").write_text("PS1=x\n")
+    assert disk.boot_files() == {"/etc/hostname": "hallux\n", "/home/user/.bashrc": "PS1=x\n"}

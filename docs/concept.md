@@ -498,6 +498,27 @@ works like Linux's **overlayfs**:
 - **Whiteouts.** Deleting a base-image file that isn't on disk records it under *Whiteouts* in
   memory, so it stays gone.
 
+### How a boot works
+
+Booting used to take 23–27 s and 11 round trips, because the AI read its memory, then wrote
+files one by one. Now (`hallux/machine.py`, `boot_report`):
+
+- **`<boot>` brings everything.** It carries the memory and the files that define the
+  machine: `/etc/hostname`, `/etc/os-release`, `/etc/motd`, `/etc/issue`, `/etc/passwd` and
+  every home's `.bashrc`. A normal boot needs **no tool calls**, just one answer.
+- **A new machine** (`first="yes"`) gets an empty Linux directory tree first: `/etc`,
+  `/home/user`, `/root`, `/tmp`, `/var/log` and `/usr/local/bin`. The AI hands the machine
+  over **in its answer**, with `<memory>…</memory>` and `<file path="…">…</file>` after the
+  prompt, and hallux writes them. That takes no tool calls at all. (Asked for parallel tool
+  calls instead, the AI still made them one by one: 17 s, 6 round trips.) A whole new
+  memory is only accepted in the answer to a first boot.
+- **`<file>` works for any write the AI knows will succeed,** such as `echo … > note.txt` or
+  a `.bashrc` change. It saves the tool round trip, which took about 2 s in the reboot
+  check. `write_file` stays for writes whose errors the user should see, and it gained
+  `parents=true` for copy-up into new folders.
+- **`<cwd>/home/user</cwd>`** in the reply starts the shell in the home directory without a
+  `chdir` round trip. It also works for `cd ~` and `cd ..`.
+
 ### When memory is written
 
 - **Right away**, whenever something that must persist changes: a `hallux` rule, a package
@@ -1203,13 +1224,20 @@ The folder is real and the terminal is just bytes, so there are three good autom
    3. Diff the outputs and the resulting folders.
 
    The grounded commands should match closely.
-2. **The reboot test (persistence).**
-   1. Run a script: set a prompt with `hallux`, add a rule, `apt install` something, create a
-      file, then run `uname -a`, `hostname`, `python3 --version` and `ip a`.
-   2. `reboot`.
-   3. Run the same checks again.
+2. **The reboot test (persistence)** is built in:
+   `python hallux.py test-reboot --check reboot` (`hallux/script.py`).
+   1. It builds a new machine.
+   2. It sets a prompt and an error rule with `hallux`, grants passwordless sudo (scripts
+      can't type passwords), creates a file and runs `sudo apt install cowsay`.
+   3. It runs the checks: `hostname`, `uname -r`, `head -2 /etc/os-release`, `cat note.txt`,
+      `cat nope.txt` (the rule), `cowsay moo` and `hallux`.
+   4. It runs `sudo reboot` and the checks again. The AI faithfully refuses a plain `reboot`
+      from a normal user, so the report also fails if no reboot actually happened.
 
-   Everything in the "Survives" table must come out identical.
+   Outputs that must be identical are compared exactly. The rule and the installed program
+   must still apply, and the prompt must survive. It prints a report and the boot times, and
+   exits with status 1 on a failure. Any list of commands can be run the same way with
+   `--script FILE`.
 3. **Terminal unit tests (no model needed).** Feed recorded byte sequences (keys, pastes, SGR
    mouse reports) into the event parser, and sample replies into the reply parser.
 

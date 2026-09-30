@@ -144,7 +144,7 @@ def test_boot_input_and_halt(tmp_path):
     assert terminal.screen == "Debian GNU/Linux 12 hallux tty1\nfib.py  notes.md\nlogout\n"
     assert terminal.prompts == [("user@hallux:~$ ", ""), ("user@hallux:~$ ", "")]
     boot, ls, eof = model.sessions[0]
-    assert boot.startswith('<boot cwd="/" time="') and 'cols="100" rows="30"' in boot
+    assert boot.startswith('<boot first="yes" cwd="/" time="') and 'cols="100" rows="30"' in boot
     assert boot.endswith("></boot>")
     assert ls.startswith("<input ") and ls.endswith(">ls</input>")
     assert eof.startswith('<key name="C-d" ') and eof.endswith("></key>")
@@ -361,3 +361,38 @@ def test_model_errors_go_to_the_status_bar(tmp_path, capsys):
     run(tmp_path, model, terminal)
     assert {"error": "overloaded"} in terminal.statuses
     assert capsys.readouterr().err == ""                        # nothing scribbled on screen
+
+
+
+def test_a_first_boot_gets_an_empty_directory_tree(tmp_path):
+    model = FakeModel(screen("", tail="<cwd>/home/user</cwd>"), screen("", prompt="", tail="<halt/>"))
+    machine = run(tmp_path, model, FakeTerminal("exit"))
+    boot = model.sessions[0][0]
+    assert boot.startswith('<boot first="yes" ') and "<memory>" not in boot
+    for folder in ("etc", "home/user", "root", "tmp", "var/log", "usr/local/bin"):
+        assert (tmp_path / folder).is_dir()
+    assert 'cwd="/home/user"' in model.sessions[0][1]         # <cwd> moved the shell
+
+
+def test_a_boot_brings_the_memory_and_the_defining_files(tmp_path):
+    (tmp_path / ".hallux").mkdir()
+    (tmp_path / ".hallux" / "memory.md").write_text("# hallux memory\n## Machine\n- Debian 12\n")
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "etc" / "hostname").write_text("kitty\n")
+    (tmp_path / "home" / "user").mkdir(parents=True)
+    (tmp_path / "home" / "user" / ".bashrc").write_text('PS1="moo> "\n')
+    (tmp_path / "etc" / "big").write_text("x" * 100_000)             # not a boot file anyway
+    model = FakeModel(screen("", prompt="moo> "), screen("", prompt="", tail="<halt/>"))
+    run(tmp_path, model, FakeTerminal("exit"))
+    boot = model.sessions[0][0]
+    assert boot.startswith('<boot first="no" ')
+    assert "<memory>\n# hallux memory\n## Machine\n- Debian 12\n</memory>" in boot
+    assert '<file path="/etc/hostname">kitty\n</file>' in boot
+    assert '<file path="/home/user/.bashrc">PS1="moo> "\n</file>' in boot
+    assert "xxxx" not in boot and not (tmp_path / "tmp").exists()      # no skeleton either
+
+
+def test_a_bad_cwd_is_ignored(tmp_path):
+    model = FakeModel(screen("", tail="<cwd>/nope</cwd>"), screen("", prompt="", tail="<halt/>"))
+    machine = run(tmp_path, model, FakeTerminal("exit"))
+    assert 'cwd="/"' in model.sessions[0][1]

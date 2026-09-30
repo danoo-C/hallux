@@ -7,7 +7,8 @@ The AI answers every envelope with
     </screen><prompt>user@hallux:~$ </prompt>
 
 optionally followed by control tags (<halt/>, <reboot/>, <tty mode="raw"/>), the line to
-put back at the prompt (<edit>cat /etc/</edit>, for Tab completion and friends) and, for a
+put back at the prompt (<edit>cat /etc/</edit>, for Tab completion and friends), a new
+working directory (<cwd>/home/user</cwd>) and, for a
 full-screen program in block mode, a <form> of editable fields (see Form). It writes
 control characters as Unicode control pictures ("␛" for ESC), which decode() turns into
 real bytes.
@@ -24,6 +25,8 @@ TTY_TAG = re.compile(r'<tty\s+mode="(raw|cooked)"\s*/>')
 FORM_START = re.compile(r"</prompt>(?:\s*<(?:halt|reboot)/>|\s*<tty[^>]*/>)*\s*<form\b")
 FIELD_TAG = re.compile(r"<(editor|line|pager)\b([^>]*?)(/>|>(.*?)</\1>)", re.DOTALL)
 FOOTER_TAG = re.compile(r"<footer>(.*?)</footer>", re.DOTALL)
+FILE_TAG = re.compile(r"<file\b([^>]*)>(.*?)</file>", re.DOTALL)
+MEMORY_TAG = re.compile(r"<memory>(.*?)</memory>", re.DOTALL)
 ATTRIBUTE = re.compile(r'([\w-]+)="([^"]*)"')
 KEYMAPS = ("emacs", "nano", "vi")
 
@@ -84,6 +87,13 @@ class Action:
 
 
 @dataclass(frozen=True)
+class FileWrite:
+    path: str
+    content: str                  # literal text, written as is
+    append: bool = False
+
+
+@dataclass(frozen=True)
 class Reply:
     screen: str                   # printed byte for byte (in block mode: the background)
     prompt: str | None            # None when the reply had no <prompt>
@@ -92,6 +102,9 @@ class Reply:
     tty: str | None = None        # "raw" or "cooked" when the AI switches modes
     form: Form | None = field(default=None)
     edit: str | None = None       # the line to put back at the prompt (Tab completion...)
+    cwd: str | None = None        # the new working directory (boot, cd ~) without a tool call
+    files: tuple[FileWrite, ...] = ()   # files to write without a tool call
+    memory: str | None = None     # a whole new memory (first boot only)
 
 
 def envelope(tag: str, body: str = "", **attrs: object) -> str:
@@ -123,6 +136,12 @@ def parse(text: str) -> Reply:
     screen = body.partition("<screen>")[2] if "<screen>" in body else body
     prompt = tail.partition("<prompt>")[2].partition("</prompt>")[0] if "<prompt>" in tail else None
     tty = TTY_TAG.search(tail)
+    files = tuple(FileWrite(path=a["path"], content=content.removeprefix("\n"),
+                            append=a.get("append") == "yes")
+                  for raw, content in FILE_TAG.findall(tail)
+                  if (a := _attributes(raw)).get("path"))
+    tail_without_files = FILE_TAG.sub("", tail)
+    memory = MEMORY_TAG.search(tail_without_files)
     return Reply(
         screen=decode(screen.removeprefix("\n")),
         prompt=None if prompt is None else decode(prompt),
@@ -131,6 +150,9 @@ def parse(text: str) -> Reply:
         tty=tty[1] if tty else None,
         form=form,
         edit=decode(tail.partition("<edit>")[2].partition("</edit>")[0]) if "<edit>" in tail else None,
+        cwd=tail.partition("<cwd>")[2].partition("</cwd>")[0].strip() or None if "<cwd>" in tail else None,
+        files=files,
+        memory=memory[1].removeprefix("\n") if memory else None,
     )
 
 
