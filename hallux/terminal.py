@@ -34,11 +34,12 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.output import create_output
 from prompt_toolkit.output.vt100 import Vt100_Output
+from prompt_toolkit.utils import get_cwidth
 
 from hallux import statusbar
 from hallux.blockmode import POWER_CUT_KEY, BlockMode
 from hallux.machine import Key
-from hallux.protocol import Action, Form
+from hallux.protocol import Action, Form, plain
 from hallux.statusbar import StatusBar
 
 log = logging.getLogger("hallux")
@@ -69,6 +70,7 @@ class Terminal:
                  power_cut: Callable[[], None] | None = None) -> None:
         self.bar = bar                                   # None: no status bar
         self.status_bar = bar is not None
+        self.streams = True                              # show answers while they're written
         self.real_tty = input is None and output is None and sys.stdin.isatty()
         self.input = input or create_input()
         self.output = output or create_output()          # the whole screen (block mode)
@@ -119,6 +121,16 @@ class Terminal:
             text = statusbar.strip_layout_codes(text)    # the bar's rows are hallux's business
         self._write(text)
         self._draw_bar()                                 # `clear` erases it; bring it back
+
+    def retract(self, text: str) -> None:
+        """Erase text just written: move up over the rows it took and clear below."""
+        size = self.output.get_size()
+        cols = max(1, size.columns)
+        *lines, last = plain(text).split("\n")
+        up = sum(max(1, -(-get_cwidth(line) // cols)) for line in lines)
+        up += max(1, -(-get_cwidth(last) // cols)) - 1
+        self._write((f"\x1b[{up}A" if up else "") + "\r\x1b[J")   # stops at the region's top
+        self._draw_bar()
 
     def size(self) -> tuple[int, int]:
         size = self.output.get_size()

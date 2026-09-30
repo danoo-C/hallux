@@ -19,12 +19,12 @@ from pathlib import Path
 from typing import AsyncContextManager, Callable, Protocol
 
 from claude_agent_sdk import (
-    AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, ToolUseBlock,
+    AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent, ToolUseBlock,
 )
 
 from hallux.config import Hardware
 from hallux.disk import Disk
-from hallux.protocol import Action, Field, Form, Reply, envelope, parse, resolve
+from hallux.protocol import Action, Field, Form, Reply, ScreenStream, envelope, parse, resolve
 from hallux.statusbar import describe
 from hallux.tools import SERVER, build_server
 
@@ -43,6 +43,7 @@ class Key:
 
 class Terminal(Protocol):
     status_bar: bool             # True: model errors go to the bar instead of stderr
+    streams: bool                # True: show the AI's screen while it's being written
 
     async def start(self) -> None: ...
 
@@ -52,6 +53,9 @@ class Terminal(Protocol):
         """Read one line, or return the key for the machine that interrupted typing."""
 
     def write(self, text: str) -> None: ...
+
+    def retract(self, text: str) -> None:
+        """Take back text just written (a full-screen program's screen that was streamed)."""
 
     def size(self) -> tuple[int, int]: ...
 
@@ -84,6 +88,7 @@ class Machine:
         self.spent = 0.0                         # dollars, all boots
         self.session_spent = 0.0                 # dollars, this boot (the SDK reports a total)
         self.fields: dict[str, Field] = {}       # block mode: the fields on screen now
+        self.stream: ScreenStream | None = None  # what the last answer showed while written
 
     def options(self) -> ClaudeAgentOptions:
         server, allowed = build_server(self.disk, fields=self.terminal)
@@ -100,6 +105,7 @@ class Machine:
             allowed_tools=allowed,
             permission_mode="dontAsk",          # anything not allowed above is denied
             setting_sources=[],                 # ignore your CLAUDE.md and settings
+            include_partial_messages=True,      # the answer as it's written, for streaming
         )
 
     async def run(self) -> None:
@@ -218,6 +224,7 @@ class Machine:
             await self.leave_block_mode()        # never leave anyone stuck in a form
             return Reply(screen="", prompt=None, halt=halt_on_error)
         reply = parse(text)
+        shown = self.stream.shown if self.stream else ""
         self.apply_writes(reply, new_machine)
         if reply.cwd:                            # cd without a tool call (boot, cd ~)
             try:
@@ -225,9 +232,12 @@ class Machine:
             except (OSError, ValueError) as e:
                 log.warning("can't change to %s: %s", reply.cwd, e)
         if reply.form is not None:               # block mode shows it; the shell prompt stays
+            if shown:                            # a full-screen screen that streamed (the AI
+                self.terminal.retract(shown)     # put the form last): take it back
             return reply
         await self.leave_block_mode()
-        self.terminal.write(reply.screen)
+        rest = self.stream.rest(reply.screen) if shown else None
+        self.terminal.write(rest if rest is not None else reply.screen)
         if reply.prompt is not None:
             self.prompt = reply.prompt
         else:
@@ -274,11 +284,16 @@ class Machine:
         with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
             loop.add_signal_handler(signal.SIGINT, interrupt)       # in case no raw keyboard
         result, tools = None, 0
+        stream = self.stream = (ScreenStream() if getattr(self.terminal, "streams", False)
+                                and not self.fields else None)     # never under a form
         try:
             async with self.terminal.busy(interrupt, activity):
                 await client.query(message)
                 async for msg in client.receive_response():
-                    if isinstance(msg, AssistantMessage):
+                    if isinstance(msg, StreamEvent):
+                        if stream is not None:
+                            self.show_while_written(stream, msg.event)
+                    elif isinstance(msg, AssistantMessage):
                         for block in msg.content:
                             if isinstance(block, ToolUseBlock):
                                 name = block.name.removeprefix(f"mcp__{SERVER}__")
@@ -304,6 +319,18 @@ class Machine:
         log.info("   %s, %d turns, %.1fs, $%.4f (this boot $%.4f)", result.subtype,
                  result.num_turns, result.duration_ms / 1000, turn_cost, self.session_spent)
         return result.result or "", interrupted
+
+    def show_while_written(self, stream: ScreenStream, event: dict) -> None:
+        """Streaming: print the screen as the AI writes it."""
+        if event.get("type") == "content_block_start":
+            if event.get("content_block", {}).get("type") == "text":
+                stream.new_block()
+        elif event.get("type") == "content_block_delta":
+            delta = event.get("delta", {})
+            if delta.get("type") == "text_delta" and (text := stream.feed(delta.get("text", ""))):
+                if stream.shown == text:         # the first piece
+                    self.terminal.set_status(activity="writing…")
+                self.terminal.write(text)
 
     def hardware_error(self, result: ResultMessage | None, fatal: bool = False) -> None:
         """The model couldn't be reached. That's shown on the status bar, not the screen."""

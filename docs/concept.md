@@ -250,6 +250,11 @@ This cheat sheet goes into the system prompt:
 Mouse mode `1000` reports presses, releases and the wheel. `1002` adds dragging. `1003` reports
 **every movement**, which would mean a model call for every pixel, so the AI must never use it.
 
+In long, colorful output (a boot log), the model sometimes drops the `␛` and writes a bare
+`[38;5;218m`. The terminal repairs those: a `[`, digits and semicolons, and an `m` is treated as
+the color code it was meant to be. Spelled-out codes like `\e[31m` in a `.bashrc` being
+shown stay text, and ordinary brackets like `[  OK  ]` are never touched.
+
 The one catch: running `cat` on a file that literally contains control-picture characters would
 turn them into real control bytes. That's rare, and it's acceptable.
 
@@ -1174,9 +1179,16 @@ too, which helps the illusion. The levers:
 - **Type-ahead batching** in raw mode: one model call per burst of keys, not one per key.
 - **Coarse tools.** `list_dir` returns full stat info, and `find` or `read_many` help if the log
   file shows chains of calls.
-- **Streaming.** Print characters as they arrive between `<screen>` and `</screen>`. This needs
-  `include_partial_messages=True` and a small incremental parser, and only works once the model
-  reliably skips narration before tool calls.
+- **Streaming** (implemented). With `include_partial_messages=True`, the SDK delivers the
+  answer as it's written. `ScreenStream` (`hallux/protocol.py`) prints what's between
+  `<screen>` and `</screen>` right away. It holds back only:
+  - a tail that might become `</screen>`;
+  - half-received escape codes, so the layout filter sees whole sequences.
+
+  Narration before `<screen>` is dropped, and at the end only the part not yet shown is
+  printed. Full-screen programs write their `<form>` **first**, so the terminal knows at once
+  not to stream them. If the AI puts the form last anyway, the streamed lines are erased again
+  before the full-screen view opens. Nothing streams while a full-screen program is on screen.
 
 ### Output fidelity
 

@@ -39,10 +39,13 @@ A short plan. The design behind every step is in [concept.md](concept.md).
 
   The design is in [light-and-keys.md](light-and-keys.md).
 - [ ] **7. Prompt tuning:** the diff test and the reboot test, run on each model.
-- [ ] **8. Polish:** streaming, Ctrl-C while the AI works, window resizing.
+- [x] **7b. Streaming:** the shell shows the AI's
+  output while it's being written (`ScreenStream` in `hallux/protocol.py`). Full-screen
+  programs put their form first and appear whole.
+- [ ] **8. Polish:** window resizing inside full-screen programs, hidden password input
+  (`sudo`), partial redraws in block mode.
 - [ ] **Later:**
-  - AI tab completion;
-  - partial redraws;
+  - smarter AI tab completion;
   - a "CPU" subagent;
   - a standalone MCP server;
   - shared machines.

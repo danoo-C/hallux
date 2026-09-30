@@ -21,16 +21,10 @@ from typing import AsyncIterator, Callable
 
 from hallux.config import Hardware
 from hallux.machine import Key, Machine
-from hallux.protocol import Action, Form
+from hallux.protocol import Action, Form, plain
 from hallux.statusbar import short_model
 
-ESCAPES = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[78c=>]")
 LINE_ENDING_KEYS = ("C-c", "C-d", "C-z", "C-\\")
-
-
-def plain(text: str) -> str:
-    """Screen text without colors or other escape codes."""
-    return ESCAPES.sub("", text).replace("\r", "")
 
 
 @dataclass
@@ -53,6 +47,7 @@ class ScriptTerminal:
     """A terminal whose keyboard is a script. Implements hallux.machine.Terminal."""
 
     status_bar = False
+    streams = False                                     # a transcript gains nothing from it
 
     def __init__(self, lines: list[str], echo: Callable[[str], None] = lambda text: None,
                  cols: int = 100, rows: int = 30) -> None:
@@ -92,6 +87,9 @@ class ScriptTerminal:
             self._new_record("(boot)")
         self.records[-1].output += text
         self.echo(text)
+
+    def retract(self, text: str) -> None:
+        pass
 
     def size(self) -> tuple[int, int]:
         return self.cols, self.rows

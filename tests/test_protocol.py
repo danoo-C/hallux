@@ -138,3 +138,64 @@ def test_the_ai_can_change_the_working_directory():
     assert parse("<screen>\n</screen><prompt>$ </prompt><cwd>/home/user</cwd>").cwd == "/home/user"
     assert parse("<screen>\n</screen><prompt>$ </prompt><cwd> </cwd>").cwd is None
     assert parse("<screen>\n</screen><prompt>$ </prompt>").cwd is None
+
+
+# ---------------------------------------------------------------- streaming
+
+from hallux.protocol import ScreenStream  # noqa: E402
+
+
+def streamed(reply, size):
+    stream, pieces = ScreenStream(), []
+    for i in range(0, len(reply), size):
+        pieces.append(stream.feed(reply[i:i + size]))
+    return stream, pieces
+
+
+def test_streaming_shows_exactly_the_final_screen_at_any_chunk_size():
+    reply = ("Let me check.<screen>\n␛[34mfib.py␛[0m  notes.md\n␛]0;title␇done\n</screen>"
+             "<prompt>$ </prompt><cwd>/tmp</cwd>")
+    for size in range(1, 12):
+        stream, pieces = streamed(reply, size)
+        assert "".join(pieces) == parse(reply).screen and stream.rest(parse(reply).screen) == ""
+        assert all("<" not in piece for piece in pieces)        # never a bit of </screen>
+
+
+def test_escape_sequences_are_never_split():
+    stream = ScreenStream()
+    stream.feed("<screen>\nred ␛[3")
+    assert stream.shown == "red "                               # the half sequence waits
+    assert stream.feed("1mx") == "\x1b[31mx"
+
+
+def test_a_form_first_reply_does_not_stream():
+    stream, pieces = streamed('\n<form keys="C-x"><editor id="t"/></form><screen>\nnano\n</screen>', 4)
+    assert "".join(pieces) == "" and stream.state == "off"
+
+
+def test_rest_notices_a_different_final_screen():
+    stream, _ = streamed("<screen>\nhello\n</screen>", 3)
+    assert stream.rest("hello\nworld\n") == "world\n" and stream.rest("bye\n") is None
+
+
+def test_form_first_replies_parse():
+    reply = parse('<form keys="C-x"><footer>\n^X Exit\n</footer><editor id="t" top="2"/></form>'
+                  '<screen>\n  GNU nano\n</screen><prompt></prompt>')
+    assert reply.screen == "  GNU nano\n" and reply.prompt == ""
+    assert reply.form.keys == ("C-x",) and reply.form.footer == "^X Exit\n"
+
+
+def test_color_codes_that_lost_their_escape_are_repaired():
+    """Live: a long boot log came with "[38;5;218m" instead of "␛[38;5;218m"."""
+    assert decode("[38;5;218m[    0.000000] Linux[0m") == "\x1b[38;5;218m[    0.000000] Linux\x1b[0m"
+    assert decode("[  OK  ] ssh [main] [5 files] [x]") == "[  OK  ] ssh [main] [5 files] [x]"
+    shown = r"PS1='\[\e[38;5;205m\]' echo -e \033[1m \x1b[2m"   # spelled out: stays text
+    assert decode(shown) == shown
+    assert decode("␛[31mred") == "\x1b[31mred"                          # no double escape
+
+
+def test_repaired_codes_stream_exactly_like_the_final_screen():
+    reply = "<screen>\n[38;5;218m[  OK  ][0m ssh\nPS1='\\[\\e[31m\\]'\n␛[1mbold␛[0m\n</screen><prompt>$ </prompt>"
+    for size in range(1, 15):
+        stream, pieces = streamed(reply, size)
+        assert "".join(pieces) == parse(reply).screen

@@ -184,3 +184,24 @@ def test_the_prompt_never_erases_the_status_bar():
     assert erases, "prompt_toolkit erased below the cursor"
     for at in erases:                                  # each erase is followed by the bar
         assert written[at:].startswith("\x1b[J\x1b7\x1b[1;29r\x1b[30;1H")
+
+
+def test_retract_erases_the_rows_a_text_took():
+    import io
+
+    from prompt_toolkit.data_structures import Size
+    from prompt_toolkit.output.vt100 import Vt100_Output
+
+    screen = io.StringIO()
+    output = Vt100_Output(screen, lambda: Size(rows=30, columns=10), term="xterm")
+
+    async def main():
+        with create_pipe_input() as pipe:
+            terminal = Terminal(None, input=pipe, output=output)
+            written = []
+            terminal._write = written.append
+            terminal.retract("0123456789012\nab\n")   # 2 rows (wrapped) + 1 row, cursor below
+            terminal.retract("\x1b[31mno newline!")   # 11 visible characters: 2 rows
+            terminal.retract("0123456789")             # exactly one row
+            return written
+    assert asyncio.run(main()) == ["\x1b[3A\r\x1b[J", "\x1b[1A\r\x1b[J", "\r\x1b[J"]

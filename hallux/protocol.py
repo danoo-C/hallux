@@ -21,12 +21,20 @@ from dataclasses import dataclass, field, replace
 
 # U+2400..U+241F picture the C0 control characters 0x00..0x1F; U+2421 pictures DEL.
 CONTROL_PICTURES = {0x2400 + c: c for c in range(32)} | {0x2421: 0x7F}
+# A color code the AI wrote without its ␛ ("[38;5;218m"), which it does in long, colorful
+# output. Spelled-out codes ("\e[31m" in a .bashrc being shown) are text and stay text.
+BARE_COLOR = re.compile(r"(?<!\x1b)(?<!\\e)(?<!\\033)(?<!\\x1b)(?<!\\u001b)\[(?=\d[0-9;]{0,19}m)")
+# The end of a text that might still become one of those, or a spelled-out code.
+COLOR_START = re.compile(r"(?:\\(?:e|033|x1b|u001b))?\[[0-9;]{0,19}$"
+                         r"|\\(?:e|0|03|033|x|x1|x1b|u|u0|u00|u001|u001b)?$")
 TTY_TAG = re.compile(r'<tty\s+mode="(raw|cooked)"\s*/>')
 FORM_START = re.compile(r"</prompt>(?:\s*<(?:halt|reboot)/>|\s*<tty[^>]*/>)*\s*<form\b")
 FIELD_TAG = re.compile(r"<(editor|line|pager)\b([^>]*?)(/>|>(.*?)</\1>)", re.DOTALL)
 FOOTER_TAG = re.compile(r"<footer>(.*?)</footer>", re.DOTALL)
 FILE_TAG = re.compile(r"<file\b([^>]*)>(.*?)</file>", re.DOTALL)
 MEMORY_TAG = re.compile(r"<memory>(.*?)</memory>", re.DOTALL)
+FORM_BEFORE_SCREEN = re.compile(r"</form>\s*(?=<screen>)")
+ESCAPES = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[78c=>]")
 ATTRIBUTE = re.compile(r'([\w-]+)="([^"]*)"')
 KEYMAPS = ("emacs", "nano", "vi")
 
@@ -114,8 +122,9 @@ def envelope(tag: str, body: str = "", **attrs: object) -> str:
 
 
 def decode(text: str) -> str:
-    """Turn control pictures ("␛[31m") into the real control characters ("\\x1b[31m")."""
-    return text.translate(CONTROL_PICTURES)
+    """Turn control pictures ("␛[31m") into the real control characters ("\\x1b[31m"),
+    and bare color codes ("[31m", the ␛ forgotten) into real ones."""
+    return BARE_COLOR.sub("\x1b[", text.translate(CONTROL_PICTURES))
 
 
 def parse(text: str) -> Reply:
@@ -125,8 +134,13 @@ def parse(text: str) -> Reply:
     text is shown anyway: a garbled screen beats a silent one.
     """
     form = None
-    if start := FORM_START.search(text):              # cut the form off first: its fields
-        form_at = text.index("<form", start.start())  # may hold any text
+    if end := FORM_BEFORE_SCREEN.search(text):        # a full-screen program: form first
+        form_at = text.find("<form")
+        if 0 <= form_at < end.start():
+            form = parse_form(text[form_at:end.start() + len("</form>")])
+            text = text[:form_at] + text[end.end():]
+    elif start := FORM_START.search(text):            # the older order: form after the prompt
+        form_at = text.index("<form", start.start())  # (cut off first: fields hold any text)
         form = parse_form(text[form_at:])
         text = text[:form_at]
     body, closed, tail = text.rpartition("</screen>")
@@ -154,6 +168,76 @@ def parse(text: str) -> Reply:
         files=files,
         memory=memory[1].removeprefix("\n") if memory else None,
     )
+
+
+def plain(text: str) -> str:
+    """Screen text without colors or other escape codes."""
+    return ESCAPES.sub("", text).replace("\r", "")
+
+
+class ScreenStream:
+    """Picks the screen out of a reply while the AI is still writing it, to show it right away.
+
+    feed() takes the raw text as it arrives and returns what can be printed now: the decoded
+    text between <screen> and </screen>, minus a tail that might still turn into "</screen>"
+    or an escape sequence (whole sequences, so the terminal's filters see them). A reply that
+    starts with <form> is a full-screen program: nothing is streamed, it's shown whole.
+    """
+
+    def __init__(self) -> None:
+        self.raw = ""                  # text of the current block not handed out yet
+        self.state = "before"          # before <screen>, inside, done, or off (a form)
+        self.first = True              # the newline right after <screen> isn't output
+        self.shown = ""                # everything handed out so far (decoded)
+
+    def new_block(self) -> None:
+        if self.state == "before":
+            self.raw = ""
+
+    def feed(self, text: str) -> str:
+        if self.state in ("done", "off"):
+            return ""
+        self.raw += text
+        if self.state == "before":
+            head = self.raw.lstrip()
+            if head.startswith("<form"):
+                self.state = "off"
+                return ""
+            at = self.raw.find("<screen>")
+            if at < 0:
+                return ""
+            self.state, self.raw = "inside", self.raw[at + len("<screen>"):]
+        if self.first and self.raw:
+            self.raw, self.first = self.raw.removeprefix("\n"), False
+        end = self.raw.find("</screen>")
+        if end >= 0:
+            out, self.raw, self.state = self.raw[:end], "", "done"
+        else:
+            keep = _holdback(self.raw)
+            out, self.raw = self.raw[:len(self.raw) - keep], self.raw[len(self.raw) - keep:]
+        out = decode(out)
+        self.shown += out
+        return out
+
+    def rest(self, screen: str) -> str | None:
+        """What's left to print of the final screen; None if it doesn't match what was shown."""
+        return screen[len(self.shown):] if screen.startswith(self.shown) else None
+
+
+def _holdback(raw: str) -> int:
+    """How many characters at the end must wait for more: part of "</screen>" or an escape."""
+    keep = next((k for k in range(min(8, len(raw)), 0, -1) if raw.endswith("</screen>"[:k])), 0)
+    if color := COLOR_START.search(raw):              # decoded whole, with what precedes it
+        keep = max(keep, len(raw) - color.start())
+    esc = max(raw.rfind("␛"), raw.rfind("\x1b"))
+    if esc >= 0 and len(raw) - esc < 64:
+        sequence = decode(raw[esc:])
+        complete = (re.match(r"\x1b\[[0-9;?]*[ -/]*[@-~]", sequence)
+                    or re.match(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", sequence)
+                    or (len(sequence) >= 2 and sequence[1] not in "[]"))
+        if not complete:
+            keep = max(keep, len(raw) - esc)
+    return keep
 
 
 def parse_form(text: str) -> Form | None:

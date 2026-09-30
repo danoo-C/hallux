@@ -6,6 +6,8 @@ Your final message is exactly:
 <screen>
 ...exactly what the terminal shows next...
 </screen><prompt>...the next prompt...</prompt>
+(A full-screen program starts its message with a <form> instead; see BLOCK MODE.)
+- The screen is shown while you write it, so write it first and straight through.
 - Everything between the newline after <screen> and </screen> is printed byte for byte. For no
   output, write <screen>
   </screen>. A command whose output ends with a newline ends with a newline here too.
@@ -13,7 +15,10 @@ Your final message is exactly:
 - The terminal already shows the line the user typed and has moved to the next line. Never
   echo the input.
 - Write control characters as Unicode control pictures: ␛ for ESC, ␇ for BEL, ␍ for CR,
-  ␈ for BS. The terminal turns them into real bytes.
+  ␈ for BS. The terminal turns them into real bytes. Every escape sequence starts with ␛
+  (␛[38;5;205m), on every line, including long, colorful output like a boot log.
+- Files hold what a real file would: a .bashrc writes colors as \e[...m or \033[...m text,
+  never ␛.
 - After </prompt> you may add <halt/> to power off (exit or logout from the login shell,
   poweroff, shutdown) or <reboot/> to reboot. Print the shutdown messages first.
 - After </prompt> you may add <cwd>path</cwd> to change the working directory without a
@@ -75,15 +80,16 @@ BLOCK MODE: FULL-SCREEN PROGRAMS (nano, vim, less, man, menus, forms)
 The terminal works like an IBM 3270: you draw the whole screen and declare editable fields;
 the user types, moves and scrolls inside the fields on their own, and you only hear back
 when they press one of the form's action keys or click outside the fields.
-- Reply with the top of the screen, an empty prompt, and a form with a footer:
-  <screen>
-  ...the top rows: title bar...
-  </screen><prompt></prompt><form keys="C-o C-x C-w C-g" focus="text" keymap="nano">
+- Reply with the form FIRST (so the terminal knows at once that a full-screen program is
+  starting), then the top of the screen and an empty prompt:
+  <form keys="C-o C-x C-w C-g" focus="text" keymap="nano">
   <footer>
   ...the bottom rows: status line, help lines...
   </footer>
   <editor id="text" top="3" left="1" height="0" file="/home/user/hello.txt"/>
-  </form>
+  </form><screen>
+  ...the top rows: title bar...
+  </screen><prompt></prompt>
   The terminal pins the footer to the bottom row, so you never count rows: the screen
   starts at the top, the footer ends at the bottom, and the space between belongs to the
   fields. Colors are allowed; no cursor-movement codes. Pad bars (title bars, status lines)

@@ -3,22 +3,31 @@ import asyncio
 import contextlib
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, ToolUseBlock
+from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolUseBlock
 
 from hallux.config import Hardware
 from hallux.machine import SYSTEM_PROMPT, Key, Machine
 from hallux.protocol import Action, FieldState
 
 
-def result(text, *, error=False, total=0.001, tools=()):
-    """A model turn: optional tool calls, then the result (the SDK reports a running total)."""
+def result(text, *, error=False, total=0.001, tools=(), chunks=0):
+    """A model turn: optional tool calls, the text streamed in pieces of `chunks` characters
+    (0: not streamed), then the result (the SDK reports a running total)."""
+    streamed = []
+    if chunks:
+        event = lambda e: StreamEvent(uuid="u", session_id="s", event=e)   # noqa: E731
+        streamed = [event({"type": "content_block_start", "index": 0,
+                           "content_block": {"type": "text", "text": ""}})]
+        streamed += [event({"type": "content_block_delta", "index": 0,
+                            "delta": {"type": "text_delta", "text": text[i:i + chunks]}})
+                     for i in range(0, len(text), chunks)]
     message = ResultMessage(subtype="error_during_execution" if error else "success",
                             duration_ms=1500, duration_api_ms=1, is_error=error, num_turns=1,
                             session_id="s", result=text, total_cost_usd=total)
     calls = [AssistantMessage(content=[ToolUseBlock(id=str(i), name=f"mcp__hallux__{name}",
                                                     input=args)], model="m")
              for i, (name, args) in enumerate(tools)]
-    return calls + [message]
+    return calls + streamed + [message]
 
 
 class FakeModel:
@@ -93,8 +102,15 @@ class FakeTerminal:
             raise key
         return key
 
+    streams = False
+
     def write(self, text):
         self.screen += text
+        self.writes = getattr(self, "writes", []) + [text]
+
+    def retract(self, text):
+        self.retracted = getattr(self, "retracted", []) + [text]
+        self.screen = self.screen.removesuffix(text)
 
     def size(self):
         return 100, 30
@@ -396,3 +412,45 @@ def test_a_bad_cwd_is_ignored(tmp_path):
     model = FakeModel(screen("", tail="<cwd>/nope</cwd>"), screen("", prompt="", tail="<halt/>"))
     machine = run(tmp_path, model, FakeTerminal("exit"))
     assert 'cwd="/"' in model.sessions[0][1]
+
+
+
+def test_answers_stream_onto_the_screen(tmp_path):
+    ls = "\n".join(f"file{i}.txt" for i in range(20)) + "\n"
+    model = FakeModel(result(screen("booting\n"), chunks=5),
+                      result(screen(ls), chunks=7),
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("ls", "exit")
+    terminal.streams = True
+    run(tmp_path, model, terminal)
+    assert terminal.screen == "booting\n" + ls                  # everything, exactly once
+    assert len(terminal.writes) > 10                             # ... in many small pieces
+    assert {"activity": "writing…"} in terminal.statuses
+
+
+def test_a_streamed_full_screen_program_is_taken_back(tmp_path):
+    """If the AI puts the form after the screen, the chrome streamed into the shell is erased."""
+    nano_last = ("<screen>\n  GNU nano 7.2\n</screen><prompt></prompt>"
+                 '<form keys="C-x"><editor id="text" top="2"/></form>')
+    nano_first = ('<form keys="C-x"><editor id="text" top="2"/></form>'
+                  "<screen>\n  GNU nano 7.2\n</screen><prompt></prompt>")
+    for reply, retracted in ((nano_last, ["  GNU nano 7.2\n"]), (nano_first, [])):
+        model = FakeModel(screen(""), result(reply, chunks=4), screen("", prompt="", tail="<halt/>"))
+        terminal = FakeTerminal("nano x", Action("C-x", "text", ()), "exit")
+        terminal.streams = True
+        run(tmp_path, model, terminal)
+        assert getattr(terminal, "retracted", []) == retracted
+        assert "GNU nano" not in terminal.screen                 # it went to the form instead
+        assert terminal.forms[0][0] == "  GNU nano 7.2\n"
+
+
+def test_nothing_streams_under_a_form(tmp_path):
+    model = FakeModel(screen(""), NANO,
+                      result("<screen>\n  still nano\n</screen><prompt></prompt>"
+                             '<form keys="C-x"><editor id="text"/></form>', chunks=3),
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("nano hello.txt", Action("C-o", "text", ()), Action("C-x", "text", ()),
+                            "exit")
+    terminal.streams = True
+    run(tmp_path, model, terminal)
+    assert "still nano" not in terminal.screen and not getattr(terminal, "retracted", [])
