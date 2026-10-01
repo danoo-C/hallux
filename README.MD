@@ -232,3 +232,7 @@ and persistence, is checked with `--check reboot` and `--script`.
 - [docs/roadmap.md](docs/roadmap.md): what's built and what's planned
 - [docs/next-steps.md](docs/next-steps.md): the upcoming features, in detail
 - [docs/light-and-keys.md](docs/light-and-keys.md): the status bar, the hard exit and the key rule
+
+## License
+
+MIT. See [LICENSE](LICENSE).
