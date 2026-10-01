@@ -1,7 +1,8 @@
 # Roadmap
 
 A short plan. The design behind every step is in [concept.md](concept.md). What comes
-next, in detail, is in [next-steps.md](next-steps.md).
+next, in detail, is in [next-steps.md](next-steps.md). Picking the work back up: start
+with [handoff.md](handoff.md).
 
 - [x] **0. Environment:** `install.py`, `.venv`, editable install, `hallux.py` launcher.
 - [x] **1. Disk and tools:** the path jail, file tools and memory tools as SDK tools, with tests.
