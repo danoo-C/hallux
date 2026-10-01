@@ -1222,6 +1222,31 @@ Capping `read_file` output keeps `cat bigfile.log` from being expensive.
   The jail still holds whatever happens.
 - **Use a dedicated folder and `git init` it.** A hallucinated `rm -rf /` really deletes the
   files in it, but not the memory. **Never** point Hallux at your home directory.
+- **Only harmless terminal codes reach your terminal.** `decode()` in `hallux/protocol.py`
+  keeps an allowlist: colors, cursor moves, erasing, scrolling, hiding the cursor, and window
+  titles. It drops everything else:
+  - clipboard writes (OSC 52) and hyperlinks;
+  - queries your terminal would answer by "typing" the answer (cursor position, device
+    attributes, window title);
+  - scroll regions, the alternate screen, mouse and keyboard modes, and resets;
+  - device control strings (DCS, APC);
+  - control characters like ENQ (answerback) and C1 codes.
+
+  This also holds for streamed pieces, and for block-mode screens.
+- **Claude Code keeps no transcript of hallux sessions** (`keep_transcripts = false`, the
+  default: it passes `--no-session-persistence`). `hallux.log` in the world already has
+  everything, and hallux sessions stay out of your `claude --resume` list.
+- **Optional: the operating system enforces the fence too** (`os_sandbox = true`,
+  `hallux/sandbox.py`). Claude Code then runs under bubblewrap:
+  - the filesystem is read-only;
+  - your home folder is hidden, except `~/.claude`, where its login lives;
+  - `/tmp` is private, and other processes are invisible.
+
+  hallux's tools run in the hallux process, so the machine still works. It's a second wall
+  in case anything in the first one (no built-in tools, one path gatekeeper) ever has a bug.
+- **What's still outside the fence:** hard links or mount points that *you* put inside the
+  world folder, and the fact that everything the AI reads is sent to Anthropic's API, because
+  that's where the model runs. Keep real secrets out of worlds.
 
 ---
 

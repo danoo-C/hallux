@@ -1,7 +1,8 @@
 import re
 
 from hallux import statusbar
-from hallux.statusbar import StatusBar, describe, fade, fit, short_model, strip_layout_codes
+from hallux.protocol import decode
+from hallux.statusbar import StatusBar, describe, fade, fit, short_model
 
 
 def text(bar, width, now=1.0):
@@ -55,8 +56,9 @@ def test_the_fade_goes_green_yellow_green():
 
 
 def test_the_ai_cannot_move_the_bar():
-    assert strip_layout_codes("a\x1b[1;5rb\x1b[rc\x1bcd\x1b[?1049he\x1b[?6lf") == "abcdef"
-    assert strip_layout_codes("\x1b[31mred\x1b[0m \x1b[H\x1b[2J") == "\x1b[31mred\x1b[0m \x1b[H\x1b[2J"
+    """Scroll regions, resets, origin mode and the alternate screen never reach the terminal."""
+    assert decode("a␛[1;5rb␛[rc␛cd␛[?1049he␛[?6lf") == "abcdef"
+    assert decode("␛[31mred␛[0m ␛[H␛[2J") == "\x1b[31mred\x1b[0m \x1b[H\x1b[2J"
 
 
 def test_pinning_the_bar():

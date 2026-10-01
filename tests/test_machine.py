@@ -454,3 +454,20 @@ def test_nothing_streams_under_a_form(tmp_path):
     terminal.streams = True
     run(tmp_path, model, terminal)
     assert "still nano" not in terminal.screen and not getattr(terminal, "retracted", [])
+
+
+
+def test_claude_code_keeps_no_transcript_unless_asked(tmp_path):
+    for hardware, flags in ((Hardware(), {"no-session-persistence": None}),
+                            (Hardware(keep_transcripts=True), {})):
+        model = FakeModel(screen("", prompt="", tail="<halt/>"))
+        run(tmp_path, model, FakeTerminal(), hardware)
+        assert model.options[0].extra_args == flags and model.options[0].cli_path is None
+
+
+def test_os_sandbox_runs_claude_code_through_the_wrapper(tmp_path, monkeypatch):
+    import hallux.sandbox
+    monkeypatch.setattr(hallux.sandbox, "wrapper", lambda folder: folder / "claude-in-bwrap")
+    model = FakeModel(screen("", prompt="", tail="<halt/>"))
+    run(tmp_path, model, FakeTerminal(), Hardware(os_sandbox=True))
+    assert model.options[0].cli_path == tmp_path / ".hallux" / "claude-in-bwrap"

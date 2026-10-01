@@ -33,6 +33,8 @@ def test_haiku_gets_no_effort():
     ("max_budget_usd = -1\n", "positive number"),
     ("max_budget_usd = true\n", "positive number"),
     ('status_bar = "yes"\n', "status_bar must be true or false"),
+    ("os_sandbox = 1\n", "os_sandbox must be true or false"),
+    ('keep_transcripts = "no"\n', "keep_transcripts must be true or false"),
     ('model = "claude-opus-5-5\n', r"config\.toml: Illegal character"),   # broken TOML
 ])
 def test_bad_config_is_a_readable_error(tmp_path, text, message):

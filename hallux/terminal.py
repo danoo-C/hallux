@@ -117,9 +117,7 @@ class Terminal:
         return await self.session.prompt_async(ANSI(zero_width(prompt)), default=default)
 
     def write(self, text: str) -> None:
-        if self.bar:
-            text = statusbar.strip_layout_codes(text)    # the bar's rows are hallux's business
-        self._write(text)
+        self._write(text)                                # already made safe by decode()
         self._draw_bar()                                 # `clear` erases it; bring it back
 
     def retract(self, text: str) -> None:

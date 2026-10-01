@@ -1,6 +1,7 @@
 # Roadmap
 
-A short plan. The design behind every step is in [concept.md](concept.md).
+A short plan. The design behind every step is in [concept.md](concept.md). What comes
+next, in detail, is in [next-steps.md](next-steps.md).
 
 - [x] **0. Environment:** `install.py`, `.venv`, editable install, `hallux.py` launcher.
 - [x] **1. Disk and tools:** the path jail, file tools and memory tools as SDK tools, with tests.
@@ -42,6 +43,11 @@ A short plan. The design behind every step is in [concept.md](concept.md).
 - [x] **7b. Streaming:** the shell shows the AI's
   output while it's being written (`ScreenStream` in `hallux/protocol.py`). Full-screen
   programs put their form first and appear whole.
+- [x] **7c. Hardening:**
+  - only harmless terminal codes reach your terminal (no clipboard writes, no answer-back
+    queries, no mode switches);
+  - Claude Code keeps no transcript of hallux sessions;
+  - optional `os_sandbox` runs Claude Code under bubblewrap.
 - [ ] **8. Polish:** window resizing inside full-screen programs, hidden password input
   (`sudo`), partial redraws in block mode.
 - [ ] **Later:**

@@ -22,6 +22,7 @@ from claude_agent_sdk import (
     AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent, ToolUseBlock,
 )
 
+from hallux import sandbox
 from hallux.config import Hardware
 from hallux.disk import Disk
 from hallux.protocol import Action, Field, Form, Reply, ScreenStream, envelope, parse, resolve
@@ -106,6 +107,10 @@ class Machine:
             permission_mode="dontAsk",          # anything not allowed above is denied
             setting_sources=[],                 # ignore your CLAUDE.md and settings
             include_partial_messages=True,      # the answer as it's written, for streaming
+            # hallux.log has everything; Claude Code needn't keep its own transcript, which
+            # would also show hallux sessions in your `claude --resume` list
+            extra_args={} if hw.keep_transcripts else {"no-session-persistence": None},
+            cli_path=sandbox.wrapper(self.disk.hidden) if hw.os_sandbox else None,
         )
 
     async def run(self) -> None:

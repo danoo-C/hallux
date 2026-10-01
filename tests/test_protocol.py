@@ -10,7 +10,7 @@ def test_envelope():
 def test_decode_control_pictures():
     assert decode("␛[1;35mcow␛[0m> ") == "\x1b[1;35mcow\x1b[0m> "
     assert decode("␛]0;hallux␇") == "\x1b]0;hallux\x07"
-    assert decode("50%␍100%␡") == "50%\r100%\x7f"
+    assert decode("50%␍100%␡") == "50%\r100%"                 # DEL has no use on screen
     assert decode("plain ✓ ž") == "plain ✓ ž"
 
 
@@ -197,5 +197,33 @@ def test_color_codes_that_lost_their_escape_are_repaired():
 def test_repaired_codes_stream_exactly_like_the_final_screen():
     reply = "<screen>\n[38;5;218m[  OK  ][0m ssh\nPS1='\\[\\e[31m\\]'\n␛[1mbold␛[0m\n</screen><prompt>$ </prompt>"
     for size in range(1, 15):
+        stream, pieces = streamed(reply, size)
+        assert "".join(pieces) == parse(reply).screen
+
+
+# ---------------------------------------------------------------- what may reach your terminal
+
+from hallux.protocol import safe  # noqa: E402
+
+
+def test_harmless_codes_pass():
+    harmless = ("\x1b[1;35mpink\x1b[0m\x1b[H\x1b[2J\x1b[3J\x1b[2A\x1b[10;5H\x1b[K\x1b7\x1b8"
+                "\x1b[?25l\x1b[?25h\x1b]0;user@hallux: ~\x07\a\b\t\r\n")
+    assert safe(harmless) == harmless
+
+
+def test_risky_codes_are_dropped():
+    assert safe("a\x1b]52;c;cm0gLXJmIC8K\x07b") == "ab"                    # clipboard write
+    assert safe("\x1b]8;;https://x\x1b\\link\x1b]8;;\x1b\\") == "link"     # hidden link target
+    assert safe("\x1b[6n\x1b[c\x1b[>c\x1b[21t\x1b[5n\x1b[?1$p") == ""       # answer-back queries
+    assert safe("\x1b[1;5r\x1b[?1049h\x1b[?1000h\x1b[>1u\x1b[?2004h") == ""  # modes and keyboard
+    assert safe("\x1bP+q544e\x1b\\\x1b_Gimage\x1b\\\x1bc") == ""            # DCS, APC, reset
+    assert safe("x\x05y\x9bz\x0ew") == "xyzw"                              # ENQ, C1, shift-out
+
+
+def test_a_clipboard_write_split_across_streamed_pieces_is_still_dropped():
+    reply = "<screen>\nok␛]52;c;cm0gLXJm␇done ␛[31mred␛[0m\n</screen><prompt>$ </prompt>"
+    assert parse(reply).screen == "okdone \x1b[31mred\x1b[0m\n"
+    for size in range(1, 21):
         stream, pieces = streamed(reply, size)
         assert "".join(pieces) == parse(reply).screen

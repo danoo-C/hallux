@@ -24,6 +24,20 @@ CONTROL_PICTURES = {0x2400 + c: c for c in range(32)} | {0x2421: 0x7F}
 # A color code the AI wrote without its ␛ ("[38;5;218m"), which it does in long, colorful
 # output. Spelled-out codes ("\e[31m" in a .bashrc being shown) are text and stay text.
 BARE_COLOR = re.compile(r"(?<!\x1b)(?<!\\e)(?<!\\033)(?<!\\x1b)(?<!\\u001b)\[(?=\d[0-9;]{0,19}m)")
+# Every escape sequence the AI could send to your real terminal...
+SEQUENCE = re.compile(
+    r"\x1b\[(?P<csi>[0-?]*[ -/]*[@-~])"                # CSI: parameters, final byte
+    r"|\x1b\](?P<osc>[^\x07\x1b]*)(?:\x07|\x1b\\)?"     # OSC ... BEL or ST
+    r"|\x1b[P_^X](?:[^\x1b]|\x1b(?!\\))*(?:\x1b\\)?"     # DCS, APC, PM, SOS ... ST
+    r"|\x1b[ -/]+[0-~]"                               # with intermediates: ESC ( 0, ...
+    r"|\x1b(?P<esc>[0-~])"                            # two characters: ESC 7, ESC c, ...
+    r"|\x1b")                                         # a lone ESC
+# ... and the few a shell needs: colors, cursor moves, erasing, scrolling, showing or hiding
+# the cursor. Nothing that changes the terminal's modes, its keyboard, its clipboard or
+# makes it answer back (an answer would arrive as typed input).
+SAFE_CSI = re.compile(r"[0-9;]*[mABCDEFGHJKSTXLMP@dfsu]|\?(?:25|7|12)[hl]")
+SAFE_OSC = re.compile(r"[012];")                       # window and tab titles
+UNSAFE_CONTROLS = re.compile(r"[\x00-\x06\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f\x80-\x9f]")
 # The end of a text that might still become one of those, or a spelled-out code.
 COLOR_START = re.compile(r"(?:\\(?:e|033|x1b|u001b))?\[[0-9;]{0,19}$"
                          r"|\\(?:e|0|03|033|x|x1|x1b|u|u0|u00|u001|u001b)?$")
@@ -122,9 +136,22 @@ def envelope(tag: str, body: str = "", **attrs: object) -> str:
 
 
 def decode(text: str) -> str:
-    """Turn control pictures ("␛[31m") into the real control characters ("\\x1b[31m"),
-    and bare color codes ("[31m", the ␛ forgotten) into real ones."""
-    return BARE_COLOR.sub("\x1b[", text.translate(CONTROL_PICTURES))
+    """Turn the AI's text into what goes to your terminal: control pictures ("␛[31m") into
+    real control characters, bare color codes ("[31m", the ␛ forgotten) into real ones, and
+    every escape sequence or control character that isn't harmless dropped (see safe())."""
+    return safe(BARE_COLOR.sub("\x1b[", text.translate(CONTROL_PICTURES)))
+
+
+def safe(text: str) -> str:
+    """Keep only harmless escape sequences: no clipboard writes (OSC 52), no queries the
+    terminal would answer, no mode, keyboard or mouse switches, no scroll regions."""
+    def keep(m: re.Match) -> str:
+        if m["csi"] is not None:
+            return m[0] if SAFE_CSI.fullmatch(m["csi"]) else ""
+        if m["osc"] is not None:
+            return m[0] if SAFE_OSC.match(m["osc"]) else ""
+        return m[0] if m["esc"] in ("7", "8") else ""
+    return UNSAFE_CONTROLS.sub("", SEQUENCE.sub(keep, text))
 
 
 def parse(text: str) -> Reply:
@@ -232,9 +259,11 @@ def _holdback(raw: str) -> int:
     esc = max(raw.rfind("␛"), raw.rfind("\x1b"))
     if esc >= 0 and len(raw) - esc < 64:
         sequence = decode(raw[esc:])
-        complete = (re.match(r"\x1b\[[0-9;?]*[ -/]*[@-~]", sequence)
+        complete = (re.match(r"\x1b\[[0-?]*[ -/]*[@-~]", sequence)
                     or re.match(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", sequence)
-                    or (len(sequence) >= 2 and sequence[1] not in "[]"))
+                    or re.match(r"\x1b[P_^X].*\x1b\\", sequence, re.DOTALL)
+                    or re.match(r"\x1b[ -/]+[0-~]", sequence)
+                    or (len(sequence) >= 2 and sequence[1] not in "[]P_^X" + " !\"#$%&'()*+,-./"))
         if not complete:
             keep = max(keep, len(raw) - esc)
     return keep

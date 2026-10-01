@@ -20,6 +20,8 @@ class Hardware:
     fallback_model: str | None = None
     max_budget_usd: float | None = None       # spending cap per boot
     status_bar: bool = True                   # hallux's own bottom row: activity, model, cost
+    keep_transcripts: bool = False            # True: Claude Code also keeps its own transcript
+    os_sandbox: bool = False                  # True: Claude Code runs inside bubblewrap
 
     @property
     def model_effort(self) -> str | None:
@@ -53,8 +55,9 @@ def _validate(hw: Hardware, path: Path) -> None:
         raise ValueError(f"{path}: effort must be one of {', '.join(EFFORTS)}, not {hw.effort!r}")
     if hw.fallback_model is not None and not isinstance(hw.fallback_model, str):
         raise ValueError(f"{path}: fallback_model must be a model name")
-    if not isinstance(hw.status_bar, bool):
-        raise ValueError(f"{path}: status_bar must be true or false")
+    for name in ("status_bar", "keep_transcripts", "os_sandbox"):
+        if not isinstance(getattr(hw, name), bool):
+            raise ValueError(f"{path}: {name} must be true or false")
     budget = hw.max_budget_usd
     if budget is not None and (isinstance(budget, bool) or not isinstance(budget, int | float)
                                or budget <= 0):

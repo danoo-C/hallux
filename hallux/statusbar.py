@@ -21,10 +21,6 @@ GREEN, YELLOW = (0x5F, 0xD7, 0x87), (0xD7, 0xD7, 0x5F)
 GRAY, DIM, RED, BACKGROUND = "#808080", "#5c5c5c", "#ff5f5f", "#1c1c1c"
 IDLE_HINT = "power off: ctrl+shift+del · ctrl+c ×3"
 
-# Codes that would move or break the bar: scroll regions, full reset, origin mode, and the
-# alternate screen (full-screen programs go through block mode instead).
-LAYOUT_CODES = re.compile(r"\x1b\[[0-9;]*r|\x1bc|\x1b\[\?(?:6|47|1047|1049)[hl]")
-
 VERBS = {"list_dir": "listing", "stat": "checking", "read_file": "reading", "find": "searching",
          "write_file": "writing", "edit_file": "editing", "make_dir": "creating",
          "chdir": "entering", "remove": "removing", "move": "moving", "copy": "copying",
@@ -44,10 +40,6 @@ def short_model(model: str) -> str:
     name = re.sub(r"-\d{8}$", "", model.removeprefix("claude-"))
     family, _, version = name.partition("-")
     return f"{family} {version.replace('-', '.')}".strip()
-
-
-def strip_layout_codes(text: str) -> str:
-    return LAYOUT_CODES.sub("", text)
 
 
 @dataclass
