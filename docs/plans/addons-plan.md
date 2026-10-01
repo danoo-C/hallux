@@ -42,7 +42,7 @@ confirm before building:
 | Topic | Decision | Why |
 |---|---|---|
 | Tool names | One tool group (MCP server) per addon: the AI sees `mcp__music__play` | The design asks for one group per addon. Names can't collide with the disk tools or with another addon. Only the addon name `hallux` is refused |
-| `stop` | One module-level `stop()` is the lifecycle hook. If it's also in `EXPOSED`, the AI can call it. It takes no arguments | The design's table and its sketch use the same name for both; this makes them one function |
+| `stop` | One module-level `stop()` is the lifecycle hook. If it's also in `EXPOSED`, the AI can call it. It may take arguments, and the manual tells the AI how to use them, but each needs a default: Hallux calls it without any | The design's table and its sketch use the same name for both; this makes them one function |
 | Errors | An exception in an addon function becomes a tool error, `{"error": "…"}`, and the traceback goes to `hallux.log` | The disk tools work the same way, and the AI already prints tool errors the way a program would |
 | Slow or large results | A call that takes longer than 10 s, or returns more than 4000 characters, becomes a tool error | "They return quickly" and "they return small results" are rules in the design; this enforces them |
 | The hard exit | The `stop()` hooks get half a second in total, then Hallux quits anyway | A hook that hangs must not block the one key that always works |
@@ -93,9 +93,9 @@ any addon that owns a window or a sound. Step 7 is needed before the music addon
 | 3 | The module docstring has a first line | the design |
 | 4 | `prompt` exists and can be called | the design |
 | 5 | `prompt()` returns non-empty text | the design |
-| 6 | `EXPOSED` is a list of functions, each with a different name | the design |
+| 6 | `EXPOSED` is a list of functions, at least one, each with a different name | the design |
 | 7 | Every exposed function has type hints the schema builder understands (step 2) | the design |
-| 8 | `stop`, if there is one, takes no arguments | this plan |
+| 8 | `stop`, if there is one, works without arguments | this plan |
 
 Any error an addon raises while it's being checked counts as a failed check. Nothing in an
 addon can keep the machine from starting.
