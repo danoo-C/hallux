@@ -93,8 +93,8 @@ any addon that owns a window or a sound. Step 7 is needed before the music addon
 | 3 | The module docstring has a first line | the design |
 | 4 | `prompt` exists and can be called | the design |
 | 5 | `prompt()` returns non-empty text | the design |
-| 6 | `EXPOSED` is a list of functions, at least one, each with a different name | the design |
-| 7 | Every exposed function has type hints the schema builder understands (step 2) | the design |
+| 6 | `EXPOSED` is a list of plain functions (no `async def`), at least one, each with a different name | the design |
+| 7 | Every exposed function has a docstring, and type hints the schema builder understands (step 2) | the design |
 | 8 | `stop`, if there is one, works without arguments | this plan |
 
 Any error an addon raises while it's being checked counts as a failed check. Nothing in an
@@ -112,7 +112,8 @@ a missing `addons/` folder (no addons, no error); `only=["a"]` loads `a` and not
   - `str`, `int`, `float` and `bool` are accepted.
   - A parameter with a default is optional.
   - Anything else fails check 7: no hint, a list, `*args`.
-  - The tool's description is the function's docstring.
+  - The tool's description is the function's docstring (`description_for`). A function
+    without one fails check 7.
 - **`call(function, args)`:** runs the function in a thread and turns what happens into a
   tool result:
 
@@ -247,12 +248,15 @@ The AI then has the tool `mcp__dice__roll`, with one optional whole number, `sid
 
 ---
 
-## The prompt section (draft)
+## The prompt section
+
+As it is in `hallux/prompt.md`. The BOOT section there also names `<addons>`.
 
 ```text
 ADDONS
 Addons are real hardware attached to this machine. <boot> lists them in <addons>, one per
-line, as name: what it is. Without that list there are none.
+line, as name: what it is. Only the addons in that list exist in this boot; without the list
+there are none. An addon's functions are tools in a group named after it.
 - Before you use an addon for the first time in a boot, read its manual: addon_help(name).
 - Never imagine what an addon function does or returns: call it. If the call fails, print
   the error the way the program would.

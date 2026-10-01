@@ -1,13 +1,15 @@
-"""The Disk as tools for the agent, served by the Claude Agent SDK's in-process MCP server."""
+"""The Disk and the addons as tools for the agent, served by the Claude Agent SDK's in-process
+MCP servers: one for hallux's own tools, and one per addon."""
 from __future__ import annotations
 
 import errno
 import json
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, Sequence
 
 from claude_agent_sdk import SdkMcpTool, ToolAnnotations, create_sdk_mcp_server, tool
 from claude_agent_sdk.types import McpSdkServerConfig
 
+from hallux.addons import Addon, call, description_for, schema_for
 from hallux.disk import Disk
 
 SERVER = "hallux"
@@ -47,7 +49,8 @@ def run(op: Callable[[], Any]) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": is_error}
 
 
-def build_tools(disk: Disk, fields: Fields | None = None) -> list[SdkMcpTool]:
+def build_tools(disk: Disk, fields: Fields | None = None,
+                addons: Sequence[Addon] = ()) -> list[SdkMcpTool]:
     def make(name: str, description: str, input_schema: dict, method: Callable,
              annotations: ToolAnnotations | None = None) -> SdkMcpTool:
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
@@ -60,6 +63,15 @@ def build_tools(disk: Disk, fields: Fields | None = None) -> list[SdkMcpTool]:
         fields.field_saved(field)
         lines = text.count("\n") + (not text.endswith("\n") and text != "")
         return result | {"lines": lines}
+
+    def list_addons() -> list[dict]:
+        return [{"name": addon.name, "summary": addon.summary} for addon in addons]
+
+    def addon_help(name: str) -> dict:
+        for addon in addons:
+            if addon.name == name:
+                return {"manual": addon.manual}
+        raise ValueError(f"no addon {name!r}; there are: {', '.join(a.name for a in addons)}")
 
     block_mode = [] if fields is None else [
         make("save_field",
@@ -119,10 +131,42 @@ def build_tools(disk: Disk, fields: Fields | None = None) -> list[SdkMcpTool]:
              "Replace exactly one occurrence of old with new in the memory; an empty old "
              "appends new to the end. Returns the new size: keep the memory short.",
              schema({"old": TEXT, "new": TEXT}), disk.memory_edit),
-    ]
+    ] + ([] if not addons else [
+        make("list_addons",
+             "The addons attached to this machine, name and summary: the same list as "
+             "<addons> in <boot>.",
+             schema({}), list_addons, READS),
+        make("addon_help",
+             "An addon's manual: what it is, what its functions do and what their limits are. "
+             "Read it before you use that addon for the first time in a boot.",
+             schema({"name": TEXT}), addon_help, READS),
+    ])
 
 
-def build_server(disk: Disk, fields: Fields | None = None) -> tuple[McpSdkServerConfig, list[str]]:
+def build_server(disk: Disk, fields: Fields | None = None,
+                 addons: Sequence[Addon] = ()) -> tuple[McpSdkServerConfig, list[str]]:
     """The MCP server for ClaudeAgentOptions.mcp_servers, and the names for allowed_tools."""
-    tools = build_tools(disk, fields)
+    tools = build_tools(disk, fields, addons)
     return create_sdk_mcp_server(SERVER, tools=tools), [f"mcp__{SERVER}__{t.name}" for t in tools]
+
+
+def build_addon_tools(addon: Addon) -> list[SdkMcpTool]:
+    """An addon's exposed functions as tools. A function's docstring is its description."""
+    def make(name: str, function: Callable) -> SdkMcpTool:
+        async def handler(args: dict[str, Any]) -> dict[str, Any]:
+            return await call(function, args)
+        return tool(name, description_for(function), schema_for(function))(handler)
+
+    return [make(name, function) for name, function in addon.functions.items()]
+
+
+def build_addon_servers(
+        addons: Sequence[Addon]) -> tuple[dict[str, McpSdkServerConfig], list[str]]:
+    """One MCP server per addon, so two addons can each have a play: the AI sees
+    mcp__music__play. Returns the servers by name, and the names for allowed_tools."""
+    servers, allowed = {}, []
+    for addon in addons:
+        tools = build_addon_tools(addon)
+        servers[addon.name] = create_sdk_mcp_server(addon.name, tools=tools)
+        allowed += [f"mcp__{addon.name}__{t.name}" for t in tools]
+    return servers, allowed

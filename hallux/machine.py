@@ -16,13 +16,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
-from typing import AsyncContextManager, Callable, Protocol
+from typing import AsyncContextManager, Callable, Protocol, Sequence
 
 from claude_agent_sdk import (
     AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent, ToolUseBlock,
 )
 
 from hallux import sandbox
+from hallux.addons import Addon
 from hallux.config import Hardware
 from hallux.disk import Disk
 from hallux.passwords import Passwords
@@ -30,7 +31,7 @@ from hallux.protocol import (
     Action, Field, Form, Reply, ScreenStream, Secret, envelope, parse, resolve,
 )
 from hallux.statusbar import describe
-from hallux.tools import SERVER, build_server
+from hallux.tools import SERVER, build_addon_servers, build_server
 
 log = logging.getLogger("hallux")
 SYSTEM_PROMPT = (files("hallux") / "prompt.md").read_text(encoding="utf-8")
@@ -87,11 +88,13 @@ class Terminal(Protocol):
 
 class Machine:
     def __init__(self, root: Path, hardware: Hardware, terminal: Terminal,
-                 client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient):
+                 client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient,
+                 addons: Sequence[Addon] = ()):
         self.disk = Disk(root)
         self.hardware = hardware
         self.terminal = terminal
         self.client_factory = client_factory
+        self.addons = tuple(addons)              # the real hardware attached to this machine
         self.passwords = Passwords(self.disk.hidden / "passwords.json")
         self.prompt = ""
         self.secret: Secret | None = None        # the prompt asks for a password
@@ -104,7 +107,8 @@ class Machine:
         self.stream: ScreenStream | None = None  # what the last answer showed while written
 
     def options(self) -> ClaudeAgentOptions:
-        server, allowed = build_server(self.disk, fields=self.terminal)
+        server, allowed = build_server(self.disk, fields=self.terminal, addons=self.addons)
+        addon_servers, addon_tools = build_addon_servers(self.addons)
         hw = self.hardware
         return ClaudeAgentOptions(
             system_prompt=SYSTEM_PROMPT,
@@ -112,10 +116,10 @@ class Machine:
             effort=hw.model_effort,
             fallback_model=hw.fallback_model,
             max_budget_usd=hw.max_budget_usd,
-            mcp_servers={SERVER: server},
+            mcp_servers={SERVER: server} | addon_servers,
             strict_mcp_config=True,             # no MCP servers from your own Claude config
             tools=[],                           # no built-in Bash/Read/Write/... at all
-            allowed_tools=allowed,
+            allowed_tools=allowed + addon_tools,
             permission_mode="dontAsk",          # anything not allowed above is denied
             setting_sources=[],                 # ignore your CLAUDE.md and settings
             include_partial_messages=True,      # the answer as it's written, for streaming
@@ -190,14 +194,18 @@ class Machine:
         return attrs
 
     def boot_report(self) -> tuple[str, bool]:
-        """What <boot> carries: the memory and the machine's defining files, so a normal boot
-        needs no tools. A new machine (no memory yet) first gets an empty directory tree."""
+        """What <boot> carries: the memory, the machine's defining files and the list of its
+        addons, so a normal boot needs no tools. A new machine (no memory yet) first gets an
+        empty directory tree."""
         memory = self.disk.memory_read()["text"]
         first = not memory.strip()
         if first:
             self.disk.lay_skeleton()
         parts = [envelope("memory", "\n" + memory)] if not first else []
         parts += [envelope("file", text, path=path) for path, text in self.disk.boot_files().items()]
+        if self.addons:
+            listing = "".join(f"{addon.name}: {addon.summary}\n" for addon in self.addons)
+            parts.append(envelope("addons", "\n" + listing))
         return "".join(f"\n{part}" for part in parts) + ("\n" if parts else ""), first
 
     async def block_mode(self, client: ClaudeSDKClient, reply: Reply) -> Reply:
