@@ -293,7 +293,12 @@ itself (you press a button, and the color changes), Hallux needs events from add
 for an addon to tell Hallux that something happened, and for Hallux to wake the AI with it.
 
 Events are a feature of the addon system, not of this example. Their design is in
-[addon-events.md](../addon-events.md). Nothing of it is built.
+[addon-events.md](../addon-events.md), and their plan in
+[addon-events-plan.md](addon-events-plan.md).
+
+The window's part of it is built: a `Send` button beside the text box. A press, or Enter in
+the box, reports `{"event": "send", "text": "tomato"}`, and closing the window reports
+`{"event": "closed"}`. The AI hears them once it has called `addon_listen("window")`.
 
 ---
 

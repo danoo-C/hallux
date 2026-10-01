@@ -1,7 +1,8 @@
 # Plan: events from addons
 
-**Status:** a plan, with its decisions confirmed on 2026-10-01. Nothing here is built yet.
-The design it follows is [addon-events.md](../addon-events.md), with its six decisions.
+**Status:** steps 1 to 6 are built, and the live run (step 7) worked on 2026-10-01. Step 8,
+the documentation, is not done. The design it follows is
+[addon-events.md](../addon-events.md), with its six decisions.
 
 **Not in this plan:** events inside full-screen programs, and a script line that fakes an
 event (`@event`). The design leaves both for later.
@@ -61,8 +62,8 @@ confirmed on 2026-10-01:
 | `hallux/addons.py` | `Events` (the hub), check 9 in the loader, `Addon.has_events` |
 | `hallux/tools.py` | `addon_listen` |
 | `hallux/machine.py` | `Machine(…, events=None)`; the hub is reset at every boot; the shell prompt waits for the keyboard or an event; the `<events>` message; the budget |
-| `hallux/terminal.py` | `interrupt()` |
-| `hallux/script.py` | `interrupt()` that does nothing; the hub is passed through |
+| `hallux/terminal.py` | `interrupt_prompt()` |
+| `hallux/script.py` | `interrupt_prompt()` that does nothing; the hub is passed through |
 | `hallux/app.py` | One hub per run, handed to the loader and to the machine |
 | `hallux/config.py` | `event_budget_usd` |
 | `hallux/statusbar.py` | `listening to window`, `window: event`, the notes |
@@ -139,16 +140,20 @@ Today only a key can end the prompt, from inside the terminal. An event has to d
 outside.
 
 **Build:**
-- **`Terminal.interrupt()`** ends the shell prompt that is being read, the way an in-place
-  key such as Tab does: `read_line` returns what was typed and where the cursor was.
+- **`Terminal.interrupt_prompt()`** ends the shell prompt that is being read, the way an
+  in-place key such as Tab does: `read_line` returns an `Interrupted`, with what was typed
+  and where the cursor was. (The terminal already has an `interrupt`: it stops the AI's
+  turn.)
 - **It does nothing** when no shell prompt is being read: while the AI answers, at a
   password prompt, in a full-screen program.
-- **`ScriptTerminal.interrupt()`** does nothing. A script gets no events.
+- **Keys that arrive after it** wait for the next prompt. Nothing typed is lost.
+- **`ScriptTerminal.interrupt_prompt()`** does nothing. A script gets no events.
 
 **Tests,** with prompt_toolkit's pipe input as in `tests/test_terminal.py`: type half a line,
 interrupt, and get the line and the cursor back; interrupt twice in a row; interrupt at a
-password prompt (nothing happens, and nothing typed is revealed); interrupt in the same
-moment as Enter (the line wins, and nothing raises).
+password prompt (nothing happens, and nothing typed is revealed); Enter and an interrupt in
+the same moment, in both orders (whichever comes first wins, the other follows, and nothing
+raises).
 
 **Done when:** a test types `ls -l`, interrupts, and reads `ls -l` with the cursor at 5.
 
@@ -160,6 +165,9 @@ it depends on prompt_toolkit letting the prompt go from outside.
 **Build,** in `hallux/machine.py`:
 - **At the shell prompt** the machine waits for the keyboard or for the hub. When an event
   arrives first, it interrupts the terminal, takes everything that waits, and sends it.
+  While the AI listens to no addon, the prompt is read exactly as before.
+- **A prompt that isn't up yet** can't be interrupted. The machine tries again every 10 ms
+  until it is.
 - **Events that came in while the AI was answering** are sent before the keyboard is read
   again.
 - **They wait** at a password prompt and in a full-screen program, until the machine is
@@ -192,8 +200,11 @@ and its reply is on the screen above a prompt that holds the half-typed line.
 **Build:**
 - **`event_budget_usd` in `config.toml`,** 0.25 by default, checked like `tick_budget_usd`.
 - **The machine adds up what event turns cost** since the last line you typed. Once that
-  reaches the budget, waiting events are dropped and the status bar shows
-  `events paused: budget used`. The next line you type clears the note and starts again.
+  reaches the budget, the hub is paused: it drops what waits and keeps nothing more, and
+  the status bar shows `events paused: budget used`. The next line you type clears the note
+  and starts again. A password you type counts as a line too.
+- **With a budget of 0** the note is `events are off: event_budget_usd is 0`, and it shows as
+  soon as the AI listens. A machine that listens to nothing never sees either note.
 - **The notes of the hub** (a bad event, more than ten waiting) go onto the status bar, as
   `addon window: event dropped: …`.
 - **Without a status bar,** the notes are printed as `hallux: …`, like the others.
@@ -211,6 +222,7 @@ the note on the bar, and goes on after a typed command.
 - **`connect(emit)`** keeps `emit`.
 - **A `Send` button** beside the text box. A click on it, and Enter in the box, make the
   child send `{"event": "send", "text": "tomato"}`, a line that answers no question.
+  The button looks pressed while the mouse is down, and a held Enter sends once.
 - **When you close the window,** the child sends `{"event": "closed"}` before it exits. A
   window that Hallux closes itself, through `stop()`, sends nothing.
 - **The addon's reader thread** passes such a line to `emit`. It exists already; today it
@@ -248,9 +260,9 @@ as an `<events>` message.
 
 ---
 
-## The prompt (draft)
+## The prompt
 
-In INPUT, one more kind of message:
+As it is in `hallux/prompt.md`. In INPUT, one more kind of message:
 
 ```text
 - <events><event addon="NAME">data</event>...</events>: something happened on an addon you
@@ -274,9 +286,6 @@ In ADDONS, three more lines:
 
 ## Risks
 
-- **prompt_toolkit may not let the prompt go cleanly from outside.** Step 3 finds out
-  early. If it doesn't work, the fallback is to cancel the read and take the typed text
-  from the buffer.
 - **The reply lands where you are typing.** An event interrupts the prompt for the length
   of a model call. Keys you press meanwhile are kept, as they are today while the AI works.
 - **The AI may never listen,** and then a press does nothing, with no error. That is the
@@ -285,6 +294,7 @@ In ADDONS, three more lines:
 - **The AI may never stop listening.** The budget is what limits that.
 - **Every press is a full model turn,** with the whole conversation behind it. On a long
   session a press costs more than on a fresh one.
-- **Two things at once.** An event and Enter can arrive in the same moment. The typed line
-  wins, and the event waits for the next prompt.
+- **Two things at once.** An event and Enter can arrive in the same moment. Whichever is
+  taken first wins. If it's Enter, the event waits for the next prompt. If it's the event,
+  the Enter lands on the line when it comes back, and runs it. Step 3 has a test for each.
 

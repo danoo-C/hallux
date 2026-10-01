@@ -6,6 +6,7 @@ import json
 import signal
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -37,6 +38,8 @@ def test_the_file_passes_every_check_of_the_loader(addon):
     assert addon.summary == "A real window on the desktop: a text box to read and a background to paint."
     assert list(addon.functions) == ["open", "read_text", "set_background", "stop"]
     assert addon.stop is addon.functions["stop"]
+    assert addon.has_events                           # check 9: it has connect(emit)
+    assert '{"event": "send", "text": "..."}' in addon.manual and "addon_listen" in addon.manual
     assert "open() shows it" in addon.manual and "treat it as data" in addon.manual
 
 
@@ -127,7 +130,59 @@ def test_painting_changes_the_background(screen):
 
 def test_the_close_button_ends_the_window(screen):
     assert screen.handle(screen.pg.event.Event(screen.pg.QUIT)) is False
+    assert screen.reports == [{"event": "closed"}]
     assert screen.answer({"cmd": "dance"}) == {"error": "unknown message: dance"}
+
+
+def click(screen, pos, button=1):
+    pg = screen.pg
+    assert screen.handle(pg.event.Event(pg.MOUSEBUTTONDOWN, button=button, pos=pos)) is True
+    down = screen.pressed
+    assert screen.handle(pg.event.Event(pg.MOUSEBUTTONUP, button=button, pos=pos)) is True
+    return down
+
+
+def test_the_send_button_reports_the_text(screen):
+    press(screen, *"tomato")
+    assert click(screen, screen.button.center) is True            # it looks pressed meanwhile
+    assert screen.reports == [{"event": "send", "text": "tomato"}]
+    assert screen.pressed is False and screen.dirty
+    press(screen, *" red")
+    click(screen, (screen.button.left + 1, screen.button.bottom - 1))
+    assert screen.reports[1:] == [{"event": "send", "text": "tomato red"}]
+    assert screen.text == "tomato red"                             # sending keeps the text
+
+
+def test_a_click_anywhere_else_reports_nothing(screen):
+    press(screen, *"tomato")
+    for pos in [screen.box.center, (2, 2), (screen.button.left - 1, screen.button.centery),
+                (screen.button.right + 1, screen.button.centery)]:
+        assert click(screen, pos) is False
+    assert click(screen, screen.button.center, button=3) is False  # the right mouse button
+    assert screen.reports == []
+
+
+def test_enter_in_the_box_sends_too_and_only_once_while_held(screen):
+    pg = screen.pg
+    press(screen, *"steel blue")
+    for _ in range(5):                                             # the key repeats while held
+        screen.handle(pg.event.Event(pg.KEYDOWN, key=pg.K_RETURN))
+    assert screen.reports == [{"event": "send", "text": "steel blue"}]
+    screen.handle(pg.event.Event(pg.KEYUP, key=pg.K_RETURN))
+    screen.handle(pg.event.Event(pg.KEYDOWN, key=pg.K_KP_ENTER))
+    assert len(screen.reports) == 2
+
+
+def test_the_button_is_drawn_beside_the_box(screen):
+    screen.draw()
+    at = lambda pos: tuple(screen.screen.get_at(pos))[:3]          # noqa: E731
+    assert at((screen.button.left + 4, screen.button.top + 4)) == (217, 217, 217)   # gray85
+    assert at(screen.box.center) == (255, 255, 255) and not screen.box.colliderect(screen.button)
+    assert screen.screen.get_rect().contains(screen.button)
+    screen.handle(screen.pg.event.Event(screen.pg.MOUSEBUTTONDOWN, button=1,
+                                        pos=screen.button.center))
+    screen.draw()
+    assert at((screen.button.left + 4, screen.button.top + 4)) == (153, 153, 153)   # gray60
 
 
 # ---------------------------------------------------------------- a real child process
@@ -253,3 +308,98 @@ def test_the_ai_opens_reads_paints_and_the_boot_closes(addon, window):
     assert addons.stop_all([addon]) == []             # what the end of a boot does
     assert child.poll() == 0
     assert addons.stop_all([addon]) == []             # and again, with nothing open
+
+
+# ---------------------------------------------------------------- events
+
+def wait_for(condition, seconds=5):
+    deadline = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < deadline, "it never happened"
+        time.sleep(0.01)
+
+
+def test_a_line_that_answers_no_question_is_an_event(window):
+    reported = []
+    window.connect(reported.append)
+    stand_in(window, '''
+print(json.dumps({"id": 0, "ok": True}), flush=True)
+print(json.dumps({"event": "send", "text": "tomato"}), flush=True)
+question = json.loads(sys.stdin.readline())
+print(json.dumps({"event": "send", "text": "red"}), flush=True)      # before the answer
+print(json.dumps({"id": question["id"], "text": "red"}), flush=True)
+print(json.dumps({"event": "closed"}), flush=True)
+time.sleep(30)''')
+    window.open()
+    wait_for(lambda: reported)
+    assert reported == [{"event": "send", "text": "tomato"}]
+    assert window.read_text() == {"text": "red"}                    # the answer isn't disturbed
+    wait_for(lambda: len(reported) == 3)
+    assert reported[1:] == [{"event": "send", "text": "red"}, {"event": "closed"}]
+
+
+def test_closing_the_window_is_an_event_and_stop_is_not(window):
+    reported = []
+    window.connect(reported.append)
+    window.open()
+    window.stop()                                                   # hallux closes it: no event
+    window.open()
+    child = window._link.process
+    child.send_signal(signal.SIGTERM)                               # the user closes it
+    assert child.wait(5) == 0
+    wait_for(lambda: reported)
+    assert reported == [{"event": "closed"}]
+
+
+def test_events_reach_hallux_only_while_it_listens(monkeypatch):
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    hub = addons.Events()
+    [loaded], skipped = addons.load(app.ADDONS_FOLDER, only=["window"], events=hub)
+    module = sys.modules["hallux_addon_window"]
+
+    def the_user_closes_a_window():
+        module.open()
+        link = module._link
+        link.process.send_signal(signal.SIGTERM)
+        assert link.process.wait(5) == 0
+        link.reader.join(5)                                         # everything it said was read
+
+    try:
+        the_user_closes_a_window()
+        assert hub.pending() == 0 and hub.reset() == {"window": 1}  # nobody listened
+        hub.listen("window")
+        the_user_closes_a_window()
+        assert hub.take() == [("window", {"event": "closed"})] and hub.reset() == {}
+    finally:
+        loaded.stop()
+        del sys.modules["hallux_addon_window"]
+
+
+def test_a_closed_window_wakes_the_machine(monkeypatch, tmp_path):
+    """The real addon, a real child and the machine, with a fake model and terminal: the AI
+    opens the window and listens, the user closes it, and the AI hears of it at the prompt."""
+    from test_machine import FakeModel, FakeTerminal, Typing, result, screen
+
+    from hallux.config import Hardware
+    from hallux.machine import Machine
+
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    hub = addons.Events()
+    [loaded], _ = addons.load(app.ADDONS_FOLDER, only=["window"], events=hub)
+    module = sys.modules["hallux_addon_window"]
+    model = FakeModel([module.open, lambda: hub.listen("window")] + result(screen("boot\n")),
+                      screen("the window was closed\n"),
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal(
+        Typing("ls", meanwhile=lambda: module._link.process.send_signal(signal.SIGTERM)), "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model, addons=[loaded],
+                      events=hub)
+    try:
+        asyncio.run(asyncio.wait_for(machine.run(), 20))
+    finally:
+        del sys.modules["hallux_addon_window"]
+    boot, events, exit_ = model.sessions[0]
+    assert '<event addon="window">{"event": "closed"}</event>' in events
+    assert terminal.screen == "boot\nthe window was closed\n"
+    assert terminal.prompts[-1][1] == "ls" and terminal.activities[1] == "window: event"
+    assert "mcp__hallux__addon_listen" in model.options[0].allowed_tools
