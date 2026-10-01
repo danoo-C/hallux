@@ -1,6 +1,7 @@
 # Plan: an example addon with a real window
 
-**Status:** a plan. Nothing here is built yet. It needs the addon system from
+**Status:** built, except the live run (step 5 in section 6): `addons/window.py` and
+`tests/test_addon_window.py`. It runs on the addon system from
 [addons-plan.md](addons-plan.md), steps 1 to 6.
 
 ## In short
@@ -88,14 +89,20 @@ The file is `addons/window.py`. Its summary line:
 
 All four are in `EXPOSED`.
 
-**When something is wrong,** the function raises, and the AI gets a tool error:
+**When something is wrong,** the function raises a `WindowError`, and the AI gets a tool error
+such as `{"error": "WindowError: the window is closed"}`:
 
 | Case | Error |
 |---|---|
 | A color pygame doesn't know | `unknown color: tomatoe` |
 | The window isn't open, or you closed it | `the window is closed` |
+| The window crashed | `the window is closed: it crashed (…the last line it printed…)` |
 | The window doesn't answer within 2 seconds | `the window doesn't answer` |
+| The window doesn't appear within 8 seconds | `the window doesn't answer` |
 | No display can be reached | `no display` |
+
+`stop()` never fails: Hallux calls it at the end of every boot, whether or not a window is
+open.
 
 **The manual (`prompt()`), as a draft:**
 
@@ -168,19 +175,26 @@ Linux, so a thread would work. A child is still the better home:
 
 | Hallux sends | The child answers |
 |---|---|
-| `{"cmd": "read"}` | `{"text": "tomato"}` |
-| `{"cmd": "paint", "color": "tomato"}` | `{"ok": true, "color": "#ff6347"}` or `{"error": "unknown color: tomatoe"}` |
+| nothing: the child speaks first | `{"id": 0, "ok": true}` once the window is up, or `{"id": 0, "error": "no display"}` |
+| `{"cmd": "read", "id": 1}` | `{"text": "tomato", "id": 1}` |
+| `{"cmd": "paint", "color": "tomato", "id": 2}` | `{"ok": true, "color": "#ff6347", "id": 2}` or `{"error": "unknown color: tomatoe", "id": 2}` |
 | `{"cmd": "quit"}` | nothing; it exits |
 
 **Rules of the exchange:**
 - **One question at a time.** The addon holds a lock, writes one line and waits for one line,
   for 2 seconds at most.
+- **Every question has a number,** and the answer carries it. An answer that arrives after
+  its question gave up is dropped, so it can't be taken for the answer to the next one.
+- **What the child or a library prints** goes to a temporary file, not onto the machine's
+  screen and not into the exchange. If the child crashes, its last line is in the error.
 - **You close the window:** the child exits. The addon notices the closed pipe, and the next
   call fails with `the window is closed`. `open()` starts a new child.
 - **Hallux goes away:** the child sees its input close and quits, so no window is left behind.
 - **No display:** pygame doesn't fail without one. It quietly switches to a driver that draws
-  nowhere. The child checks which driver it got and refuses that one, so `open()` fails with
-  `no display` instead of claiming a window nobody can see.
+  nowhere (`offscreen`). The child checks which driver it got and refuses that one, so
+  `open()` fails with `no display` instead of claiming a window nobody can see. The tests ask
+  for the in-memory driver by name (`SDL_VIDEODRIVER=dummy`), and a driver that was asked for
+  is accepted.
 
 ---
 
@@ -202,16 +216,19 @@ Linux, so a thread would work. A child is still the better home:
 
 ## 5. What this computer needs
 
-Checked on 2026-10-01, in a throwaway environment outside the project:
+Checked on 2026-10-01:
 
 | Need | State |
 |---|---|
-| pygame | Installs with pip: `pygame 2.6.1` has a ready-made package for this Python (3.13). About 37 MB. It isn't in the project's `.venv` yet |
-| A display | WSLg is set up (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`). Not tried with a real window yet |
+| pygame | `pygame 2.6.1` is installed in the project's `.venv` (a ready-made package for Python 3.13, about 37 MB) |
+| A display | WSLg is set up (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`). The addon opened a window on it through the `x11` driver, painted it and closed it. Nobody was asked whether it was visible |
 
-- **pygame becomes an optional install,** not a dependency of Hallux:
+- **pygame is an optional install,** not a dependency of Hallux:
   `window = ["pygame"]` under `[project.optional-dependencies]` in `pyproject.toml`, installed
   with `.venv/bin/python -m pip install -e ".[window]"`.
+- **Every machine gets the addon,** now that the file is in `addons/`: six more tools and the
+  `<addons>` block in `<boot>`. A world that doesn't want it sets `addons = []` in its
+  `config.toml`.
 - **When pygame is missing,** the addon raises `ImportError` while it's imported. The loader
   then skips it, and the status bar shows `addon window skipped: No module named 'pygame'`.
   That's the skip rule of the addon system, shown with a real case.
@@ -272,16 +289,11 @@ The tests are skipped when pygame isn't installed.
 ## 8. Later: the window wakes the machine
 
 In this plan, the AI looks at the box when you type a command. For the window to act by
-itself (you press Enter in the box, and the color changes), Hallux would need:
+itself (you press a button, and the color changes), Hallux needs events from addons: a way
+for an addon to tell Hallux that something happened, and for Hallux to wake the AI with it.
 
-- **Events from addons:** a way for an addon to tell Hallux that something happened.
-- **A new message to the AI,** such as `<addon name="window">…</addon>`.
-- **A terminal that can leave the prompt** when an event arrives, while you're in the middle
-  of typing a line. Raw mode's ticks do something similar inside full-screen programs.
-- **A budget.** Every event is a model call, so a busy addon could spend money by itself.
-
-My recommendation: build the version above first. Events are a feature of the addon system,
-not of this example, and belong in [addons-plan.md](addons-plan.md) as a later step.
+Events are a feature of the addon system, not of this example. Their design is in
+[addon-events.md](../addon-events.md). Nothing of it is built.
 
 ---
 
