@@ -216,18 +216,20 @@ This is the example the idea started from. Its design has its own document:
 [addon-music.md](addon-music.md).
 
 **What it is, in short:**
-- **Two functions:** `play(path)` and `stop()`.
+- **Two functions:** `play(path, loop)` and `stop()`.
 - **A song is one score file on the machine's disk,** and `play(path)` reads it. The file
-  holds the sample rate, the tempo, the variables, the instruments, the patterns and the song.
-  The song then survives a reboot, the user can edit it in nano, and playing it again costs no
-  tokens. It's the same trick as `file=` fields and `save_field`.
-- **An instrument is a bytebeat expression** of `t`, `note` and `vel`, read by a small parser
-  with a whitelist.
+  holds the tempo, the variables, the instruments, the patterns and the song. The song then
+  survives a reboot, the user can edit it in nano, and playing it again costs no tokens. It's
+  the same trick as `file=` fields and `save_field`.
+- **The sound is 16-bit at 44100 Hz.**
+- **An instrument is an expression in the style of bytebeat,** of `t`, `p`, `vel` and `dur`,
+  read by a small parser with a whitelist.
 - **Everything that happens is an event,** `(start, duration, value, target, velocity)`,
-  counted in 32nd notes. A note and a change to a variable have the same shape.
-- **A pattern holds events that repeat, and the song places patterns in time,** transposed if
-  wanted. That keeps the score short: the AI writes every character, and the user waits for
-  each one.
+  counted in 32nd notes unless the score says otherwise. A note and a change to a variable
+  have the same shape.
+- **A pattern holds events that repeat, and the song places patterns in time,** transposed
+  and repeated if wanted. That keeps the score short: the AI writes every character, and the
+  user waits for each one.
 
 **What it replaced:** the first idea had four kinds of function (`createSynth`, `createMusic`,
 `setBPM`, and `play` with `stop`). One score file needs one call where that needed four, which
