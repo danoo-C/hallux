@@ -86,8 +86,13 @@ python hallux.py test-x --script cmds.txt      # headless: one command per line
 
 ## What's next
 
-The details, with design sketches and open questions, are in [next-steps.md](next-steps.md).
-In the order I'd suggest:
+**First, a quick task: add the license (decided: MIT, see below).**
+- Create `LICENSE` with the standard MIT text, `Copyright (c) 2026 Daniel Danko`.
+- Add a short "License" section at the end of `README.MD` that links to it.
+- Set `license = "MIT"` in `pyproject.toml` under `[project]`.
+
+The details for everything after that, with design sketches and open questions, are in
+[next-steps.md](next-steps.md). In the order I'd suggest:
 
 1. **Tuning (roadmap 7):**
    - a fidelity test against real bash in Docker;
@@ -105,6 +110,13 @@ In the order I'd suggest:
    - silencing Claude Code's own telemetry (`quiet`);
    - warning about hard links or mount points in a world;
    - a container option for macOS.
+
+## Decisions made
+
+- **License: MIT** (2026-10-01). It's simple, permissive and widely understood: anyone may use,
+  change and share the code, as long as the copyright notice stays. Apache-2.0 (which adds a
+  patent grant) and GPL-style licenses (which keep derivatives open) were considered and
+  passed over.
 
 ## Open decisions for you
 
