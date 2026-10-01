@@ -342,3 +342,49 @@ def test_raw_mode_ctrl_c_is_a_key_and_still_counts_for_the_hard_exit():
 
     action, calls = hooked_session(script)
     assert action.events == ("<key>C-c</key>",) and calls == [("ctrl-c", False)]
+
+
+# ---------------------------------------------------------------- partial redraws
+
+NANO_SCREEN = "  GNU nano 7.2   notes.txt\n"
+NANO_FOOTER = "[ New File ]\n^G Help  ^O Write Out\n^X Exit  ^R Read File\n"
+
+
+def test_a_patch_changes_only_its_rows():
+    form = Form((Field("editor", "text", top=3, height=0, text="hi\n"),
+                 Field("line", "yn", top=-3, left=23, text="")), keys=("C-x",), footer=NANO_FOOTER)
+
+    async def script(block, keys):
+        await block.show(NANO_SCREEN, form)
+        before = list(block.composed), dict(block.field_tops)
+        kept = Form((Field("editor", "text", top=3, height=0),               # as resolve() gives
+                     Field("line", "yn", top=-3, left=23)), keys=("C-x",))
+        await block.show("", kept, patch=((-3, ("Save modified buffer?",)), (2, ("row two",))))
+        return before, list(block.composed), dict(block.field_tops)
+
+    (before, tops_before), after, tops_after = session(script)
+    rows = len(before)                                  # the DummyOutput screen, minus nothing
+    assert len(after) == rows and after[0] == before[0] == "  GNU nano 7.2   notes.txt"
+    assert after[1] == "row two" and after[-3] == "Save modified buffer?"
+    assert after[-2:] == before[-2:] == ["^G Help  ^O Write Out", "^X Exit  ^R Read File"]
+    assert tops_after == tops_before                    # the fields didn't move
+
+
+def test_a_patch_can_bring_a_new_footer_and_survives_a_resize():
+    from hallux.blockmode import BlockMode as Block
+    block = Block()
+    block.composed, block.footer_rows = ["title", "", "", "", "old status", "old keys"], 2
+    body = block._patched(6, ["new status", "new keys"], ((1, ("new title",)),))
+    assert body == ["new title", "", "", "", "new status", "new keys"]
+    block.composed, block.footer_rows = body, 2
+    bigger = block._patched(8, None, ((-1, ("^X Exit",)),))
+    assert bigger == ["new title", "", "", "", "", "", "new status", "^X Exit"]   # footer stays down
+
+
+def test_a_patch_before_any_screen_starts_from_blank_rows():
+    async def script(block, keys):
+        await block.show("", Form((), raw=True), patch=((1, ("score: 0",)),))
+        return list(block.composed)
+
+    composed = session(script)
+    assert composed[0] == "score: 0" and set(composed[1:]) == {""}

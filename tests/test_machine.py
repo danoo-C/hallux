@@ -120,8 +120,9 @@ class FakeTerminal:
     ended = 0
     texts = None
 
-    async def show_form(self, screen, form):
+    async def show_form(self, screen, form, patch=None):
         self.forms = (self.forms or []) + [(screen, form)]
+        self.patches = getattr(self, "patches", []) + [patch]
         self.texts = {f.id: f.text for f in form.fields if f.text is not None} | (self.texts or {})
 
     async def next_action(self):
@@ -502,3 +503,15 @@ def test_ticks_pause_when_their_budget_is_spent(tmp_path):
     assert ticks == [3, 3, 0]                               # $0.40 spent on ticks: paused
     assert {"note": "live updates paused: tick budget used"} in terminal.statuses
     assert {"note": None} in terminal.statuses              # cleared when top exits
+
+
+
+def test_a_patch_reaches_the_screen(tmp_path):
+    patch_reply = ('<form keys="C-x"><editor id="text"/></form><patch>\n'
+                   '<rows from="-3">[ Wrote 1 line ]</rows>\n</patch><prompt></prompt>')
+    model = FakeModel(screen(""), NANO, patch_reply, screen("", prompt="$ "),
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("nano hello.txt", Action("C-o", "text", ()), Action("C-x", "text", ()), "exit")
+    run(tmp_path, model, terminal)
+    assert terminal.patches == [None, ((-3, ("[ Wrote 1 line ]",)),)]
+    assert terminal.forms[1][1].fields[0].top == 3           # the editor kept its place

@@ -125,6 +125,11 @@ the title bar and pad the bars.
 
 ### Partial redraws in block mode
 
+**Status:** implemented, as `<patch>` with `<rows from="N">` blocks. A block covers several
+consecutive rows, which is cheaper than one tag per row for chat areas. Still to come: patching
+only part of a row (a `col` attribute), for split-screen layouts where only the left side
+changes.
+
 **Problem:** every nano action costs 4–7 s and about $0.015–0.02, mostly because the AI
 redraws the whole screen each time.
 

@@ -226,10 +226,10 @@ class Terminal:
 
     # ---------------------------------------------------------------- block mode
 
-    async def show_form(self, screen: str, form: Form) -> None:
+    async def show_form(self, screen: str, form: Form, patch=None) -> None:
         if self.pinned and not self.block.active:        # the full-screen app has its own bar
             self._write("\x1b7\x1b[r\x1b8")
-        await self.block.show(screen, form)
+        await self.block.show(screen, form, patch)
 
     async def next_action(self) -> Action:
         return await self.block.next_action()

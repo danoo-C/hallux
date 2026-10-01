@@ -66,7 +66,8 @@ class Terminal(Protocol):
     def set_status(self, **changes: object) -> None: ...
 
     # block mode: full-screen programs with editable fields (hallux.blockmode)
-    async def show_form(self, screen: str, form: Form) -> None: ...
+    async def show_form(self, screen: str, form: Form, patch: tuple | None = None) -> None:
+        """Show a full-screen program; with a patch, only those rows of its screen change."""
 
     async def next_action(self) -> Action:
         """Wait for an action key or click. Raises EOFError if the form can't go on."""
@@ -179,7 +180,7 @@ class Machine:
             self.terminal.set_status(note="live updates paused: tick budget used")
         self.fields = {field.id: field for field in form.fields}
         self.in_form = True
-        await self.terminal.show_form(reply.screen, form)
+        await self.terminal.show_form(reply.screen, form, reply.patch)
         try:
             action = await self.terminal.next_action()
         except EOFError:                          # the full-screen app died: back to the shell

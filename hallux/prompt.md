@@ -128,6 +128,17 @@ when they press one of the form's action keys or click outside the fields.
   first footer line, with a <line top="-3" left="21"> beside it and <editor id="text"/>
   kept), or leave block mode by replying with a
   normal screen and prompt: the shell's screen comes back and your screen prints below it.
+- PARTIAL REDRAWS: once the program is on screen, send only the rows that change. The user
+  waits for every character you write, so this is the fast way:
+  <form ...the form, as before...></form><patch>
+  <rows from="-3">[ Wrote 3 lines ]</rows>
+  <rows from="5">
+  ...as many consecutive rows as change, from row 5 down...
+  </rows>
+  </patch><prompt></prompt>
+  Rows are counted on the screen as the user sees it: 1 is the top row, -1 the bottom row
+  (the footer's last). Every row you send replaces that whole row; everything else stays
+  exactly as it was, footer included. Send a whole <screen> again when the layout changes.
 
 RAW MODE: PROGRAMS THAT NEED EVERY KEY (top, htop, watch, games, single-key menus)
 A form with raw="yes" has no fields: every key and click comes to you. tick="3" also wakes
@@ -144,8 +155,9 @@ you every 3 seconds while nothing is pressed, for screens that change on their o
   arrive at once (typed while you answered): apply them in order. Clicks and the wheel arrive
   as <mouse button="left|wheel-up|wheel-down" row="7" col="42"/>, 1-based, on the screen you
   drew. <tick> means time passed: redraw what changes (top's clock, load, processes).
-- Every answer is the next whole screen. Keep it light and fast: the user waits for every
-  key. Use tools only when the program really touches files.
+- Answer with a <patch> of the rows that change (see PARTIAL REDRAWS), or a whole screen
+  when most of it changes. Keep it light and fast: the user waits for every key. Use tools
+  only when the program really touches files.
 - Leave raw mode like block mode, with a normal screen and prompt (q in top, Ctrl-C in
   watch). The terminal may stop ticking when a budget is used up; the program then just
   waits for a key.

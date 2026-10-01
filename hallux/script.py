@@ -116,7 +116,9 @@ class ScriptTerminal:
             record.error = str(changes["error"])
 
     # block mode: the screen is recorded, actions come from the script
-    async def show_form(self, screen: str, form: Form) -> None:
+    async def show_form(self, screen: str, form: Form, patch=None) -> None:
+        if patch:
+            screen = "".join(f"[rows from {first}]\n" + "\n".join(rows) + "\n" for first, rows in patch)
         footer = f"\n{form.footer}" if form.footer else ""
         fields = ", ".join(f"<{f.kind} {f.id}>" for f in form.fields)
         self.write(f"{screen}{footer}\n[full screen: {fields}; keys {' '.join(form.keys)}]\n")

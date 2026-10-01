@@ -47,7 +47,9 @@ FIELD_TAG = re.compile(r"<(editor|line|pager)\b([^>]*?)(/>|>(.*?)</\1>)", re.DOT
 FOOTER_TAG = re.compile(r"<footer>(.*?)</footer>", re.DOTALL)
 FILE_TAG = re.compile(r"<file\b([^>]*)>(.*?)</file>", re.DOTALL)
 MEMORY_TAG = re.compile(r"<memory>(.*?)</memory>", re.DOTALL)
-FORM_BEFORE_SCREEN = re.compile(r"</form>\s*(?=<screen>)")
+FORM_BEFORE_SCREEN = re.compile(r"</form>\s*(?=<screen>|<patch>)")
+PATCH = re.compile(r"<patch>(.*?)</patch>", re.DOTALL)
+PATCH_ROWS = re.compile(r'<rows\s+from="(-?\d+)"\s*>(.*?)</rows>', re.DOTALL)
 ESCAPES = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[78c=>]")
 ATTRIBUTE = re.compile(r'([\w-]+)="([^"]*)"')
 KEYMAPS = ("emacs", "nano", "vi")
@@ -127,6 +129,8 @@ class Reply:
     tty: str | None = None        # "raw" or "cooked" when the AI switches modes
     form: Form | None = field(default=None)
     edit: str | None = None       # the line to put back at the prompt (Tab completion...)
+    patch: tuple[tuple[int, tuple[str, ...]], ...] | None = None   # (first row, rows): only
+                                  # what changed on a full-screen program's screen
     cwd: str | None = None        # the new working directory (boot, cd ~) without a tool call
     files: tuple[FileWrite, ...] = ()   # files to write without a tool call
     memory: str | None = None     # a whole new memory (first boot only)
@@ -163,12 +167,16 @@ def parse(text: str) -> Reply:
     Anything before <screen> (stray narration) is dropped. If the tags are missing, the
     text is shown anyway: a garbled screen beats a silent one.
     """
-    form = None
+    form, patch = None, None
     if end := FORM_BEFORE_SCREEN.search(text):        # a full-screen program: form first
         form_at = text.find("<form")
         if 0 <= form_at < end.start():
             form = parse_form(text[form_at:end.start() + len("</form>")])
             text = text[:form_at] + text[end.end():]
+        if form is not None and (found := PATCH.search(text)):     # only the rows that changed
+            patch = tuple((int(first), tuple(decode(_block(rows)).split("\n")))
+                          for first, rows in PATCH_ROWS.findall(found[1]) if int(first) != 0)
+            text = text[:found.start()] + text[found.end():]
     elif start := FORM_START.search(text):            # the older order: form after the prompt
         form_at = text.index("<form", start.start())  # (cut off first: fields hold any text)
         form = parse_form(text[form_at:])
@@ -193,11 +201,18 @@ def parse(text: str) -> Reply:
         reboot="<reboot/>" in tail,
         tty=tty[1] if tty else None,
         form=form,
+        patch=patch,
         edit=decode(tail.partition("<edit>")[2].partition("</edit>")[0]) if "<edit>" in tail else None,
         cwd=tail.partition("<cwd>")[2].partition("</cwd>")[0].strip() or None if "<cwd>" in tail else None,
         files=files,
         memory=memory[1].removeprefix("\n") if memory else None,
     )
+
+
+def _block(text: str) -> str:
+    """Rows written on their own lines: drop the one newline after the opening tag and the
+    one before the closing tag."""
+    return text.removeprefix("\n").removesuffix("\n")
 
 
 def plain(text: str) -> str:

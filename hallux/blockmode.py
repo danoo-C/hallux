@@ -211,6 +211,9 @@ class BlockMode:
         self.baseline: dict[str, str] = {}             # the text when loaded, set or saved
         self.container = Window()
         self.background: Window | None = None          # the screen behind the fields
+        self.composed: list[str] | None = None         # that screen, row by row, as shown
+        self.footer_rows = 0                           # how many of its rows are the footer
+        self.field_tops: dict[str, tuple[int, int]] = {}   # id: (top as given, row on screen)
         self.bindings = KeyBindings()
         self.waiting = False                           # an action is with the AI
         self.actions: asyncio.Queue[Action] = asyncio.Queue()
@@ -223,12 +226,14 @@ class BlockMode:
 
     # ---------------------------------------------------------------- the AI's side
 
-    async def show(self, screen: str, form: Form) -> None:
-        """Show a form, or update the one on screen. Fields whose text is None keep theirs."""
+    async def show(self, screen: str, form: Form,
+                   patch: tuple[tuple[int, tuple[str, ...]], ...] | None = None) -> None:
+        """Show a form, or update the one on screen. Fields whose text is None keep theirs.
+        With a patch, only those rows of the screen on display change."""
         form = replace(form, fields=tuple(f.with_defaults() for f in form.fields))
         self.form = form
         self._build_areas(form)
-        self.container = self._layout(screen, form)
+        self.container = self._layout(screen, form, patch)
         self.bindings = self._key_bindings(form)
         if self.app is None:
             self.app = Application(
@@ -304,6 +309,7 @@ class BlockMode:
             pass
         self.app = self.running = self.form = None
         self.areas, self.kinds, self.seen, self.baseline = {}, {}, {}, {}
+        self.composed, self.footer_rows, self.field_tops = None, 0, {}
         self.waiting = False
 
     def invalidate(self) -> None:
@@ -356,7 +362,8 @@ class BlockMode:
             focus_on_click=True,
         )
 
-    def _layout(self, screen: str, form: Form) -> FloatContainer:
+    def _layout(self, screen: str, form: Form,
+                patch: tuple[tuple[int, tuple[str, ...]], ...] | None = None) -> FloatContainer:
         size = lambda: get_app().output.get_size()                   # noqa: E731
         bar_rows = 1 if self.bar else 0
         rows = max(1, self._screen_size().rows - bar_rows)
@@ -365,12 +372,20 @@ class BlockMode:
         for part in (lines, footer):
             if part and part[-1] == "":                # the newline that ends the last row
                 part.pop()
-        body, tops = fit_screen(lines, footer, rows, list(form.fields))
+        if patch is None or self.composed is None and not patch:
+            body, tops = fit_screen(lines, footer, rows, list(form.fields))
+            self.footer_rows = len(footer)
+        else:
+            body = self._patched(rows, footer if form.footer else None, patch)
+            tops = {f.id: self._row_of(f, rows) for f in form.fields}
+        self.composed = body
+        self.field_tops = {f.id: (f.top, tops[f.id]) for f in form.fields}
+        footer_rows = self.footer_rows
         floats = []
         for f in form.fields:
             top = tops[f.id]
             width = f.width or (lambda f=f: max(1, size().columns - f.left + 1))
-            height = f.height or (lambda top=top: max(1, rows - len(footer) - top + 1))
+            height = f.height or (lambda top=top: max(1, rows - footer_rows - top + 1))
             floats.append(Float(content=self.areas[f.id], top=top - 1, left=f.left - 1,
                                 width=width, height=height))
         columns = self._screen_size().columns              # padded to the full rectangle, so
@@ -382,6 +397,32 @@ class BlockMode:
             return screen_area
         bar = FormattedTextControl(lambda: self.bar.fragments(size().columns))
         return HSplit([screen_area, Window(bar, height=1)])
+
+    def _patched(self, rows: int, footer: list[str] | None,
+                 patch: tuple[tuple[int, tuple[str, ...]], ...]) -> list[str]:
+        """The screen on display with a patch applied: whole rows replaced, top or bottom
+        counted. After a resize, the stored screen is fitted again first."""
+        body = list(self.composed or [""] * rows)
+        if len(body) != rows:
+            cut = len(body) - self.footer_rows
+            body, _ = fit_screen(body[:cut], body[cut:], rows, [])
+        if footer is not None:                          # a new footer replaces the old one
+            body = body[:rows - self.footer_rows] + [""] * self.footer_rows
+            body = body[:rows - len(footer)] + footer[-rows:]
+            self.footer_rows = len(footer)
+        for first, block in patch:
+            start = first if first > 0 else rows + first + 1
+            for row, line in enumerate(block, start):
+                if 1 <= row <= rows:
+                    body[row - 1] = line
+        return body
+
+    def _row_of(self, field: Field, rows: int) -> int:
+        """Where a field sits on a patched screen: where it was, if its top didn't change."""
+        given, shown = self.field_tops.get(field.id, (None, None))
+        if given == field.top and shown is not None:
+            return shown
+        return field.top if field.top > 0 else max(1, rows + field.top + 1)
 
     def _screen_size(self):
         output = self.app.output if self.app is not None else self.output

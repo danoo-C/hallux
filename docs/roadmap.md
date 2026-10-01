@@ -50,8 +50,11 @@ next, in detail, is in [next-steps.md](next-steps.md).
     queries, no mode switches);
   - Claude Code keeps no transcript of hallux sessions;
   - optional `os_sandbox` runs Claude Code under bubblewrap.
-- [ ] **8. Polish:** window resizing inside full-screen programs, hidden password input
-  (`sudo`), partial redraws in block mode.
+- [ ] **8. Polish:**
+  - [x] partial redraws: `<patch>` with only the changed rows (live: about half the time of a
+    whole screen);
+  - window resizing inside full-screen programs;
+  - hidden password input (`sudo`).
 - [ ] **Later:**
   - smarter AI tab completion;
   - a "CPU" subagent;

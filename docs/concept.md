@@ -302,6 +302,14 @@ does the same (`hallux/blockmode.py`):
   file, and your text. So `<editor id="text"/>` means "leave the editor as it is", and a
   repeated `file=` never reloads the file over unsaved edits. (Before this rule, the
   "Save modified buffer?" screen dropped the editor to the top-left, where it covered nano.)
+- **Partial redraws.** Once a program is on screen, the AI can answer with only the rows that
+  changed, `<patch><rows from="-3">[ Wrote 3 lines ]</rows></patch>`, instead of a whole
+  `<screen>`. Rows count from the top (`1`) or from the bottom (`-1`, the footer's last
+  row), and a `<rows>` block replaces that many consecutive rows. Block mode keeps its copy of
+  the screen and patches it. Fields stay where they were, and after a window resize the stored
+  screen is fitted again. A whole screen is the fallback whenever the layout changes. (In a
+  live test, a split-screen chat program redrew about 160×40 characters for every message:
+  about 10 s and $0.04 each.)
 - **The screen stays up while the AI thinks.** The next form replaces it in place, for example
   nano's `File Name to Write:` as a `<line>` on the status row. A reply without a form ends
   block mode and brings the shell back.

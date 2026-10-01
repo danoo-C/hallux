@@ -236,3 +236,14 @@ def test_raw_forms():
     assert form_of('<form raw="yes" tick="soon"></form>').tick == 0
     assert form_of('<form tick="3"><line id="a">x</line></form>').tick == 0  # ticks are for raw mode
     assert form_of('<form keys="q"></form>') is None                        # no fields, not raw
+
+
+def test_a_patch_carries_only_the_rows_that_changed():
+    reply = parse('<form keys="C-x"><editor id="text"/></form><patch>\n'
+                  '<rows from="-3">␛[7m[ Wrote 3 lines ]␛[0m</rows>\n'
+                  '<rows from="5">\nchat one\nchat two\n</rows>\n<rows from="0">ignored</rows>\n'
+                  '</patch><prompt></prompt>')
+    assert reply.screen == "" and reply.prompt == "" and reply.form.fields[0].id == "text"
+    assert reply.patch == ((-3, ("\x1b[7m[ Wrote 3 lines ]\x1b[0m",)), (5, ("chat one", "chat two")))
+    assert parse('<form keys="C-x"><editor id="t"/></form><screen>\nx\n</screen><prompt></prompt>').patch is None
+    assert parse("<screen>\n<patch>text</patch>\n</screen><prompt>$ </prompt>").patch is None  # shell output
