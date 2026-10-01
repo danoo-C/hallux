@@ -1,14 +1,13 @@
 # Events from addons
 
-**Status:** a design, agreed on 2026-10-01. Nothing here is built, and there is no
-step-by-step plan yet. What an addon is, and how Hallux loads one, is in
-[addons.md](addons.md).
+**Status:** a design, agreed on 2026-10-01. Nothing here is built. The step-by-step plan is
+[plans/addon-events-plan.md](plans/addon-events-plan.md). What an addon is, and how Hallux
+loads one, is in [addons.md](addons.md).
 
 **What was decided:** an addon can wake the AI by itself; the event carries its data; the AI
 hears about an addon's events only after it has asked to listen in that boot; and the six
-questions that were open, all as I recommended (the table under Decisions). The details those
-don't cover are still my proposal: the names, the shape of the message and the limit of ten
-waiting events.
+questions that were open, all as I recommended (the table under Decisions). The plan decides
+the details this design left open, and those were confirmed the same day.
 
 ## In short
 
@@ -46,12 +45,12 @@ watching the window (Ctrl-C to stop)
 
 1. The `window` program card says that `watch` listens to the window. The AI calls
    `addon_listen("window")`.
-2. You type `tomato` into the box and press the button.
+2. You type `tomato` into the box and press `Send`.
 3. The window's child process sends a line to the addon, and the addon calls
-   `emit({"button": "paint", "text": "tomato"})`.
+   `emit({"event": "send", "text": "tomato"})`.
 4. Hallux checks whether the machine listens to `window` in this boot. It does.
 5. Hallux sends the AI
-   `<event addon="window">{"button": "paint", "text": "tomato"}</event>`.
+   `<events><event addon="window">{"event": "send", "text": "tomato"}</event></events>`.
 6. The AI does what the program card says: it calls `set_background("tomato")` and prints
    `painted the window tomato`.
 
@@ -77,10 +76,14 @@ One more optional part in the addon file:
   never reaches the AI half-formed.
 
 **In the window addon:**
-- The child draws a button and notices a click on it. That's about twenty lines of pygame.
+- The child draws a button labelled `Send` and notices a click on it. That's about twenty
+  lines of pygame. The label is neutral on purpose: what a press leads to is the program's
+  business.
 - On a click it sends a line that answers no question, and the addon's reader thread, which
   exists already, passes it to `emit`.
 - Enter in the text box sends the same event. It's what a text box does.
+- Closing the window is an event too, `{"event": "closed"}`, so that a program watching the
+  window can end.
 
 **Rules for addon authors:**
 - **Emit when something happened,** not on a clock. An addon that emits ten times a second
@@ -113,13 +116,14 @@ One more optional part in the addon file:
 A new kind of message, beside `<input>`, `<key>` and `<boot>`:
 
 ```text
-<event addon="window" cwd="/home/user" time="…" cols="100" rows="30">
-{"button": "paint", "text": "tomato"}
-</event>
+<events cwd="/home/user" time="…" cols="100" rows="30">
+<event addon="window">{"event": "send", "text": "tomato"}</event>
+</events>
 ```
 
 **Several events that were waiting arrive in one message,** in order, the way several keys
-arrive at once in raw mode. That's one model call for three quick presses, not three.
+arrive at once in raw mode. That's one model call for three quick presses, not three. The
+message has the same shape for one event as for several.
 
 **What the prompt has to say:**
 - an event is something that happened to a device, with its data;
@@ -155,7 +159,8 @@ Every delivered event is a model call, and it can happen with nobody at the keyb
   it's used up, events are dropped and the status bar says `events paused: budget used`.
   Typing a command starts it again.
 - **At most ten events wait at a time.** More are dropped, with a note.
-- **The status bar shows the work,** as for any other turn: `window: event`.
+- **The status bar shows the work,** as for any other turn: `window: event`. While the
+  machine listens, the idle bar says so: `listening: window`.
 
 ---
 
@@ -190,11 +195,9 @@ In size it's about steps 5 and 6 of the addon plan together.
 
 ## Before building
 
-1. **Finish the live checks of what exists:** that `reboot` and `poweroff` close the window,
-   that Ctrl+Shift+Del does, and that `hallux.log` shows `addon_help` before the first call.
-   Events build on the hooks and on the per-boot state.
-2. **Write the step-by-step plan,** as `docs/plans/addon-events-plan.md`, like the addon
-   plan.
+**Finish the live checks of what exists:** that `reboot` and `poweroff` close the window,
+that Ctrl+Shift+Del does, and that `hallux.log` shows `addon_help` before the first call.
+Events build on the hooks and on the per-boot state.
 
 Not needed first: the disk handle (step 7 of the addon plan) and the documentation (step 8).
 
