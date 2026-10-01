@@ -16,6 +16,21 @@
 
 ## 1. What you'd see
 
+**Once, to create the command.** The addon brings functions, not commands, and a stock
+machine has no program called `window`. Without this step the AI may answer
+`bash: window: command not found`, and it would be right. You create the program the way
+every program on the machine is created, with the `hallux` command:
+
+```text
+user@hallux:~$ hallux install a program called window: "window open" opens the addon's
+window, "window paint" reads its text box and paints the background that color
+```
+
+The AI writes a program card to `/usr/local/bin/window`: a text file that describes how the
+program behaves and which addon functions it uses. The card survives a reboot.
+
+**Then:**
+
 ```text
 user@hallux:~$ window open
 ```
@@ -30,21 +45,32 @@ painted the window tomato
 
 The window turns tomato red.
 
-- **The commands are the machine's.** The addon only offers functions. Whether the command
-  is called `window paint` or something else is up to you and the AI, as with every program
-  on the machine.
+**Who handles what.** The AI plays the program. Python does only what has to be real.
+
+| Part | What it is | Who handles it |
+|---|---|---|
+| The line `window paint` | Text sent to the AI, like every command | The AI |
+| The `window` program | A program card on the machine's disk | The AI reads it and acts it out |
+| `read_text()` and `set_background()` | Python functions in `addons/window.py` | Python, inside Hallux |
+| The window and its loop | The pygame child process | Python |
+| The output `painted the window tomato` | Text | The AI writes it |
+
+- **There is no code for the `window` command anywhere.** The addon doesn't know the command
+  exists. The name and the subcommands are up to you and the AI, as with every program on
+  the machine.
 - **The AI acts when you type in the terminal.** Typing into the window doesn't wake it. The
   AI reads the box when a command makes it look. Section 8 describes what it would take for
   the window to wake the machine by itself.
 
 **What happens behind `window paint`:**
 
-1. The AI knows from `<boot>` that a `window` addon exists.
-2. It reads the manual with `addon_help("window")`, if it hasn't in this boot.
-3. It calls `read_text()` and gets `{"text": "tomato"}`. That's the input.
-4. It calls `set_background("tomato")` and gets `{"ok": true, "color": "#ff6347"}`. That's
+1. The AI reads the program card, which says what `paint` does.
+2. It knows from `<boot>` that a `window` addon exists.
+3. It reads the manual with `addon_help("window")`, if it hasn't in this boot.
+4. It calls `read_text()` and gets `{"text": "tomato"}`. That's the input.
+5. It calls `set_background("tomato")` and gets `{"ok": true, "color": "#ff6347"}`. That's
    the output.
-5. It prints what the program would print.
+6. It prints what the program would print.
 
 ---
 
@@ -202,8 +228,10 @@ Checked on 2026-10-01, in a throwaway environment outside the project:
    messages. It can be tried by hand: run it, and type the JSON lines.
 3. **The addon side.** `open`, `read_text`, `set_background`, `stop`, `prompt` and `EXPOSED`.
 4. **Tests,** below.
-5. **The live run.** Start Hallux, do what section 1 shows, and check in `hallux.log` that the
-   tool calls happened: `addon_help`, `open`, `read_text`, `set_background`.
+5. **The live run.** Start Hallux, create the `window` program and do what section 1 shows.
+   Then check in `hallux.log` that the tool calls happened: `addon_help`, `open`, `read_text`,
+   `set_background`. Reboot the machine and run `window paint` again: the program card must
+   still be there, and the manual must be read again.
 
 **Tests.** None of them needs a display: pygame has a "dummy" driver that runs the whole
 window in memory, and a test can hand it key presses as if they were typed.
@@ -228,6 +256,7 @@ The tests are skipped when pygame isn't installed.
 - loading, and the skip when pygame is missing;
 - the list in `<boot>`, and the manual read on demand;
 - input from an addon, and output to it;
+- a program card that uses an addon, and still works after a reboot;
 - a function that fails, and the AI printing the error;
 - `stop()` on halt, reboot and the hard exit;
 - an addon that needs an extra library;
