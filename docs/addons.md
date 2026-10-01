@@ -256,6 +256,15 @@ chat between models.
 
 ---
 
+## 9. Later: events from addons
+
+In everything above, the AI acts only when the user types. An addon could also wake the AI
+by itself: a button pressed in a window, a key on a MIDI keyboard. The AI would hear about
+an addon's events only after it has asked to listen in that boot. The design has its own
+document: [addon-events.md](addon-events.md).
+
+---
+
 ## Open questions
 
 1. **Where does the one-line summary come from?** My recommendation: the first line of the
