@@ -17,10 +17,11 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Callable
+from typing import AsyncIterator, Callable, Sequence
 
+from hallux.addons import Addon, Events
 from hallux.config import Hardware
-from hallux.machine import Key, Machine
+from hallux.machine import Interrupted, Key, Machine
 from hallux.protocol import Action, Form, plain
 from hallux.statusbar import short_model
 
@@ -66,8 +67,11 @@ class ScriptTerminal:
     def stop(self) -> None:
         pass
 
-    async def read_line(self, prompt: str, default: str = "") -> str | Key:
+    async def read_line(self, prompt: str, default: str = "") -> str | Key | Interrupted:
         return self._next(prompt, default)
+
+    def interrupt_prompt(self) -> bool:
+        return False                                    # a script gets no events
 
     async def read_secret(self, prompt: str) -> str | Key:
         return self._next(prompt, secret=True)          # the next line is the password
@@ -149,10 +153,11 @@ class ScriptTerminal:
 
 
 async def run_script(root: Path, hardware: Hardware, lines: list[str],
-                     echo: Callable[[str], None] = lambda text: None) -> list[Record]:
+                     echo: Callable[[str], None] = lambda text: None,
+                     addons: Sequence[Addon] = (), events: Events | None = None) -> list[Record]:
     terminal = ScriptTerminal(lines, echo)
     try:
-        await Machine(root, hardware, terminal).run()
+        await Machine(root, hardware, terminal, addons=addons, events=events).run()
     except ScriptEnded:
         pass
     return terminal.records

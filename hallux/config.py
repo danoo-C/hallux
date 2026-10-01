@@ -1,4 +1,4 @@
-"""The machine's hardware: which Claude model runs it, and at what effort.
+"""The machine's hardware: which Claude model runs it, at what effort, and with which addons.
 
 Layers, later ones win: the defaults below < <root>/.hallux/config.toml < command-line flags.
 No tool reaches config.toml, so the machine can't pick its own hardware.
@@ -8,6 +8,8 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
+
+from hallux.addons import ADDON_NAME
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 CONFIG_FILE = Path(".hallux") / "config.toml"
@@ -23,6 +25,8 @@ class Hardware:
     keep_transcripts: bool = False            # True: Claude Code also keeps its own transcript
     os_sandbox: bool = False                  # True: Claude Code runs inside bubblewrap
     tick_budget_usd: float = 0.25             # raw mode: live updates per program run, then pause
+    event_budget_usd: float = 0.25            # addon events since the last typed line, then pause
+    addons: tuple[str, ...] | None = None     # the addons it gets; None: every one that loaded
 
     @property
     def model_effort(self) -> str | None:
@@ -43,6 +47,8 @@ def load(root: Path, **flags: object) -> Hardware:
         if unknown := sorted(set(settings) - known):
             raise ValueError(f"{path}: unknown setting {', '.join(unknown)} "
                              f"(known: {', '.join(sorted(known))})")
+        if isinstance(settings.get("addons"), list):
+            settings["addons"] = tuple(settings["addons"])
         hardware = replace(hardware, **settings)
     hardware = replace(hardware, **{k: v for k, v in flags.items() if v is not None})
     _validate(hardware, path)
@@ -59,9 +65,13 @@ def _validate(hw: Hardware, path: Path) -> None:
     for name in ("status_bar", "keep_transcripts", "os_sandbox"):
         if not isinstance(getattr(hw, name), bool):
             raise ValueError(f"{path}: {name} must be true or false")
-    tick = hw.tick_budget_usd
-    if isinstance(tick, bool) or not isinstance(tick, int | float) or tick < 0:
-        raise ValueError(f"{path}: tick_budget_usd must be a number, 0 or more")
+    for name in ("tick_budget_usd", "event_budget_usd"):
+        budget = getattr(hw, name)
+        if isinstance(budget, bool) or not isinstance(budget, int | float) or budget < 0:
+            raise ValueError(f"{path}: {name} must be a number, 0 or more")
+    if hw.addons is not None and not (isinstance(hw.addons, tuple) and all(
+            isinstance(name, str) and ADDON_NAME.fullmatch(name) for name in hw.addons)):
+        raise ValueError(f'{path}: addons must be a list of addon names, like ["window"]')
     budget = hw.max_budget_usd
     if budget is not None and (isinstance(budget, bool) or not isinstance(budget, int | float)
                                or budget <= 0):

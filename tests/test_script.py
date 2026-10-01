@@ -116,3 +116,7 @@ def test_the_reboot_check_fails_if_the_machine_never_rebooted(tmp_path):
     terminal = run_lines(tmp_path, FakeModel(*replies), REBOOT_SCRIPT)
     report, passed = reboot_report(terminal.records)
     assert not passed and "FAILED    the machine rebooted" in report
+
+
+def test_a_script_cant_be_interrupted():
+    assert ScriptTerminal(["ls"]).interrupt_prompt() is False                 # a script gets no events

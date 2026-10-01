@@ -16,21 +16,22 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
-from typing import AsyncContextManager, Callable, Protocol
+from typing import AsyncContextManager, Callable, Protocol, Sequence
 
 from claude_agent_sdk import (
     AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent, ToolUseBlock,
 )
 
 from hallux import sandbox
+from hallux.addons import Addon, Events, stop_all
 from hallux.config import Hardware
 from hallux.disk import Disk
 from hallux.passwords import Passwords
 from hallux.protocol import (
-    Action, Field, Form, Reply, ScreenStream, Secret, envelope, parse, resolve,
+    Action, Field, Form, Reply, ScreenStream, Secret, envelope, json_body, parse, resolve,
 )
 from hallux.statusbar import describe
-from hallux.tools import SERVER, build_server
+from hallux.tools import SERVER, build_addon_servers, build_server
 
 log = logging.getLogger("hallux")
 SYSTEM_PROMPT = (files("hallux") / "prompt.md").read_text(encoding="utf-8")
@@ -45,6 +46,13 @@ class Key:
     keep_line: bool = True       # False for keys that end the line (Ctrl-C, Ctrl-D, Ctrl-Z)
 
 
+@dataclass(frozen=True)
+class Interrupted:
+    """The prompt was ended from outside while a line was being typed: an addon has an event."""
+    line: str                    # what was typed so far
+    cursor: int = 0              # characters before the cursor
+
+
 class Terminal(Protocol):
     status_bar: bool             # True: model errors go to the bar instead of stderr
     streams: bool                # True: show the AI's screen while it's being written
@@ -53,8 +61,12 @@ class Terminal(Protocol):
 
     def stop(self) -> None: ...
 
-    async def read_line(self, prompt: str, default: str = "") -> str | Key:
+    async def read_line(self, prompt: str, default: str = "") -> str | Key | Interrupted:
         """Read one line, or return the key for the machine that interrupted typing."""
+
+    def interrupt_prompt(self) -> bool:
+        """End the shell prompt that is being read: read_line returns Interrupted. False, and
+        nothing happens, when no shell prompt is being read."""
 
     async def read_secret(self, prompt: str) -> str | Key:
         """Read a password: nothing typed is shown or kept, and a key carries no text."""
@@ -87,11 +99,16 @@ class Terminal(Protocol):
 
 class Machine:
     def __init__(self, root: Path, hardware: Hardware, terminal: Terminal,
-                 client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient):
+                 client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient,
+                 addons: Sequence[Addon] = (), events: Events | None = None):
         self.disk = Disk(root)
         self.hardware = hardware
         self.terminal = terminal
         self.client_factory = client_factory
+        self.addons = tuple(addons)              # the real hardware attached to this machine
+        self.events = events or Events()         # what the addons report, for the AI
+        self.heard = ""                          # the addons listened to, as the bar shows them
+        self.event_spent = 0.0                   # dollars spent on events since a line was typed
         self.passwords = Passwords(self.disk.hidden / "passwords.json")
         self.prompt = ""
         self.secret: Secret | None = None        # the prompt asks for a password
@@ -104,7 +121,9 @@ class Machine:
         self.stream: ScreenStream | None = None  # what the last answer showed while written
 
     def options(self) -> ClaudeAgentOptions:
-        server, allowed = build_server(self.disk, fields=self.terminal)
+        server, allowed = build_server(self.disk, fields=self.terminal, addons=self.addons,
+                                       events=self.events)
+        addon_servers, addon_tools = build_addon_servers(self.addons)
         hw = self.hardware
         return ClaudeAgentOptions(
             system_prompt=SYSTEM_PROMPT,
@@ -112,10 +131,10 @@ class Machine:
             effort=hw.model_effort,
             fallback_model=hw.fallback_model,
             max_budget_usd=hw.max_budget_usd,
-            mcp_servers={SERVER: server},
+            mcp_servers={SERVER: server} | addon_servers,
             strict_mcp_config=True,             # no MCP servers from your own Claude config
             tools=[],                           # no built-in Bash/Read/Write/... at all
-            allowed_tools=allowed,
+            allowed_tools=allowed + addon_tools,
             permission_mode="dontAsk",          # anything not allowed above is denied
             setting_sources=[],                 # ignore your CLAUDE.md and settings
             include_partial_messages=True,      # the answer as it's written, for streaming
@@ -138,6 +157,7 @@ class Machine:
         """One boot-to-shutdown lifetime. Returns True if the machine wants to reboot."""
         self.disk.cwd = "/"
         self.session_spent = 0.0
+        self.forget_events()
         async with self.client_factory(options=self.options()) as client:   # empty RAM
             try:
                 body, first = self.boot_report()
@@ -149,16 +169,25 @@ class Machine:
                         reply = await self.block_mode(client, reply)
                         continue
                     secret = self.secret
+                    self.check_events()
+                    events = [] if secret else self.events.take()   # none at a password prompt
                     try:
-                        if secret:
+                        if events:
+                            line = None          # they come before the keyboard is read again
+                        elif secret:
                             line = await self.terminal.read_secret(self.prompt)
                         else:
-                            line = await self.terminal.read_line(self.prompt, restore)
+                            line = await self.read_shell_line(restore)
                     except EOFError:
                         line = Key("C-d", "", keep_line=False)
                     except KeyboardInterrupt:
                         line = Key("C-c", "", keep_line=False)
-                    if isinstance(line, Key):
+                    if events:                   # the line to put back stays as it is
+                        reply = await self.send_events(client, events)
+                    elif isinstance(line, Interrupted):
+                        restore = line.line      # an event ended the read: it's sent next
+                        continue
+                    elif isinstance(line, Key):
                         self.passwords.cancel()
                         reply = await self.send(client, "key", line.line, name=line.name,
                                                 cursor=line.cursor,
@@ -166,17 +195,100 @@ class Machine:
                                                 **({"secret": secret.name} if secret else {}))
                         restore = line.line if line.keep_line else ""
                     elif secret:                 # a password: the AI hears only the verdict
+                        self.refill_event_budget()
                         reply = await self.send(client, "input", **self.verdict(secret, line))
                         restore = ""
                     else:
                         self.passwords.cancel()
+                        self.refill_event_budget()
                         reply = await self.send(client, "input", line)
                         restore = ""
                     if reply.edit is not None:   # the AI rewrote the line (Tab, Ctrl-R...)
                         restore = reply.edit
                 return reply.reboot
-            finally:
+            finally:                             # halt, reboot or a crash
                 await self.terminal.end_form()
+                self.stop_addons()
+                self.forget_events()
+
+    async def read_shell_line(self, restore: str) -> str | Key | Interrupted:
+        """Read a line at the shell prompt. While the AI listens to an addon, an event ends
+        the read, and what was typed so far comes back as Interrupted."""
+        if not self.events.listening():          # nothing can arrive: the AI isn't at work
+            return await self.terminal.read_line(self.prompt, restore)
+        loop = asyncio.get_running_loop()
+        reading = True
+
+        def wake() -> None:
+            if reading and not self.terminal.interrupt_prompt():
+                loop.call_later(0.01, wake)      # the prompt isn't up yet: try again
+
+        self.events.on_arrival = lambda: loop.call_soon_threadsafe(wake)
+        if self.events.pending():                # one slipped in before anyone watched
+            loop.call_soon(wake)
+        try:
+            return await self.terminal.read_line(self.prompt, restore)
+        finally:
+            reading = False
+            self.events.on_arrival = None
+
+    async def send_events(self, client: ClaudeSDKClient, events: list[tuple[str, dict]]) -> Reply:
+        """Tell the AI what the addons it listens to have reported, oldest first."""
+        body = "".join(f"\n{envelope('event', json_body(data), addon=name)}"
+                       for name, data in events) + "\n"
+        names = ", ".join(sorted({name for name, _ in events}))
+        before = self.spent
+        reply = await self.send(client, "events", body, activity=f"{names}: event")
+        self.event_spent += self.spent - before
+        self.check_events()
+        return reply
+
+    def check_events(self) -> None:
+        """What the hub had to drop goes onto the bar. And events are model calls that nobody
+        typed for: once they have used up their budget, they stop until a line is typed."""
+        notes = self.events.take_notes()
+        budget = self.hardware.event_budget_usd
+        if self.events.listening() and not self.events.paused and self.event_spent >= budget:
+            self.events.pause()
+            notes.append("events paused: budget used" if budget
+                         else "events are off: event_budget_usd is 0")
+            log.warning("%s ($%.2f of $%.2f)", notes[-1], self.event_spent, budget)
+        self.notify(notes)
+
+    def refill_event_budget(self) -> None:
+        """The user typed a line: somebody is at the keyboard, so events may spend again."""
+        self.event_spent = 0.0
+        if self.events.paused and self.hardware.event_budget_usd:
+            self.events.pause(False)
+            self.terminal.set_status(note=None)
+
+    def notify(self, notes: list[str]) -> None:
+        """Something the user should know, on the status bar. Without one, it's printed."""
+        if notes:
+            self.terminal.set_status(note=" · ".join(notes))
+            if not self.terminal.status_bar:
+                for note in notes:
+                    print(f"hallux: {note}", file=sys.stderr)
+
+    def forget_events(self) -> None:
+        """A boot starts or ends: the AI listens to no addon, and no event waits for it."""
+        self.event_spent = 0.0
+        unheard = self.events.reset()
+        if unheard:
+            log.info("events nobody listened to: %s",
+                     ", ".join(f"{name} {count}" for name, count in sorted(unheard.items())))
+        self.show_listening()
+
+    def show_listening(self) -> None:
+        """Listening means money can be spent with nobody typing, so the bar says so."""
+        heard = ", ".join(self.events.listening())
+        if heard != self.heard:
+            self.heard = heard
+            self.terminal.set_status(listening=heard)
+
+    def stop_addons(self) -> None:
+        """The boot is over: whatever an addon started in it (a window, a sound) ends too."""
+        self.notify(stop_all(self.addons))
 
     def verdict(self, secret: Secret, typed: str) -> dict[str, str]:
         """What the AI hears about a typed password: whether it's right, never what it is."""
@@ -190,14 +302,18 @@ class Machine:
         return attrs
 
     def boot_report(self) -> tuple[str, bool]:
-        """What <boot> carries: the memory and the machine's defining files, so a normal boot
-        needs no tools. A new machine (no memory yet) first gets an empty directory tree."""
+        """What <boot> carries: the memory, the machine's defining files and the list of its
+        addons, so a normal boot needs no tools. A new machine (no memory yet) first gets an
+        empty directory tree."""
         memory = self.disk.memory_read()["text"]
         first = not memory.strip()
         if first:
             self.disk.lay_skeleton()
         parts = [envelope("memory", "\n" + memory)] if not first else []
         parts += [envelope("file", text, path=path) for path, text in self.disk.boot_files().items()]
+        if self.addons:
+            listing = "".join(f"{addon.name}: {addon.summary}\n" for addon in self.addons)
+            parts.append(envelope("addons", "\n" + listing))
         return "".join(f"\n{part}" for part in parts) + ("\n" if parts else ""), first
 
     async def block_mode(self, client: ClaudeSDKClient, reply: Reply) -> Reply:
@@ -362,6 +478,8 @@ class Machine:
             self.session_spent = session_total
             self.spent += turn_cost
             self.terminal.set_status(cost=self.spent, seconds=result.duration_ms / 1000)
+        self.show_listening()                    # the AI may just have called addon_listen
+        self.check_events()
         if result is None or (result.is_error and not interrupted):
             self.hardware_error(result, fatal)
             return None, interrupted

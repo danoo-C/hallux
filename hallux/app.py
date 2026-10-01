@@ -15,11 +15,13 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from hallux import config
+from hallux import addons, config
+from hallux.addons import Addon
 from hallux.config import Hardware
 from hallux.disk import HIDDEN_NAME
 
 log = logging.getLogger("hallux")
+ADDONS_FOLDER = Path(__file__).resolve().parent.parent / "addons"    # at the root of the repo
 
 
 def main() -> None:
@@ -54,21 +56,54 @@ def main() -> None:
 
     _log_to(root)
     log.info("power on: %s", hardware)
+    events = addons.Events()                    # what the addons report, for the whole run
+    attached, notes = attach(root, hardware, events=events)    # once: a change needs a restart
     if headless:
-        sys.exit(_headless(root, hardware, flags))
+        _complain(notes)
+        sys.exit(_headless(root, hardware, flags, attached, events))
 
     from hallux.machine import Machine          # imported late: pulls in the SDK
     from hallux.statusbar import StatusBar
     from hallux.terminal import Terminal        # and prompt_toolkit
     bar = StatusBar(hardware.model, hardware.model_effort) if hardware.status_bar else None
+    if bar and notes:
+        bar.update(note=" · ".join(notes))
+    else:
+        _complain(notes)
+    terminal = Terminal(bar, before_power_cut=lambda: addons.stop_all(
+        attached, addons.HARD_EXIT_SECONDS))
     try:
-        asyncio.run(Machine(root, hardware, Terminal(bar)).run())
+        asyncio.run(Machine(root, hardware, terminal, addons=attached, events=events).run())
     except Exception as e:                      # the SDK or the CLI failed: "hardware" error
         log.exception("crash")
         sys.exit(f"hallux: {e}")
 
 
-def _headless(root: Path, hardware: Hardware, flags: argparse.Namespace) -> int:
+def attach(root: Path, hardware: Hardware, folder: Path | None = None,
+           events: addons.Events | None = None) -> tuple[list[Addon], list[str]]:
+    """Load the addons this machine gets. Returns them, and a note for each one it was meant
+    to get and doesn't: a broken addon never keeps the machine from starting. An addon that
+    reports events reports them to `events`."""
+    folder = folder or ADDONS_FOLDER
+    if hardware.addons == ():                   # addons = []: none, so nothing is imported
+        return [], []
+    if root == folder or root in folder.parents:
+        # The AI could write a Python file there, and the next start would run it.
+        log.warning("no addons: %s is inside the machine", folder)
+        return [], [f"no addons: {folder} is inside the machine, which could write to it"]
+    loaded, skipped = addons.load(folder, only=hardware.addons, events=events)
+    log.info("addons: %s", ", ".join(addon.name for addon in loaded) or "none")
+    return loaded, [f"addon {name} skipped: {reason}" for name, reason in skipped.items()]
+
+
+def _complain(notes: list[str]) -> None:
+    """Without a status bar, the notes go where the other hallux messages go."""
+    for note in notes:
+        print(f"hallux: {note}", file=sys.stderr)
+
+
+def _headless(root: Path, hardware: Hardware, flags: argparse.Namespace,
+              attached: list[Addon], events: addons.Events) -> int:
     from hallux.script import REBOOT_SCRIPT, reboot_report, run_script, summary
     if flags.check:
         lines = REBOOT_SCRIPT
@@ -78,7 +113,8 @@ def _headless(root: Path, hardware: Hardware, flags: argparse.Namespace) -> int:
         lines = flags.script.read_text(encoding="utf-8").splitlines()
     try:
         records = asyncio.run(run_script(root, hardware, lines,
-                                         echo=lambda text: print(text, end="", flush=True)))
+                                         echo=lambda text: print(text, end="", flush=True),
+                                         addons=attached, events=events))
     except Exception as e:
         log.exception("crash")
         print(f"hallux: {e}", file=sys.stderr)

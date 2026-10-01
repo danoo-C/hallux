@@ -19,6 +19,9 @@ dependencies = [
 dev = [
     "pytest",
 ]
+window = [
+    "pygame",                   # the example addon, addons/window.py
+]
 
 [project.scripts]
 hallux = "hallux.app:main"

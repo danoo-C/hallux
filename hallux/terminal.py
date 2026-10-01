@@ -39,7 +39,7 @@ from prompt_toolkit.utils import get_cwidth
 
 from hallux import statusbar
 from hallux.blockmode import POWER_CUT_KEY, BlockMode
-from hallux.machine import Key
+from hallux.machine import Interrupted, Key
 from hallux.protocol import Action, Form, plain
 from hallux.statusbar import StatusBar
 
@@ -68,7 +68,8 @@ def zero_width(prompt: str) -> str:
 
 class Terminal:
     def __init__(self, bar: StatusBar | None = None, input=None, output=None,
-                 power_cut: Callable[[], None] | None = None) -> None:
+                 power_cut: Callable[[], None] | None = None,
+                 before_power_cut: Callable[[], object] = lambda: None) -> None:
         self.bar = bar                                   # None: no status bar
         self.status_bar = bar is not None
         self.streams = True                              # show answers while they're written
@@ -77,6 +78,7 @@ class Terminal:
         self.output = output or create_output()          # the whole screen (block mode)
         self.saved_tty = _tty_settings() if self.real_tty else None
         self.on_power_cut = power_cut or self._pull_the_plug
+        self.before_power_cut = before_power_cut         # the addons' stop() hooks
         self.ctrl_c_times: deque[float] = deque(maxlen=CTRL_C_PRESSES)
         self.interrupt: Callable[[], None] | None = None     # stops the AI's current turn
         self.pinned: Size | None = None                  # the screen size the bar is pinned for
@@ -119,9 +121,23 @@ class Terminal:
 
     # ---------------------------------------------------------------- the shell prompt
 
-    async def read_line(self, prompt: str, default: str = "") -> str | Key:
+    async def read_line(self, prompt: str, default: str = "") -> str | Key | Interrupted:
         self.session.app.erase_when_done = False
         return await self.session.prompt_async(ANSI(zero_width(prompt)), default=default)
+
+    def interrupt_prompt(self) -> bool:
+        """End the shell prompt from outside, the way a key like Tab ends it from inside:
+        read_line returns what was typed so far. Keys that arrive after it wait for the
+        next prompt. False, and nothing happens, when no shell prompt is being read: while
+        the AI answers, at a password prompt, in a full-screen program. Call it from the
+        event loop."""
+        app = self.session.app
+        if not app.is_running or app.future is None or app.future.done():
+            return False
+        buf = app.current_buffer
+        app.erase_when_done = True                       # the AI redraws the prompt line
+        app.exit(result=Interrupted(buf.text, buf.cursor_position))
+        return True
 
     async def read_secret(self, prompt: str) -> str | Key:
         """Read a password, the way a tty with echo off does (sudo, passwd, ssh)."""
@@ -275,6 +291,8 @@ class Terminal:
 
     def power_cut(self) -> None:
         log.warning("power cut: hard exit by key")
+        with contextlib.suppress(Exception):             # nothing may keep the plug in
+            self.before_power_cut()
         self.on_power_cut()
 
     def _pull_the_plug(self) -> NoReturn:

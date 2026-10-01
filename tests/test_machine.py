@@ -6,7 +6,7 @@ import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolUseBlock
 
 from hallux.config import Hardware
-from hallux.machine import SYSTEM_PROMPT, Key, Machine
+from hallux.machine import SYSTEM_PROMPT, Interrupted, Key, Machine
 from hallux.protocol import Action, FieldState
 
 
@@ -60,10 +60,22 @@ class FakeClient:
 
     async def receive_response(self):
         for message in self.model.results.pop(0):
-            yield message
+            if callable(message):            # something that happens while the AI works
+                message()
+            else:
+                yield message
 
     async def interrupt(self):
         self.model.interrupts += 1
+
+
+class Typing:
+    """A scripted key: the user is in the middle of this line, and stays there until the
+    prompt is interrupted from outside. `meanwhile` happens while they type; the prompt
+    refuses the first `not_up_yet` interrupts, as one that is still being drawn does."""
+
+    def __init__(self, text, meanwhile=lambda: None, not_up_yet=0):
+        self.text, self.meanwhile, self.not_up_yet = text, meanwhile, not_up_yet
 
 
 class FakeTerminal:
@@ -101,7 +113,24 @@ class FakeTerminal:
         key = self.keys.pop(0)
         if isinstance(key, type) and issubclass(key, BaseException):
             raise key
+        if isinstance(key, Typing):
+            self.typing, self.interrupted = key, asyncio.Event()
+            key.meanwhile()
+            await asyncio.wait_for(self.interrupted.wait(), 5)     # nobody came: the test fails
+            self.typing = None
+            return Interrupted(default + key.text, len(default + key.text))
         return key
+
+    typing = None                            # the Typing that waits at the prompt now
+
+    def interrupt_prompt(self):
+        if self.typing is None or self.interrupted.is_set():
+            return False
+        if self.typing.not_up_yet:
+            self.typing.not_up_yet -= 1
+            return False
+        self.interrupted.set()
+        return True
 
     async def read_secret(self, prompt):
         self.secret_prompts.append(prompt)

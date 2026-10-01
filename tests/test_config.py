@@ -21,6 +21,22 @@ def test_config_file_then_flags(tmp_path):
         "claude-sonnet-5-5", "high", "claude-haiku-4-5", 2.5)
 
 
+def test_the_addons_setting(tmp_path):
+    assert config.load(tmp_path).addons is None                    # left out: all that loaded
+    write_config(tmp_path, 'addons = ["window", "sound_card"]\n')
+    assert config.load(tmp_path).addons == ("window", "sound_card")
+    write_config(tmp_path, "addons = []\n")
+    assert config.load(tmp_path).addons == ()                      # none
+
+
+def test_the_event_budget_setting(tmp_path):
+    assert config.load(tmp_path).event_budget_usd == 0.25
+    write_config(tmp_path, "event_budget_usd = 2\n")
+    assert config.load(tmp_path).event_budget_usd == 2
+    write_config(tmp_path, "event_budget_usd = 0\n")
+    assert config.load(tmp_path).event_budget_usd == 0                # events are off
+
+
 def test_haiku_gets_no_effort():
     assert Hardware(model="claude-haiku-4-5", effort="max").model_effort is None
     assert Hardware(model="claude-sonnet-5-5", effort="max").model_effort == "max"
@@ -35,7 +51,15 @@ def test_haiku_gets_no_effort():
     ('status_bar = "yes"\n', "status_bar must be true or false"),
     ("os_sandbox = 1\n", "os_sandbox must be true or false"),
     ("tick_budget_usd = -1\n", "tick_budget_usd must be a number"),
+    ("event_budget_usd = -0.5\n", "event_budget_usd must be a number, 0 or more"),
+    ('event_budget_usd = "a lot"\n', "event_budget_usd must be a number"),
+    ("event_budget_usd = true\n", "event_budget_usd must be a number"),
     ('keep_transcripts = "no"\n', "keep_transcripts must be true or false"),
+    ('addons = "window"\n', "addons must be a list of addon names"),
+    ("addons = true\n", "addons must be a list of addon names"),
+    ('addons = ["window", 3]\n', "addons must be a list of addon names"),
+    ('addons = ["window.py"]\n', "addons must be a list of addon names"),
+    ('addons = ["Window"]\n', "addons must be a list of addon names"),
     ('model = "claude-opus-5-5\n', r"config\.toml: Illegal character"),   # broken TOML
 ])
 def test_bad_config_is_a_readable_error(tmp_path, text, message):

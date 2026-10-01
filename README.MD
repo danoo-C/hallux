@@ -62,8 +62,10 @@ user@hallux:~$ cowsay moo
   - mouse clicks in full-screen programs.
 - **A status bar:** a bottom row owned by Hallux shows what the AI is doing, the model, the cost
   so far and how long the last answer took. The AI can never draw on it.
+- **Addons:** real hardware for the machine, one Python file each. The example opens a real
+  window on your desktop that the machine can read and paint.
 - **Safe by construction:**
-  - the AI has no tools except Hallux's own;
+  - the AI has no tools except Hallux's own and the addons you install;
   - every path is jailed to the machine's folder;
   - only harmless escape codes reach your terminal;
   - optionally, the Claude Code process runs under bubblewrap.
@@ -104,6 +106,7 @@ in [docs/concept.md](docs/concept.md).
   Claude Code, is installed for you.
 - **Optional:** [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) for the OS-level
   sandbox.
+- **Optional:** pygame, for the example addon (see [Addons](#addons)).
 
 ## Installation
 
@@ -154,6 +157,79 @@ hallux forget the rhyming thing
 Settings that bash can express go into `~/.bashrc`; everything else becomes a rule in the
 machine's memory. Either way, the change survives a reboot.
 
+## Addons
+
+An addon gives the machine a real ability it can't imagine, the way a sound card does. It is
+one Python file in `addons/`, at the root of this repo. The AI gets the addon's functions as
+tools and decides what to do with them. An addon defines no commands.
+
+- **The machine learns about its addons at boot,** and reads an addon's manual before it
+  first uses it.
+- **Every machine gets every addon that loads.** A world names the ones it wants with
+  `addons = ["window"]` in its `config.toml`, or none with `addons = []`.
+- **A broken addon is skipped.** The status bar shows a note, and the reason is in the log.
+  It never keeps the machine from starting.
+- **An addon can report events,** such as a button pressed in its window. The AI hears them
+  only after it has asked to listen, and each event it hears is a model call. A budget,
+  `event_budget_usd`, limits what events may spend while you aren't typing.
+
+### The example: a real window
+
+`addons/window.py` opens a window on your desktop, with a text box and a `Send` button. The
+machine can read the box and paint the window. It needs pygame:
+
+```bash
+.venv/bin/python -m pip install -e ".[window]"
+```
+
+The addon brings functions, not commands, so you create the program that uses them:
+
+```text
+user@hallux:~$ hallux install a program called window: "window open" opens the addon's
+window, "window paint" reads its text box and paints the background that color, "window
+watch" listens to the window and paints it whatever is sent, until Ctrl-C
+user@hallux:~$ window open
+user@hallux:~$ window paint                               # after typing tomato into the box
+painted the window tomato
+user@hallux:~$ window watch                               # now Send, or Enter, paints by itself
+```
+
+### Writing an addon
+
+The smallest addon that loads:
+
+```python
+# addons/dice.py
+"""A die: real random numbers."""
+import random
+
+
+def prompt() -> str:
+    return "roll(sides) throws a die with that many sides and returns the number."
+
+
+def roll(sides: int = 6) -> dict:
+    """Throw a die."""
+    return {"value": random.randint(1, sides)}
+
+
+EXPOSED = [roll]
+```
+
+- **The first line of the docstring** is the summary the machine sees at boot.
+- **`prompt()`** returns the manual.
+- **`EXPOSED`** lists the functions the AI may call. Nothing else in the file is reachable.
+- **Each function** needs a docstring and type hints (`str`, `int`, `float` or `bool`). It
+  returns a small dictionary, and it returns quickly: after 10 seconds the AI gets an error.
+- **Optional:** `stop()`, called when a boot ends, to close whatever is still open; and
+  `connect(emit)`, to report events.
+
+The design is in [docs/addons.md](docs/addons.md) and [docs/addon-events.md](docs/addon-events.md).
+
+> **An addon runs with your full rights.** It runs inside Hallux, outside the path jail and
+> outside `os_sandbox`. Putting a file into `addons/` is the same as running it, so only
+> install addons you trust. No machine can write to that folder.
+
 ## Configuration
 
 Each machine reads optional settings from `<world>/.hallux/config.toml`. Command-line flags
@@ -167,6 +243,8 @@ fallback_model = "claude-haiku-4-5"
 max_budget_usd = 2.0             # stop a boot after spending this much
 status_bar = true                # the bottom status row
 tick_budget_usd = 0.25           # live updates in raw mode, per program run
+event_budget_usd = 0.25          # addon events, since the last line you typed
+addons = ["window"]              # the addons this machine gets; left out: all that loaded
 keep_transcripts = false         # let Claude Code also keep its own session transcript
 os_sandbox = false               # run Claude Code under bubblewrap
 ```
@@ -179,6 +257,8 @@ the machine's log. A few ways to keep it in check:
 - **Choose a faster model,** such as Sonnet or Haiku, or a lower effort.
 - **Set `max_budget_usd`** to cap what a boot can spend.
 - **Rely on partial redraws:** full-screen programs only resend the rows that change.
+- **Give a machine only the addons it uses.** Each addon adds its tools to every request,
+  and every event it reports to a listening machine is a call of its own.
 
 ## Safety and privacy
 
@@ -196,6 +276,9 @@ the machine's log. A few ways to keep it in check:
   you type is shown, and Hallux checks it itself against a salted hash in
   `<world>/.hallux/passwords.json`. The AI only learns whether it was right. A new machine
   has no password and accepts any; `passwd` sets one.
+- **Addons are the exception to the jail.** An addon is Python code that runs with your full
+  rights, and what it returns goes to the model. Hallux only loads addons from `addons/` in
+  this repo, never from a folder a machine can write to. See [Addons](#addons).
 - **Everything else the machine reads is sent to Anthropic's API,** because that's where the
   model runs. Don't put real secrets into a world folder.
 
@@ -212,11 +295,13 @@ hallux/
   blockmode.py       full-screen programs: block mode and raw mode
   statusbar.py       the bottom status row
   disk.py, tools.py  the path jail and the agent's tools
+  addons.py          loading addons, calling their functions, their events
   passwords.py       password prompts: checked locally, never sent to the AI
   prompt.md          the system prompt: most of the machine's behavior
   script.py          headless runs and the reboot check
   sandbox.py         optional bubblewrap wrapper
   config.py          config.toml and flags
+addons/              the addons: window.py is the example
 docs/                design, roadmap and next steps
 tests/               unit and integration tests (no model calls)
 ```
@@ -237,6 +322,8 @@ and persistence, is checked with `--check reboot` and `--script`.
 - [docs/roadmap.md](docs/roadmap.md): what's built and what's planned
 - [docs/next-steps.md](docs/next-steps.md): the upcoming features, in detail
 - [docs/light-and-keys.md](docs/light-and-keys.md): the status bar, the hard exit and the key rule
+- [docs/addons.md](docs/addons.md): addons, and [docs/addon-events.md](docs/addon-events.md):
+  their events
 
 ## License
 
