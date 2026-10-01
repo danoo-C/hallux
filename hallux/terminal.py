@@ -68,7 +68,8 @@ def zero_width(prompt: str) -> str:
 
 class Terminal:
     def __init__(self, bar: StatusBar | None = None, input=None, output=None,
-                 power_cut: Callable[[], None] | None = None) -> None:
+                 power_cut: Callable[[], None] | None = None,
+                 before_power_cut: Callable[[], object] = lambda: None) -> None:
         self.bar = bar                                   # None: no status bar
         self.status_bar = bar is not None
         self.streams = True                              # show answers while they're written
@@ -77,6 +78,7 @@ class Terminal:
         self.output = output or create_output()          # the whole screen (block mode)
         self.saved_tty = _tty_settings() if self.real_tty else None
         self.on_power_cut = power_cut or self._pull_the_plug
+        self.before_power_cut = before_power_cut         # the addons' stop() hooks
         self.ctrl_c_times: deque[float] = deque(maxlen=CTRL_C_PRESSES)
         self.interrupt: Callable[[], None] | None = None     # stops the AI's current turn
         self.pinned: Size | None = None                  # the screen size the bar is pinned for
@@ -275,6 +277,8 @@ class Terminal:
 
     def power_cut(self) -> None:
         log.warning("power cut: hard exit by key")
+        with contextlib.suppress(Exception):             # nothing may keep the plug in
+            self.before_power_cut()
         self.on_power_cut()
 
     def _pull_the_plug(self) -> NoReturn:

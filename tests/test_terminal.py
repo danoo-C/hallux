@@ -133,6 +133,25 @@ def test_ctrl_shift_del_pulls_the_plug():
     assert cuts == ["cut"]
 
 
+def test_the_addons_are_stopped_before_the_plug_is_pulled():
+    def cut(cuts, before):
+        async def main():
+            with create_pipe_input() as pipe:
+                terminal = Terminal(None, input=pipe, output=DummyOutput(),
+                                    power_cut=lambda: cuts.append("cut"), before_power_cut=before)
+                pipe.send_text(CTRL_SHIFT_DEL + "\r")
+                await terminal.read_line("$ ")
+        asyncio.run(asyncio.wait_for(main(), 10))
+        return cuts
+
+    order = []
+    assert cut(order, lambda: order.append("addons stopped")) == ["addons stopped", "cut"]
+
+    def broken():
+        raise RuntimeError("the hooks themselves failed")
+    assert cut([], broken) == ["cut"]                  # nothing keeps the plug in
+
+
 def test_three_ctrl_c_within_a_second_pull_the_plug():
     async def script(terminal, type_keys):
         for _ in range(3):

@@ -25,14 +25,18 @@ IDLE_HINT = "power off: ctrl+shift+del · ctrl+c ×3"
 VERBS = {"list_dir": "listing", "stat": "checking", "read_file": "reading", "find": "searching",
          "write_file": "writing", "edit_file": "editing", "make_dir": "creating",
          "chdir": "entering", "remove": "removing", "move": "moving", "copy": "copying",
-         "save_field": "saving"}
+         "save_field": "saving", "list_addons": "listing the addons",
+         "addon_help": "reading the manual of"}
 
 
 def describe(tool: str, args: dict) -> str:
-    """What a tool call looks like on the bar: "reading /etc/os-release"."""
+    """What a tool call looks like on the bar: "reading /etc/os-release", "music: play"."""
+    if tool.startswith("mcp__"):                 # an addon's function: mcp__music__play
+        addon, _, function = tool.removeprefix("mcp__").partition("__")
+        return f"{addon}: {function}"
     if tool.startswith("memory_"):
         return "remembering…"
-    target = str(args.get("path") or args.get("src") or "")
+    target = str(args.get("path") or args.get("src") or args.get("name") or "")
     return f"{VERBS.get(tool, tool.replace('_', ' '))} {target}".strip()
 
 

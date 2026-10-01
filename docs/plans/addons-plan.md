@@ -1,7 +1,7 @@
 # Plan: the addon system
 
-**Status:** a plan. Nothing here is built yet. The design it follows is
-[addons.md](../addons.md), sections 1 to 6.
+**Status:** steps 1 to 6 are built. Step 7 (the disk handle) and step 8 (the documentation)
+are not. The design it follows is [addons.md](../addons.md), sections 1 to 6.
 
 **Not in this plan:** the music addon ([addon-music.md](../addon-music.md)) and worker agents
 (section 8 of the design). The first addon built on this system is the small example in
@@ -168,8 +168,14 @@ one; it's absent without addons.
 - **`hallux/app.py`** loads the addons once, before the machine starts, in both the terminal
   and the `--script` mode.
 - **A skipped addon** is logged with its reason, and the status bar shows a note such as
-  `addon music skipped: No module named 'numpy'`.
+  `addon music skipped: No module named 'numpy'`. Without a status bar, and in the `--script`
+  mode, the note is printed as `hallux: addon music skipped: …`.
 - **A name in the setting that didn't load** gets the same note. The boot goes on.
+- **A name in the setting that can't be an addon's name** (`"window.py"`) is a config error:
+  Hallux doesn't start.
+- **An addons folder inside the machine's folder** is never loaded, and a note says so. The
+  AI could write a Python file there, and the next start would run it (the design's safety
+  section).
 - **On the status bar,** an addon call shows as `music: play`.
 
 **Tests:** the setting is read and checked (a list of names, nothing else); a world with
@@ -182,8 +188,12 @@ shows the note.
 
 **Build:**
 - **`stop_all()`** calls every addon's `stop()`. An error in one is logged and doesn't keep
-  the others from running.
-- **It runs** after every boot ends (halt and reboot) and when Hallux crashes.
+  the others from running. The status bar shows a note such as
+  `addon window: stop() failed: RuntimeError: stuck`.
+- **It runs** after every boot ends (halt and reboot) and when Hallux crashes. It runs whether
+  or not the addon was used in that boot, so a `stop()` must cope with nothing running.
+- **The hooks get 10 s in total** after a boot, the same limit as a call. One that hangs is
+  left behind with a note; without a limit it would keep Hallux from quitting.
 - **Before the hard exit** it gets half a second in total, then Hallux quits whatever happens.
   An addon's child processes are stopped by the hard exit already: it ends every child
   process of Hallux.

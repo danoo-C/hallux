@@ -17,8 +17,9 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Callable
+from typing import AsyncIterator, Callable, Sequence
 
+from hallux.addons import Addon
 from hallux.config import Hardware
 from hallux.machine import Key, Machine
 from hallux.protocol import Action, Form, plain
@@ -149,10 +150,11 @@ class ScriptTerminal:
 
 
 async def run_script(root: Path, hardware: Hardware, lines: list[str],
-                     echo: Callable[[str], None] = lambda text: None) -> list[Record]:
+                     echo: Callable[[str], None] = lambda text: None,
+                     addons: Sequence[Addon] = ()) -> list[Record]:
     terminal = ScriptTerminal(lines, echo)
     try:
-        await Machine(root, hardware, terminal).run()
+        await Machine(root, hardware, terminal, addons=addons).run()
     except ScriptEnded:
         pass
     return terminal.records

@@ -23,7 +23,7 @@ from claude_agent_sdk import (
 )
 
 from hallux import sandbox
-from hallux.addons import Addon
+from hallux.addons import Addon, stop_all
 from hallux.config import Hardware
 from hallux.disk import Disk
 from hallux.passwords import Passwords
@@ -179,8 +179,18 @@ class Machine:
                     if reply.edit is not None:   # the AI rewrote the line (Tab, Ctrl-R...)
                         restore = reply.edit
                 return reply.reboot
-            finally:
+            finally:                             # halt, reboot or a crash
                 await self.terminal.end_form()
+                self.stop_addons()
+
+    def stop_addons(self) -> None:
+        """The boot is over: whatever an addon started in it (a window, a sound) ends too."""
+        failures = stop_all(self.addons)
+        if failures:
+            self.terminal.set_status(note=" · ".join(failures))
+            if not self.terminal.status_bar:
+                for failure in failures:
+                    print(f"hallux: {failure}", file=sys.stderr)
 
     def verdict(self, secret: Secret, typed: str) -> dict[str, str]:
         """What the AI hears about a typed password: whether it's right, never what it is."""

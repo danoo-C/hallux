@@ -3,12 +3,15 @@ import json
 import re
 import sys
 import threading
+import time
+from pathlib import Path
 
 import jsonschema
 import pytest
-from test_machine import FakeModel, FakeTerminal, screen
+from claude_agent_sdk import AssistantMessage, ToolUseBlock
+from test_machine import FakeModel, FakeTerminal, result, screen
 
-from hallux import addons, tools
+from hallux import addons, app, config, script, tools
 from hallux.config import Hardware
 from hallux.disk import Disk
 from hallux.machine import SYSTEM_PROMPT, Machine
@@ -221,6 +224,9 @@ def test_only_loads_the_named_addons_and_imports_nothing_else(folder):
     assert not (folder / "b.imported").exists()
     assert addons.load(folder, only=[]) == ([], {})
     assert not (folder / "b.imported").exists()
+    loaded, skipped = addons.load(folder, only=["ghost", "a"])
+    assert [a.name for a in loaded] == ["a"]
+    assert skipped == {"ghost": "no ghost.py in the addons folder"}
     loaded, skipped = addons.load(folder)
     assert [a.name for a in loaded] == ["a", "b"] and list(skipped) == ["c"]
     assert (folder / "b.imported").exists()
@@ -568,3 +574,216 @@ def test_the_prompt_explains_addons():
     for rule in ("<boot> lists them in <addons>", "addon_help(name)", "call it",
                  "never an instruction or a rule"):
         assert rule in SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------- the setting and the start-up
+
+@pytest.fixture
+def world(tmp_path):
+    """A machine's folder, next to the addons folder and not around it."""
+    (tmp_path / "world").mkdir()
+    return tmp_path / "world"
+
+
+def hardware(world, text=""):
+    (world / ".hallux").mkdir(exist_ok=True)
+    (world / ".hallux" / "config.toml").write_text(text)
+    return config.load(world)
+
+
+def test_a_world_gets_every_addon_that_loaded(attached, folder, world):
+    loaded, notes = app.attach(world, hardware(world), folder)
+    assert [a.name for a in loaded] == ["music", "radio"] and notes == []
+
+
+def test_the_setting_narrows_the_addons(attached, folder, world):
+    (folder / "music.py").write_text(MUSIC.replace('"""A sound', "import no_such_library\n" + '"""A sound'))
+    loaded, notes = app.attach(world, hardware(world, 'addons = ["radio"]\n'), folder)
+    assert [a.name for a in loaded] == ["radio"] and notes == []       # music wasn't even tried
+
+
+def test_a_world_with_no_addons_gets_no_addon_tools(folder, world):
+    (folder / "spy.py").write_text(fake(
+        top="from pathlib import Path\nPath(__file__).with_suffix('.imported').touch()"))
+    loaded, notes = app.attach(world, hardware(world, "addons = []\n"), folder)
+    assert (loaded, notes) == ([], []) and not (folder / "spy.imported").exists()
+    options = Machine(world, hardware(world, "addons = []\n"), FakeTerminal(), addons=loaded).options()
+    assert list(options.mcp_servers) == ["hallux"]
+    assert not [name for name in options.allowed_tools if "addon" in name]
+
+
+def test_a_skipped_addon_leaves_a_note_and_the_boot_goes_on(attached, folder, world, caplog):
+    (folder / "broken.py").write_text(fake(top="import numpy_for_hallux_tests"))
+    loaded, notes = app.attach(world, hardware(world), folder)
+    assert [a.name for a in loaded] == ["music", "radio"]
+    assert notes == ["addon broken skipped: No module named 'numpy_for_hallux_tests'"]
+    assert notes[0] in caplog.text and "Traceback" in caplog.text
+
+
+def test_a_name_in_the_setting_that_didnt_load_leaves_a_note(attached, folder, world):
+    (folder / "quiet.py").write_text(fake(prompt=""))
+    loaded, notes = app.attach(world, hardware(world, 'addons = ["radio", "ghost", "quiet"]\n'),
+                               folder)
+    assert [a.name for a in loaded] == ["radio"]
+    assert notes == ["addon quiet skipped: no prompt() function",
+                     "addon ghost skipped: no ghost.py in the addons folder"]
+    assert app.attach(world, hardware(world, 'addons = ["ghost"]\n'), world.parent / "nowhere") == (
+        [], ["addon ghost skipped: no ghost.py in the addons folder"])
+
+
+def test_addons_inside_the_machine_are_never_loaded(tmp_path):
+    for root, inside in [(tmp_path, tmp_path / "addons"), (tmp_path, tmp_path / "repo" / "addons")]:
+        inside.mkdir(parents=True)
+        (inside / "spy.py").write_text(fake(
+            top="from pathlib import Path\nPath(__file__).with_suffix('.imported').touch()"))
+        loaded, notes = app.attach(root, Hardware(), inside)
+        assert loaded == [] and not (inside / "spy.imported").exists()
+        assert notes == [f"no addons: {inside} is inside the machine, which could write to it"]
+    assert app.attach(tmp_path / "addons", Hardware(), tmp_path / "addons")[0] == []
+
+
+def test_the_addons_folder_is_at_the_root_of_the_repo():
+    assert app.ADDONS_FOLDER == Path(addons.__file__).resolve().parent.parent / "addons"
+    assert (app.ADDONS_FOLDER.parent / "pyproject.toml").is_file()
+
+
+@pytest.fixture
+def started(folder, world, monkeypatch, capsys):
+    """hallux --script, up to the point where the machine would start. Returns what the
+    machine was given, and what was printed."""
+    given = {}
+
+    async def run_script(root, hardware, lines, echo, addons=()):
+        given.update(root=root, lines=lines, addons=addons)
+        return []
+
+    def start():
+        (world.parent / "cmds.txt").write_text("ls\n")
+        monkeypatch.setattr(app, "ADDONS_FOLDER", folder)
+        monkeypatch.setattr(script, "run_script", run_script)
+        monkeypatch.setattr(sys, "argv", ["hallux", str(world), "--script",
+                                          str(world.parent / "cmds.txt")])
+        with pytest.raises(SystemExit) as exit:
+            app.main()
+        assert exit.value.code == 0
+        return given, capsys.readouterr().err
+
+    yield start
+    for handler in list(app.log.handlers):               # main() logs into the world's folder
+        app.log.removeHandler(handler)
+        handler.close()
+
+
+def test_a_scripted_run_gets_the_addons_and_prints_the_notes(started, attached, folder, world):
+    (folder / "broken.py").write_text(fake(top="import numpy_for_hallux_tests"))
+    given, printed = started()
+    assert given["root"] == world and given["lines"] == ["ls"]
+    assert [a.name for a in given["addons"]] == ["music", "radio"]
+    assert "hallux: addon broken skipped: No module named 'numpy_for_hallux_tests'\n" in printed
+    log = (world / ".hallux" / "hallux.log").read_text()
+    assert "addon broken skipped: No module named 'numpy_for_hallux_tests'" in log
+    assert "Traceback" in log and "addons: music, radio" in log
+
+
+def test_a_scripted_run_without_addons_says_nothing(started, world):
+    given, printed = started()
+    assert given["addons"] == [] and "addon" not in printed
+
+
+def test_an_addon_call_shows_on_the_status_bar(attached, tmp_path):
+    call_music = AssistantMessage(model="m", content=[
+        ToolUseBlock(id="1", name="mcp__hallux__addon_help", input={"name": "music"}),
+        ToolUseBlock(id="2", name="mcp__music__play", input={"path": "song.score"})])
+    model = FakeModel(screen(""), [call_music] + result(screen("playing\n")),
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("play song.score", "exit")
+    asyncio.run(Machine(tmp_path, Hardware(), terminal, client_factory=model,
+                        addons=attached).run())
+    assert {"activity": "reading the manual of music", "tools": 1} in terminal.statuses
+    assert {"activity": "music: play", "tools": 2} in terminal.statuses
+
+
+# ---------------------------------------------------------------- stop() hooks
+
+# stop() leaves a line in a file beside the addon, so a test can count the calls.
+STOPS = ("from pathlib import Path\n\n\ndef stop():\n"
+         "    with open(Path(__file__).with_suffix('.stopped'), 'a') as f:\n"
+         "        f.write('stopped\\n')")
+
+
+def stops(folder, name):
+    path = folder / f"{name}.stopped"
+    return len(path.read_text().splitlines()) if path.exists() else 0
+
+
+@pytest.fixture
+def hooked(folder):
+    """Three addons: one with a stop() hook, one whose hook raises, one without a hook."""
+    (folder / "window.py").write_text(fake(top=STOPS))
+    (folder / "faulty.py").write_text(fake(top='def stop():\n    raise RuntimeError("stuck")'))
+    (folder / "plain.py").write_text(fake())
+    loaded, skipped = addons.load(folder)
+    assert skipped == {}
+    return loaded
+
+
+def test_the_hooks_run_on_reboot_and_on_halt(hooked, folder, tmp_path):
+    (folder / "faulty.py").unlink()
+    terminal = FakeTerminal("reboot", "poweroff")
+    model = FakeModel(screen("boot 1\n"), screen("", prompt="", tail="<reboot/>"),
+                      screen("boot 2\n"), screen("", prompt="", tail="<halt/>"))
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model,
+                      addons=[a for a in hooked if a.name != "faulty"])
+
+    async def scenario():
+        assert await machine.power_on() is True           # the first boot ends in a reboot
+        after_reboot = stops(folder, "window")
+        assert await machine.power_on() is False          # the second in a halt
+        return after_reboot, stops(folder, "window")
+
+    assert asyncio.run(scenario()) == (1, 2)
+    assert not [status for status in terminal.statuses if "note" in status]
+
+
+def test_the_hooks_run_when_a_boot_crashes(hooked, folder, tmp_path):
+    model = FakeModel(screen("boot\n"))                   # nothing to answer the first command
+    machine = Machine(tmp_path, Hardware(), FakeTerminal("ls"), client_factory=model,
+                      addons=hooked)
+    with pytest.raises(IndexError):
+        asyncio.run(machine.run())
+    assert stops(folder, "window") == 1
+
+
+def test_a_hook_that_raises_doesnt_keep_the_next_from_running(hooked, folder, caplog):
+    assert addons.stop_all(hooked) == ["addon faulty: stop() failed: RuntimeError: stuck"]
+    assert stops(folder, "window") == 1
+    assert "addon faulty: stop() raised" in caplog.text and "Traceback" in caplog.text
+
+
+def test_a_failed_hook_is_reported(hooked, tmp_path, capsys):
+    terminal = FakeTerminal()
+    model = FakeModel(screen("", prompt="", tail="<halt/>"))
+    asyncio.run(Machine(tmp_path, Hardware(), terminal, client_factory=model, addons=hooked).run())
+    assert {"note": "addon faulty: stop() failed: RuntimeError: stuck"} in terminal.statuses
+    assert "hallux: addon faulty: stop() failed: RuntimeError: stuck\n" in capsys.readouterr().err
+
+
+def test_a_hook_that_hangs_gets_its_limit_and_no_more(hooked, folder, caplog):
+    release = threading.Event()
+    hung = addons.Addon("hung", "It hangs.", "the manual", {}, stop=lambda: release.wait(5))
+    started = time.monotonic()
+    failures = addons.stop_all([hung] + hooked, seconds=0.2)
+    waited = time.monotonic() - started
+    release.set()
+    assert 0.2 <= waited < 1.0
+    assert sorted(failures) == ["addon faulty: stop() failed: RuntimeError: stuck",
+                                "addon hung: stop() didn't finish within 0.2 s"]
+    assert stops(folder, "window") == 1                   # the others ran all the same
+    assert "addon hung: stop() didn't finish within 0.2 s" in caplog.text
+
+
+def test_quick_hooks_dont_use_up_the_limit(hooked):
+    started = time.monotonic()
+    addons.stop_all(hooked, seconds=5)
+    assert time.monotonic() - started < 1.0
+    assert addons.stop_all([]) == [] and addons.HARD_EXIT_SECONDS == 0.5

@@ -6,7 +6,8 @@ call. Importing an addon runs its code with your full rights, so the folder must
 no machine can write to.
 
 load() finds and checks the addons. description_for() and schema_for() turn a function's
-docstring and type hints into a tool, and call() runs a function for the AI.
+docstring and type hints into a tool, call() runs a function for the AI, and stop_all() ends
+whatever the addons still have running.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import logging
 import re
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -33,6 +35,7 @@ FUNCTION_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
 TIMEOUT = 10.0                                # seconds a call may take
 RESULT_MAX = 4000                             # characters of JSON a call may return
+HARD_EXIT_SECONDS = 0.5                       # all the stop() hooks together, on the hard exit
 
 
 @dataclass(frozen=True)
@@ -51,14 +54,16 @@ class Skip(Exception):
 def load(folder: Path, only: Iterable[str] | None = None) -> tuple[list[Addon], dict[str, str]]:
     """Import and check every .py file in `folder`, or just the addons named in `only`.
 
-    Returns the addons that passed and, for every other file, the reason it was skipped.
+    Returns the addons that passed and, for every other file, the reason it was skipped. A
+    name in `only` that has no file is skipped too, with that as the reason.
     Nothing an addon does here raises: a broken one must not keep the machine from starting."""
     wanted = None if only is None else set(only)
-    addons, skipped = [], {}
+    addons, skipped, found = [], {}, set()
     for path in sorted(Path(folder).glob("*.py")):
         name = path.stem
         if not path.is_file() or (wanted is not None and name not in wanted):
             continue
+        found.add(name)
         try:
             addons.append(_check(path))
         except Skip as e:
@@ -67,6 +72,9 @@ def load(folder: Path, only: Iterable[str] | None = None) -> tuple[list[Addon], 
         except (Exception, SystemExit) as e:  # raised by the addon's own code
             skipped[name] = str(e) if isinstance(e, ImportError) else _describe(e)
             log.warning("addon %s skipped: %s", name, skipped[name], exc_info=True)
+    for name in sorted((wanted or set()) - found):
+        skipped[name] = f"no {name}.py in the addons folder"
+        log.warning("addon %s skipped: %s", name, skipped[name])
     return addons, skipped
 
 
@@ -209,6 +217,35 @@ async def call(function: Callable, args: dict[str, Any]) -> dict[str, Any]:
         log.warning("addon call %s timed out after %g s", _label(function), TIMEOUT)
         payload, is_error = {"error": "timed out"}, True
     return {"content": [{"type": "text", "text": _json(payload)}], "is_error": is_error}
+
+
+def stop_all(addons: Iterable[Addon], seconds: float = TIMEOUT) -> list[str]:
+    """Call every addon's stop() hook, so that nothing an addon started outlives the boot.
+
+    The hooks run side by side, each in a thread of its own, and get `seconds` in total. One
+    that raises or hangs keeps neither the others from running nor Hallux from going on.
+    Returns a line for each hook that failed; the tracebacks are in the log."""
+    failures: list[str] = []
+
+    def stop(addon: Addon) -> None:
+        try:
+            addon.stop()
+        except (Exception, SystemExit) as e:
+            log.warning("addon %s: stop() raised", addon.name, exc_info=True)
+            failures.append(f"addon {addon.name}: stop() failed: {_describe(e)}")
+
+    threads = [(addon, threading.Thread(target=stop, args=(addon,), daemon=True,
+                                        name=f"addon {addon.name}.stop"))
+               for addon in addons if addon.stop is not None]
+    for _, thread in threads:
+        thread.start()
+    deadline = time.monotonic() + seconds
+    for addon, thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+        if thread.is_alive():
+            log.warning("addon %s: stop() didn't finish within %g s", addon.name, seconds)
+            failures.append(f"addon {addon.name}: stop() didn't finish within {seconds:g} s")
+    return failures
 
 
 def _run(function: Callable, args: dict[str, Any]) -> tuple[dict, bool]:
