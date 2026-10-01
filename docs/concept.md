@@ -165,6 +165,7 @@ There are three kinds of commands:
    ~/hallux-world/                 the real folder = the machine's "/"
    |-- .hallux/memory.md           what the machine is + hallux rules
    |-- .hallux/config.toml         model + effort (the machine can't see it)
+   |-- .hallux/passwords.json      password hashes (the AI never sees a password)
    |-- etc/hostname, etc/os-release
    |-- home/user/.bashrc           PS1="cow daysi moo> ", aliases
    |-- home/user/fib.py            your files
@@ -389,6 +390,36 @@ More details:
 - **Resizing the window:** the new size goes with the next envelope, and the status bar moves
   to the new bottom row.
 
+### Passwords
+
+A real terminal hides a password while you type it, and a password typed by habit shouldn't
+travel to an API. So a password never reaches the AI (`hallux/passwords.py`):
+
+- **The AI marks the prompt:** `<prompt secret="user">[sudo] password for user: </prompt>`.
+  The name says whose password it is: an account of the machine (`user`, `root`), or anything
+  else for an account elsewhere (`bob@example.com` for `ssh`).
+- **The terminal reads that line with echo off.** Nothing is shown, the cursor doesn't move,
+  ↑ can't bring it back, and Tab, Ctrl-R and the F-keys do nothing. Ctrl-C and Ctrl-D still
+  go to the AI, without the text typed so far.
+- **hallux checks it and sends only the verdict:**
+  ```text
+  <input secret="user" match="yes|no|unset" cwd="/home/user" ...></input>
+  ```
+  `unset` means no password is stored under that name. An account of the machine then accepts
+  anything, which is how a new machine starts. `empty="yes"` is added for a bare Enter.
+- **`passwd` sets one:** the AI asks twice with `<prompt secret="user" new="yes">`. The answers
+  are `new="first"`, then `new="saved"` or `new="mismatch"`. A new password counts only when
+  it's typed the same twice in a row; anything in between drops it.
+- **Where they live:** `/.hallux/passwords.json` holds a salted scrypt hash per name. Like the
+  memory, the fake OS can't see it. The password itself is in no file, not in `hallux.log`,
+  and not in the memory: the AI never knows it.
+
+What this doesn't cover yet: a password given on a command line (`chpasswd`, `mysql -pSECRET`)
+is typed in the clear and goes to the AI like any command, as it would show on a real screen.
+Programs that read hidden text and need the text itself (`read -s`) only learn whether it
+matched. And nothing removes a stored password (`passwd -d`) short of deleting it from the
+file.
+
 ### What the tty never does
 
 - **No local prompt.** It doesn't know the prompt. It only knows what the AI last sent.
@@ -453,7 +484,7 @@ write that.
 - kernel: 6.1.0-18-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.76-1 (2024-02-01) x86_64
 - hardware: 4x Intel Xeon E5-2680 v4 @ 2.40GHz, 8 GiB RAM, 40 GB disk
 - network: eth0 10.0.2.15/24, mac 52:54:00:12:34:56, gateway 10.0.2.2
-- users: user (uid 1000, sudo, password "hallux")
+- users: user (uid 1000, sudo)
 - first boot: 2026-09-30 21:10:02 CEST
 
 ## Packages (changes to the base image)
@@ -1255,8 +1286,9 @@ The folder is real and the terminal is just bytes, so there are three good autom
 2. **The reboot test (persistence)** is built in:
    `python hallux.py test-reboot --check reboot` (`hallux/script.py`).
    1. It builds a new machine.
-   2. It sets a prompt and an error rule with `hallux`, grants passwordless sudo (scripts
-      can't type passwords), creates a file and runs `sudo apt install cowsay`.
+   2. It sets a prompt and an error rule with `hallux`, grants passwordless sudo (a password
+      prompt would take the script's next line), creates a file and runs
+      `sudo apt install cowsay`.
    3. It runs the checks: `hostname`, `uname -r`, `head -2 /etc/os-release`, `cat note.txt`,
       `cat nope.txt` (the rule), `cowsay moo` and `hallux`.
    4. It runs `sudo reboot` and the checks again. The AI faithfully refuses a plain `reboot`

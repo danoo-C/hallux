@@ -192,8 +192,12 @@ the machine's log. A few ways to keep it in check:
   its own log in `<world>/.hallux/hallux.log`.
 - **`os_sandbox = true`** runs the Claude Code process under bubblewrap. The filesystem is
   read-only, your home folder is hidden except Claude Code's login, and `/tmp` is private.
-- **Everything the machine reads is sent to Anthropic's API,** because that's where the model
-  runs. Don't put real secrets into a world folder.
+- **Passwords stay on your computer.** At a password prompt (`sudo`, `passwd`, `ssh`) nothing
+  you type is shown, and Hallux checks it itself against a salted hash in
+  `<world>/.hallux/passwords.json`. The AI only learns whether it was right. A new machine
+  has no password and accepts any; `passwd` sets one.
+- **Everything else the machine reads is sent to Anthropic's API,** because that's where the
+  model runs. Don't put real secrets into a world folder.
 
 ## Project layout
 
@@ -208,6 +212,7 @@ hallux/
   blockmode.py       full-screen programs: block mode and raw mode
   statusbar.py       the bottom status row
   disk.py, tools.py  the path jail and the agent's tools
+  passwords.py       password prompts: checked locally, never sent to the AI
   prompt.md          the system prompt: most of the machine's behavior
   script.py          headless runs and the reboot check
   sandbox.py         optional bubblewrap wrapper

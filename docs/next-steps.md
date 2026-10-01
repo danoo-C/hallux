@@ -100,6 +100,12 @@ side.
 
 ### Hidden password input (`sudo`, `passwd`, `ssh`)
 
+**Status:** implemented, with the question below answered as "right or wrong only": no
+bullets, so not even the length is sent. The prompt names whose password it is
+(`<prompt secret="user">`), and `new="yes"` sets one. The design is in
+[concept.md](concept.md) under "Passwords". Still to come: removing a stored password
+(`passwd -d`), and passwords that arrive on a command line (`chpasswd`).
+
 **Problem:** when the machine asks for a password, what you type is visible, because the
 terminal echoes your keys. A real terminal hides it.
 

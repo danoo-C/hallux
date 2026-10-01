@@ -33,6 +33,19 @@ def test_a_script_types_commands_and_keys(tmp_path):
     assert eof.typed == "@key C-d"                      # the script ran out: Ctrl-D halts
 
 
+def test_a_script_types_a_password_without_showing_it(tmp_path):
+    model = FakeModel(screen("", prompt="$ "),
+                      '<screen>\n</screen><prompt secret="root">Password: </prompt>',
+                      screen("", prompt="# "),
+                      screen("logout\n", prompt="", tail="<halt/>"))
+    echoed = []
+    terminal = ScriptTerminal(["su", "hunter2"], echo=echoed.append)
+    asyncio.run(Machine(tmp_path, Hardware(), terminal, client_factory=model).run())
+    assert [r.typed for r in terminal.records] == ["(boot)", "su", "(password)", "@key C-d"]
+    assert model.sessions[0][2].startswith('<input secret="root" match="unset" ')
+    assert "".join(echoed) == "$ su\nPassword: \nlogout\n"       # the transcript: no password
+
+
 def test_a_script_ends_even_if_the_machine_will_not_halt(tmp_path):
     model = FakeModel(*[screen(">>> ", prompt=">>> ")] * 10)
     terminal = run_lines(tmp_path, model, ["python3"])
