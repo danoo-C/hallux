@@ -25,7 +25,10 @@ from claude_agent_sdk import (
 from hallux import sandbox
 from hallux.config import Hardware
 from hallux.disk import Disk
-from hallux.protocol import Action, Field, Form, Reply, ScreenStream, envelope, parse, resolve
+from hallux.passwords import Passwords
+from hallux.protocol import (
+    Action, Field, Form, Reply, ScreenStream, Secret, envelope, parse, resolve,
+)
 from hallux.statusbar import describe
 from hallux.tools import SERVER, build_server
 
@@ -52,6 +55,9 @@ class Terminal(Protocol):
 
     async def read_line(self, prompt: str, default: str = "") -> str | Key:
         """Read one line, or return the key for the machine that interrupted typing."""
+
+    async def read_secret(self, prompt: str) -> str | Key:
+        """Read a password: nothing typed is shown or kept, and a key carries no text."""
 
     def write(self, text: str) -> None: ...
 
@@ -86,7 +92,9 @@ class Machine:
         self.hardware = hardware
         self.terminal = terminal
         self.client_factory = client_factory
+        self.passwords = Passwords(self.disk.hidden / "passwords.json")
         self.prompt = ""
+        self.secret: Secret | None = None        # the prompt asks for a password
         self.spent = 0.0                         # dollars, all boots
         self.session_spent = 0.0                 # dollars, this boot (the SDK reports a total)
         self.fields: dict[str, Field] = {}       # block mode: the fields on screen now
@@ -140,18 +148,28 @@ class Machine:
                     if reply.form is not None:   # a full-screen program in block mode
                         reply = await self.block_mode(client, reply)
                         continue
+                    secret = self.secret
                     try:
-                        line = await self.terminal.read_line(self.prompt, restore)
+                        if secret:
+                            line = await self.terminal.read_secret(self.prompt)
+                        else:
+                            line = await self.terminal.read_line(self.prompt, restore)
                     except EOFError:
                         line = Key("C-d", "", keep_line=False)
                     except KeyboardInterrupt:
                         line = Key("C-c", "", keep_line=False)
                     if isinstance(line, Key):
+                        self.passwords.cancel()
                         reply = await self.send(client, "key", line.line, name=line.name,
                                                 cursor=line.cursor,
-                                                halt_on_error=line.name == "C-d")
+                                                halt_on_error=line.name == "C-d",
+                                                **({"secret": secret.name} if secret else {}))
                         restore = line.line if line.keep_line else ""
+                    elif secret:                 # a password: the AI hears only the verdict
+                        reply = await self.send(client, "input", **self.verdict(secret, line))
+                        restore = ""
                     else:
+                        self.passwords.cancel()
                         reply = await self.send(client, "input", line)
                         restore = ""
                     if reply.edit is not None:   # the AI rewrote the line (Tab, Ctrl-R...)
@@ -159,6 +177,17 @@ class Machine:
                 return reply.reboot
             finally:
                 await self.terminal.end_form()
+
+    def verdict(self, secret: Secret, typed: str) -> dict[str, str]:
+        """What the AI hears about a typed password: whether it's right, never what it is."""
+        attrs = {"secret": secret.name}
+        if secret.new:
+            attrs["new"] = self.passwords.offer(secret.name, typed)
+        else:
+            attrs["match"] = self.passwords.check(secret.name, typed)
+        if not typed:
+            attrs["empty"] = "yes"
+        return attrs
 
     def boot_report(self) -> tuple[str, bool]:
         """What <boot> carries: the memory and the machine's defining files, so a normal boot
@@ -258,7 +287,7 @@ class Machine:
         rest = self.stream.rest(reply.screen) if shown else None
         self.terminal.write(rest if rest is not None else reply.screen)
         if reply.prompt is not None:
-            self.prompt = reply.prompt
+            self.prompt, self.secret = reply.prompt, reply.secret
         else:
             log.warning("reply without <prompt>; keeping the previous prompt")
         return reply

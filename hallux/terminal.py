@@ -27,11 +27,12 @@ from prompt_toolkit.application import get_app
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import ANSI
-from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.history import DummyHistory, InMemoryHistory
 from prompt_toolkit.input import create_input
 from prompt_toolkit.input.typeahead import store_typeahead
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
+from prompt_toolkit.layout.processors import Processor, Transformation, TransformationInput
 from prompt_toolkit.output import create_output
 from prompt_toolkit.output.vt100 import Vt100_Output
 from prompt_toolkit.utils import get_cwidth
@@ -81,10 +82,16 @@ class Terminal:
         self.pinned: Size | None = None                  # the screen size the bar is pinned for
         self.raw = contextlib.ExitStack()                # raw mode for the whole session
 
+        prompt_output = self._prompt_output()
         self.session: PromptSession = PromptSession(
             history=InMemoryHistory(), key_bindings=self._prompt_keys(), input=self.input,
-            output=self._prompt_output())
-        self.session.app.after_render += lambda _: self._check_size()
+            output=prompt_output)
+        # Passwords: nothing typed is shown, and nothing is kept for ↑ to bring back.
+        self.secrets: PromptSession = PromptSession(
+            history=DummyHistory(), key_bindings=self._prompt_keys(secret=True),
+            input=self.input, output=prompt_output, input_processors=[_NoEcho()])
+        for session in (self.session, self.secrets):
+            session.app.after_render += lambda _: self._check_size()
         self.block = BlockMode(input=self.input, output=self.output, bar=bar,
                                power_cut=self.power_cut, ctrl_c=self._block_ctrl_c)
 
@@ -116,6 +123,10 @@ class Terminal:
         self.session.app.erase_when_done = False
         return await self.session.prompt_async(ANSI(zero_width(prompt)), default=default)
 
+    async def read_secret(self, prompt: str) -> str | Key:
+        """Read a password, the way a tty with echo off does (sudo, passwd, ssh)."""
+        return await self.secrets.prompt_async(ANSI(zero_width(prompt)))
+
     def write(self, text: str) -> None:
         self._write(text)                                # already made safe by decode()
         self._draw_bar()                                 # `clear` erases it; bring it back
@@ -134,23 +145,25 @@ class Terminal:
         size = self.output.get_size()
         return size.columns, size.rows - (1 if self.bar else 0)
 
-    def _prompt_keys(self) -> KeyBindings:
+    def _prompt_keys(self, secret: bool = False) -> KeyBindings:
+        """The keys for the machine. At a password prompt they carry no text, and the keys
+        that work in place do nothing (Ctrl-R would show what's typed in its search line)."""
         keys = KeyBindings()
         for key, (name, echo) in LINE_ENDING.items():
-            keys.add(key, eager=True)(self._line_ending(name, echo))
+            keys.add(key, eager=True)(self._line_ending(name, echo, secret))
         empty = Condition(lambda: get_app().current_buffer.text == "")
-        keys.add("c-d", filter=empty, eager=True)(self._line_ending("C-d", ""))
+        keys.add("c-d", filter=empty, eager=True)(self._line_ending("C-d", "", secret))
         for key, name in IN_PLACE.items():
-            keys.add(*key, eager=True)(self._in_place(name))
+            keys.add(*key, eager=True)((lambda event: None) if secret else self._in_place(name))
         keys.add(POWER_CUT_KEY, eager=True)(lambda event: self.power_cut())
         return keys
 
-    def _line_ending(self, name: str, echo: str) -> Callable:
+    def _line_ending(self, name: str, echo: str, secret: bool = False) -> Callable:
         def handle(event) -> None:
             if name == "C-c":
                 self.count_ctrl_c()
             buf = event.app.current_buffer
-            line, cursor = buf.text, buf.cursor_position
+            line, cursor = ("", 0) if secret else (buf.text, buf.cursor_position)
             buf.cursor_position = len(buf.text)
             buf.insert_text(echo)                        # shown, not sent: "ls -la^C"
             event.app.exit(result=Key(name, line, cursor, keep_line=False))
@@ -306,6 +319,13 @@ class Terminal:
     def _write(self, text: str) -> None:
         sys.stdout.write(text)
         sys.stdout.flush()
+
+
+class _NoEcho(Processor):
+    """Shows nothing of the typed line, and keeps the cursor where the prompt ends."""
+
+    def apply_transformation(self, transformation_input: TransformationInput) -> Transformation:
+        return Transformation([], source_to_display=lambda i: 0, display_to_source=lambda i: 0)
 
 
 class _BarKeepingOutput(Vt100_Output):

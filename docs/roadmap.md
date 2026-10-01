@@ -53,8 +53,9 @@ next, in detail, is in [next-steps.md](next-steps.md).
 - [ ] **8. Polish:**
   - [x] partial redraws: `<patch>` with only the changed rows (live: about half the time of a
     whole screen);
-  - window resizing inside full-screen programs;
-  - hidden password input (`sudo`).
+  - [x] hidden password input: `<prompt secret="user">` is read with echo off, and the
+    password is checked by hallux and never sent to the AI (`hallux/passwords.py`);
+  - window resizing inside full-screen programs.
 - [ ] **Later:**
   - smarter AI tab completion;
   - a "CPU" subagent;

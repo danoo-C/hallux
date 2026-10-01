@@ -9,7 +9,8 @@ The AI answers every envelope with
 optionally followed by control tags (<halt/>, <reboot/>, <tty mode="raw"/>), the line to
 put back at the prompt (<edit>cat /etc/</edit>, for Tab completion and friends), a new
 working directory (<cwd>/home/user</cwd>) and, for a
-full-screen program in block mode, a <form> of editable fields (see Form). It writes
+full-screen program in block mode, a <form> of editable fields (see Form). A prompt that
+asks for a password says so (<prompt secret="user">, see Secret). It writes
 control characters as Unicode control pictures ("␛" for ESC), which decode() turns into
 real bytes.
 """
@@ -42,6 +43,8 @@ UNSAFE_CONTROLS = re.compile(r"[\x00-\x06\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f\x80-\x9f
 COLOR_START = re.compile(r"(?:\\(?:e|033|x1b|u001b))?\[[0-9;]{0,19}$"
                          r"|\\(?:e|0|03|033|x|x1|x1b|u|u0|u00|u001|u001b)?$")
 TTY_TAG = re.compile(r'<tty\s+mode="(raw|cooked)"\s*/>')
+PROMPT_TAG = re.compile(r"<prompt\b([^>]*)>")           # <prompt> or <prompt secret="user">
+
 FORM_START = re.compile(r"</prompt>(?:\s*<(?:halt|reboot)/>|\s*<tty[^>]*/>)*\s*<form\b")
 FIELD_TAG = re.compile(r"<(editor|line|pager)\b([^>]*?)(/>|>(.*?)</\1>)", re.DOTALL)
 FOOTER_TAG = re.compile(r"<footer>(.*?)</footer>", re.DOTALL)
@@ -121,9 +124,18 @@ class FileWrite:
 
 
 @dataclass(frozen=True)
+class Secret:
+    """A prompt that asks for a password: typed with echo off, checked by hallux and never
+    sent to the AI (see hallux.passwords)."""
+    name: str                     # whose password: "user", "root", "bob@example.com"
+    new: bool = False             # a new password being set (passwd), typed twice
+
+
+@dataclass(frozen=True)
 class Reply:
     screen: str                   # printed byte for byte (in block mode: the background)
     prompt: str | None            # None when the reply had no <prompt>
+    secret: Secret | None = None  # the prompt asks for a password
     halt: bool = False
     reboot: bool = False
     tty: str | None = None        # "raw" or "cooked" when the AI switches modes
@@ -183,10 +195,12 @@ def parse(text: str) -> Reply:
         text = text[:form_at]
     body, closed, tail = text.rpartition("</screen>")
     if not closed:                                # no </screen>: the prompt ends the screen
-        body, has_prompt, rest = text.partition("<prompt>")
-        tail = "<prompt>" + rest if has_prompt else ""
+        at = found.start() if (found := PROMPT_TAG.search(text)) else len(text)
+        body, tail = text[:at], text[at:]
     screen = body.partition("<screen>")[2] if "<screen>" in body else body
-    prompt = tail.partition("<prompt>")[2].partition("</prompt>")[0] if "<prompt>" in tail else None
+    opening = PROMPT_TAG.search(tail)
+    prompt = tail[opening.end():].partition("</prompt>")[0] if opening else None
+    asks = _attributes(opening[1]) if opening else {}
     tty = TTY_TAG.search(tail)
     files = tuple(FileWrite(path=a["path"], content=content.removeprefix("\n"),
                             append=a.get("append") == "yes")
@@ -197,6 +211,7 @@ def parse(text: str) -> Reply:
     return Reply(
         screen=decode(screen.removeprefix("\n")),
         prompt=None if prompt is None else decode(prompt),
+        secret=Secret(asks["secret"], asks.get("new") == "yes") if asks.get("secret") else None,
         halt="<halt/>" in tail,
         reboot="<reboot/>" in tail,
         tty=tty[1] if tty else None,

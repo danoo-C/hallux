@@ -10,6 +10,7 @@ from prompt_toolkit.input import create_pipe_input  # noqa: E402
 from prompt_toolkit.output import DummyOutput  # noqa: E402
 
 from hallux.machine import Key  # noqa: E402
+from hallux.protocol import plain  # noqa: E402
 from hallux.statusbar import StatusBar  # noqa: E402
 from hallux.terminal import Terminal, zero_width  # noqa: E402
 
@@ -70,6 +71,60 @@ def test_line_editing_stays_local():
     assert typed("ab\x1b[D\x04\r") == "a"                 # Ctrl-D with text deletes a character
     assert typed("hello world\x17\x17there\r") == "there"  # Ctrl-W deletes words
     assert typed("x\x01y\x05z\r") == "yxz"                # Ctrl-A and Ctrl-E move
+
+
+def on_screen(read, keys):
+    """What a real terminal would be sent while `keys` are typed at a prompt, and the line."""
+    import io
+
+    from prompt_toolkit.data_structures import Size
+    from prompt_toolkit.output.vt100 import Vt100_Output
+
+    screen = io.StringIO()
+    output = Vt100_Output(screen, lambda: Size(rows=30, columns=100), term="xterm-256color")
+
+    async def main():
+        with create_pipe_input() as pipe:
+            terminal = Terminal(None, input=pipe, output=output)
+            pipe.send_text(keys)
+            return await getattr(terminal, read)("Password: ")
+    line = asyncio.run(asyncio.wait_for(main(), 10))
+    return plain(screen.getvalue()), line
+
+
+def test_a_password_is_read_without_showing_it():
+    shown, line = on_screen("read_line", "hunter2\r")
+    assert line == "hunter2" and "Password: hunter2" in shown          # a normal line
+    shown, line = on_screen("read_secret", "hunter2\r")
+    assert line == "hunter2" and "Password:" in shown
+    assert shown.replace("Password:", "").strip() == ""                # and nothing else
+
+
+def test_a_password_is_not_recalled():
+    async def script(terminal, type_keys):
+        type_keys("ls\r")
+        await terminal.read_line("$ ")
+        type_keys("hunter2\r")
+        await terminal.read_secret("Password: ")
+        type_keys("\x1b[A\r")                          # ↑ at a password prompt: nothing
+        secret = await terminal.read_secret("Password: ")
+        type_keys("\x1b[A\r")                          # ↑ at the shell: the last command
+        return secret, await terminal.read_line("$ ")
+    assert with_terminal(script) == ("", "ls")
+
+
+def secret(keys):
+    async def script(terminal, type_keys):
+        type_keys(keys)
+        return await terminal.read_secret("Password: ")
+    return with_terminal(script)
+
+
+def test_keys_at_a_password_prompt_carry_no_text():
+    assert secret("hunter2\x03") == Key("C-c", "", 0, keep_line=False)
+    assert secret("hunter2\x1a") == Key("C-z", "", 0, keep_line=False)
+    assert secret("\x04") == Key("C-d", "", 0, keep_line=False)
+    assert secret("hun\tter\x12\x1bOP2\r") == "hunter2"   # Tab, Ctrl-R and F1 do nothing here
 
 
 def test_ctrl_shift_del_pulls_the_plug():

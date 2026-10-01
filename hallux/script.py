@@ -2,7 +2,7 @@
 
 A script has one entry per line:
 
-    ls -la          a command: typed, then Enter
+    ls -la          a command: typed, then Enter (at a password prompt: the password)
     @key C-c        a key for the machine (C-c, Tab, C-l, ...)
     @action C-x     an action key in a full-screen program (block mode)
     # a comment     skipped
@@ -67,6 +67,12 @@ class ScriptTerminal:
         pass
 
     async def read_line(self, prompt: str, default: str = "") -> str | Key:
+        return self._next(prompt, default)
+
+    async def read_secret(self, prompt: str) -> str | Key:
+        return self._next(prompt, secret=True)          # the next line is the password
+
+    def _next(self, prompt: str, default: str = "", secret: bool = False) -> str | Key:
         if not self.lines:
             self.eofs += 1
             if self.eofs > 3:
@@ -74,11 +80,13 @@ class ScriptTerminal:
             self._new_record("@key C-d", prompt)
             return Key("C-d", "", keep_line=False)
         line = self.lines.pop(0)
-        self.echo(plain(prompt) + (line if not line.startswith("@") else f"[{line}]") + "\n")
-        self._new_record(line, prompt)
+        shown = f"[{line}]" if line.startswith("@") else "" if secret else line
+        self.echo(plain(prompt) + shown + "\n")
         if line.startswith("@key "):
+            self._new_record(line, prompt)
             name = line[5:].strip()
             return Key(name, default, len(default), keep_line=name not in LINE_ENDING_KEYS)
+        self._new_record("(password)" if secret else line, prompt)   # not in the transcript
         return default + line
 
     def write(self, text: str) -> None:
@@ -163,7 +171,7 @@ def summary(records: list[Record], hardware: Hardware) -> str:
 
 SETUP = ['hallux my prompt is "check> "',
          "hallux every error message starts with OOPS:",
-         "hallux user can use sudo without a password",    # scripts can't type passwords
+         "hallux user can use sudo without a password",    # a prompt would eat the next line
          "echo remember me > note.txt",
          "sudo apt install -y cowsay"]
 # (command, what must hold): "same" output before and after the reboot, the error "rule"

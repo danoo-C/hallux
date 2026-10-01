@@ -75,6 +75,7 @@ class FakeTerminal:
         self.keys = list(keys)
         self.screen = ""
         self.prompts = []                    # (prompt, restored line) per read
+        self.secret_prompts = []             # the prompts that were read with echo off
         self.statuses = []                   # every set_status call
         self.activities = []                 # what each busy period was about
         self.ctrl_c_while_busy = list(ctrl_c_while_busy)   # per busy period: press Ctrl-C?
@@ -101,6 +102,10 @@ class FakeTerminal:
         if isinstance(key, type) and issubclass(key, BaseException):
             raise key
         return key
+
+    async def read_secret(self, prompt):
+        self.secret_prompts.append(prompt)
+        return await self.read_line(prompt)
 
     streams = False
 
@@ -204,6 +209,74 @@ def test_keys_go_to_the_ai(tmp_path):
     assert ctrl_l.startswith('<key name="C-l" cursor="0" ') and ctrl_l.endswith(">ls -l</key>")
     assert terminal.screen == "\x1b[H\x1b[2J"
     assert terminal.prompts[2] == ("user@hallux:~$ ", "ls -l")      # the typed line comes back
+
+
+def ask(text, name="user", new=False):
+    """A reply that asks for a password."""
+    attrs = f'secret="{name}"' + (' new="yes"' if new else "")
+    return f"<screen>\n</screen><prompt {attrs}>{text}</prompt>"
+
+
+def test_a_password_stays_on_this_computer(tmp_path, caplog):
+    """sudo, passwd, sudo again: the AI hears whether a password is right, never the password."""
+    caplog.set_level("INFO", logger="hallux")
+    model = FakeModel(screen(""),
+                      ask("[sudo] password for user: "),             # sudo true
+                      screen(""),                                    # none set: anything goes
+                      ask("New password: ", new=True),               # passwd
+                      ask("Retype new password: ", new=True),
+                      screen("passwd: password updated successfully\n"),
+                      ask("[sudo] password for user: "),             # sudo true
+                      ask("[sudo] password for user: "),             # wrong: asked again
+                      screen(""),
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("sudo true", "hunter2", "passwd", "s3cret", "s3cret",
+                            "sudo true", "hunter2", "s3cret", EOFError)
+    run(tmp_path, model, terminal)
+    _, _, unset, _, first, saved, _, wrong, right, _ = model.sessions[0]
+    assert unset.startswith('<input secret="user" match="unset" ') and unset.endswith("></input>")
+    assert first.startswith('<input secret="user" new="first" ')
+    assert saved.startswith('<input secret="user" new="saved" ')
+    assert wrong.startswith('<input secret="user" match="no" ')
+    assert right.startswith('<input secret="user" match="yes" ')
+    assert terminal.secret_prompts == ["[sudo] password for user: ", "New password: ",
+                                       "Retype new password: ", "[sudo] password for user: ",
+                                       "[sudo] password for user: "]
+    seen = "".join(model.sessions[0]) + caplog.text + (tmp_path / ".hallux/passwords.json").read_text()
+    assert "sudo true" in seen and "hunter2" not in seen and "s3cret" not in seen
+
+
+def test_only_enter_at_a_password_prompt_is_reported(tmp_path):
+    model = FakeModel(screen(""), ask("Password: ", "root"), screen("su: Authentication failure\n"),
+                      screen("", prompt="", tail="<halt/>"))
+    run(tmp_path, model, FakeTerminal("su", "", EOFError))
+    assert model.sessions[0][2].startswith('<input secret="root" match="unset" empty="yes" ')
+
+
+def test_a_key_at_a_password_prompt_names_it_and_drops_a_half_set_password(tmp_path):
+    model = FakeModel(screen(""),
+                      ask("New password: ", new=True), ask("Retype new password: ", new=True),
+                      screen(""),                                    # Ctrl-C: back to the shell
+                      ask("New password: ", new=True), screen(""),
+                      screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("passwd", "abc", Key("C-c", "", keep_line=False), "passwd", "abc", EOFError)
+    run(tmp_path, model, terminal)
+    _, _, first, ctrl_c, _, again, eof = model.sessions[0]
+    assert ctrl_c.startswith('<key name="C-c" cursor="0" secret="user" ') and ctrl_c.endswith("></key>")
+    assert first.startswith('<input secret="user" new="first" ')
+    assert again.startswith('<input secret="user" new="first" ')    # not taken for the retype
+    assert "secret" not in eof                                       # the shell prompt again
+    assert not (tmp_path / ".hallux" / "passwords.json").exists()
+
+
+def test_a_failed_answer_leaves_the_password_prompt_hidden(tmp_path, capsys):
+    model = FakeModel(screen(""), ask("Password: "),
+                      result("overloaded", error=True),              # the prompt stays as it was
+                      screen(""), screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("su", "hunter2", "hunter2", EOFError)
+    run(tmp_path, model, terminal)
+    assert terminal.secret_prompts == ["Password: ", "Password: "]
+    assert "hunter2" not in "".join(model.sessions[0])
 
 
 def test_cwd_travels_in_every_envelope(tmp_path):

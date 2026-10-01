@@ -1,4 +1,4 @@
-from hallux.protocol import Field, Form, Reply, decode, envelope, parse, resolve
+from hallux.protocol import Field, Form, Reply, Secret, decode, envelope, parse, resolve
 
 
 def test_envelope():
@@ -36,6 +36,19 @@ def test_parse_control_tags():
     assert parse("<screen>\n</screen><prompt></prompt><reboot/>").reboot
     assert parse('<screen>\n</screen><prompt></prompt><tty mode="raw"/>').tty == "raw"
     assert not parse("<screen>\n<halt/>\n</screen><prompt>$ </prompt>").halt  # output, not a tag
+
+
+def test_a_prompt_can_ask_for_a_password():
+    reply = parse('<screen>\n</screen><prompt secret="user">[sudo] password for user: </prompt>')
+    assert reply.prompt == "[sudo] password for user: " and reply.secret == Secret("user")
+    new = parse('<screen>\n</screen><prompt secret="root" new="yes">New password: </prompt>')
+    assert new.prompt == "New password: " and new.secret == Secret("root", new=True)
+    assert parse('<screen>\nx\n<prompt secret="bob@example.com">Password: </prompt>') == Reply(
+        screen="x\n", prompt="Password: ", secret=Secret("bob@example.com"))
+    assert parse("<screen>\n</screen><prompt>> </prompt>").secret is None
+    assert parse('<screen>\n</screen><prompt secret="">$ </prompt>').secret is None
+    shown = parse('<screen>\n<prompt secret="user">\n</screen><prompt>$ </prompt>')   # output
+    assert shown.screen == '<prompt secret="user">\n' and shown.secret is None
 
 
 def test_parse_survives_a_broken_format():
