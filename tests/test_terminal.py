@@ -9,7 +9,7 @@ from prompt_toolkit.formatted_text import ANSI, to_formatted_text  # noqa: E402
 from prompt_toolkit.input import create_pipe_input  # noqa: E402
 from prompt_toolkit.output import DummyOutput  # noqa: E402
 
-from hallux.machine import Key  # noqa: E402
+from hallux.machine import Interrupted, Key  # noqa: E402
 from hallux.protocol import plain  # noqa: E402
 from hallux.statusbar import StatusBar  # noqa: E402
 from hallux.terminal import Terminal, zero_width  # noqa: E402
@@ -279,3 +279,125 @@ def test_retract_erases_the_rows_a_text_took():
             terminal.retract("0123456789")             # exactly one row
             return written
     assert asyncio.run(main()) == ["\x1b[3A\r\x1b[J", "\x1b[1A\r\x1b[J", "\r\x1b[J"]
+
+
+# ---------------------------------------------------------------- interrupted from outside
+
+async def typed_in(terminal, text, session=None):
+    """Wait until the prompt that is being read holds this text."""
+    app = (session or terminal.session).app
+    for _ in range(500):
+        if app.is_running and app.current_buffer.text == text:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"the prompt never held {text!r}")
+
+
+def test_an_interrupt_ends_the_prompt_and_hands_back_what_was_typed():
+    async def script(terminal, type_keys):
+        reading = asyncio.create_task(terminal.read_line("$ "))
+        type_keys("ls -l")
+        await typed_in(terminal, "ls -l")
+        assert terminal.interrupt_prompt() is True
+        first = await reading
+        reading = asyncio.create_task(terminal.read_line("$ ", "echo hello"))
+        type_keys("\x1b[D\x1b[D")                         # two to the left
+        await typed_in(terminal, "echo hello")
+        await asyncio.sleep(0.05)
+        assert terminal.interrupt_prompt() is True
+        return first, await reading
+
+    first, second = with_terminal(script)
+    assert first == Interrupted("ls -l", 5)
+    assert second.line == "echo hello" and second.cursor in (8, 10)   # the keys may still be on the way
+
+
+def test_an_interrupt_with_nothing_being_read_does_nothing():
+    async def script(terminal, type_keys):
+        nothing_read = terminal.interrupt_prompt()
+        reading = asyncio.create_task(terminal.read_line("$ "))
+        type_keys("ls")
+        await typed_in(terminal, "ls")
+        twice = terminal.interrupt_prompt(), terminal.interrupt_prompt()   # the second finds nothing
+        interrupted = await reading
+        async with terminal.busy(lambda: None):
+            while_busy = terminal.interrupt_prompt()
+        type_keys("\r")
+        return nothing_read, twice, interrupted, while_busy, await terminal.read_line("$ ", "ls")
+
+    assert with_terminal(script) == (False, (True, False), Interrupted("ls", 2), False, "ls")
+
+
+def test_an_interrupt_leaves_a_password_prompt_alone():
+    async def script(terminal, type_keys):
+        reading = asyncio.create_task(terminal.read_secret("Password: "))
+        type_keys("hunter2")
+        await typed_in(terminal, "hunter2", terminal.secrets)
+        assert terminal.interrupt_prompt() is False
+        await asyncio.sleep(0.05)
+        assert not reading.done()                                      # still asking
+        type_keys("\r")
+        return await reading
+
+    assert with_terminal(script) == "hunter2"
+
+
+def test_keys_that_arrive_after_an_interrupt_wait_for_the_next_prompt():
+    async def script(terminal, type_keys):
+        reading = asyncio.create_task(terminal.read_line("$ "))
+        type_keys("ls")
+        await typed_in(terminal, "ls")
+        assert terminal.interrupt_prompt() is True
+        type_keys(" -l\r")                                            # typed in the same moment
+        interrupted = await reading
+        return interrupted, await terminal.read_line("$ ", interrupted.line)
+
+    assert with_terminal(script) == (Interrupted("ls", 2), "ls -l")    # nothing is lost
+
+
+def test_an_interrupt_after_enter_changes_nothing():
+    async def script(terminal, type_keys):
+        reading = asyncio.create_task(terminal.read_line("$ "))
+        type_keys("pwd")
+        await typed_in(terminal, "pwd")
+        terminal.session.app.exit(result="pwd")                        # what Enter does
+        return terminal.interrupt_prompt(), await reading              # in the same moment
+
+    assert with_terminal(script) == (False, "pwd")                     # the line wins
+
+
+def test_an_addons_event_interrupts_the_real_prompt(tmp_path):
+    """The whole path with the real terminal: a line half typed, an event from another thread,
+    the AI's answer, and the line back at the prompt to be finished."""
+    import threading
+
+    from test_machine import FakeModel, result, screen
+
+    from hallux import addons
+    from hallux.config import Hardware
+    from hallux.machine import Machine
+
+    hub = addons.Events()
+    bell = addons.Addon("bell", "A bell.", "the manual", {}, has_events=True)
+    model = FakeModel([lambda: hub.listen("bell")] + result(screen("", prompt="$ ")),
+                      screen("ding\n", prompt="$ "),
+                      screen("logout\n", prompt="", tail="<halt/>"))
+
+    async def script(terminal, type_keys):
+        machine = Machine(tmp_path, Hardware(), terminal, client_factory=model, addons=[bell],
+                          events=hub)
+        running = asyncio.create_task(machine.run())
+        type_keys("echo hel")
+        await typed_in(terminal, "echo hel")
+        threading.Thread(target=hub.emit, args=("bell", {"ring": 1})).start()
+        await typed_in(terminal, "echo hel")                           # gone, and back again
+        while len(model.sessions[0]) < 2:
+            await asyncio.sleep(0.01)
+        await typed_in(terminal, "echo hel")
+        type_keys("lo\r")
+        await running
+
+    with_terminal(script, bar=StatusBar("claude-opus-5-5", "low"))
+    boot, events, typed = model.sessions[0]
+    assert events.startswith("<events ") and '<event addon="bell">{"ring": 1}</event>' in events
+    assert typed.endswith(">echo hello</input>")                       # nothing typed was lost

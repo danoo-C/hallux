@@ -9,7 +9,7 @@ from typing import Any, Callable, Protocol, Sequence
 from claude_agent_sdk import SdkMcpTool, ToolAnnotations, create_sdk_mcp_server, tool
 from claude_agent_sdk.types import McpSdkServerConfig
 
-from hallux.addons import Addon, call, description_for, schema_for
+from hallux.addons import Addon, Events, call, description_for, schema_for
 from hallux.disk import Disk
 
 SERVER = "hallux"
@@ -49,8 +49,8 @@ def run(op: Callable[[], Any]) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "is_error": is_error}
 
 
-def build_tools(disk: Disk, fields: Fields | None = None,
-                addons: Sequence[Addon] = ()) -> list[SdkMcpTool]:
+def build_tools(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon] = (),
+                events: Events | None = None) -> list[SdkMcpTool]:
     def make(name: str, description: str, input_schema: dict, method: Callable,
              annotations: ToolAnnotations | None = None) -> SdkMcpTool:
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
@@ -67,11 +67,20 @@ def build_tools(disk: Disk, fields: Fields | None = None,
     def list_addons() -> list[dict]:
         return [{"name": addon.name, "summary": addon.summary} for addon in addons]
 
-    def addon_help(name: str) -> dict:
+    def attached(name: str) -> Addon:
         for addon in addons:
             if addon.name == name:
-                return {"manual": addon.manual}
+                return addon
         raise ValueError(f"no addon {name!r}; there are: {', '.join(a.name for a in addons)}")
+
+    def addon_help(name: str) -> dict:
+        return {"manual": attached(name).manual}
+
+    def addon_listen(name: str, on: bool = True) -> dict:
+        if not attached(name).has_events:
+            raise ValueError(f"the addon {name!r} has no events")
+        events.listen(name, on)
+        return {"listening": events.listening()}
 
     block_mode = [] if fields is None else [
         make("save_field",
@@ -140,13 +149,18 @@ def build_tools(disk: Disk, fields: Fields | None = None,
              "An addon's manual: what it is, what its functions do and what their limits are. "
              "Read it before you use that addon for the first time in a boot.",
              schema({"name": TEXT}), addon_help, READS),
+    ]) + ([] if events is None or not any(addon.has_events for addon in addons) else [
+        make("addon_listen",
+             "Hear an addon's events from now on, for the rest of this boot: they arrive as "
+             "<events>. on=false stops it. Returns the addons you listen to.",
+             schema({"name": TEXT}, {"on": FLAG}), addon_listen),
     ])
 
 
-def build_server(disk: Disk, fields: Fields | None = None,
-                 addons: Sequence[Addon] = ()) -> tuple[McpSdkServerConfig, list[str]]:
+def build_server(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon] = (),
+                 events: Events | None = None) -> tuple[McpSdkServerConfig, list[str]]:
     """The MCP server for ClaudeAgentOptions.mcp_servers, and the names for allowed_tools."""
-    tools = build_tools(disk, fields, addons)
+    tools = build_tools(disk, fields, addons, events)
     return create_sdk_mcp_server(SERVER, tools=tools), [f"mcp__{SERVER}__{t.name}" for t in tools]
 
 

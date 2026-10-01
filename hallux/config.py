@@ -25,6 +25,7 @@ class Hardware:
     keep_transcripts: bool = False            # True: Claude Code also keeps its own transcript
     os_sandbox: bool = False                  # True: Claude Code runs inside bubblewrap
     tick_budget_usd: float = 0.25             # raw mode: live updates per program run, then pause
+    event_budget_usd: float = 0.25            # addon events since the last typed line, then pause
     addons: tuple[str, ...] | None = None     # the addons it gets; None: every one that loaded
 
     @property
@@ -64,9 +65,10 @@ def _validate(hw: Hardware, path: Path) -> None:
     for name in ("status_bar", "keep_transcripts", "os_sandbox"):
         if not isinstance(getattr(hw, name), bool):
             raise ValueError(f"{path}: {name} must be true or false")
-    tick = hw.tick_budget_usd
-    if isinstance(tick, bool) or not isinstance(tick, int | float) or tick < 0:
-        raise ValueError(f"{path}: tick_budget_usd must be a number, 0 or more")
+    for name in ("tick_budget_usd", "event_budget_usd"):
+        budget = getattr(hw, name)
+        if isinstance(budget, bool) or not isinstance(budget, int | float) or budget < 0:
+            raise ValueError(f"{path}: {name} must be a number, 0 or more")
     if hw.addons is not None and not (isinstance(hw.addons, tuple) and all(
             isinstance(name, str) and ADDON_NAME.fullmatch(name) for name in hw.addons)):
         raise ValueError(f'{path}: addons must be a list of addon names, like ["window"]')

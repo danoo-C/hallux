@@ -17,6 +17,7 @@ real bytes.
 from __future__ import annotations
 
 import html
+import json
 import re
 from dataclasses import dataclass, field, replace
 
@@ -152,6 +153,13 @@ def envelope(tag: str, body: str = "", **attrs: object) -> str:
     """One message to the AI, e.g. <input cwd="/home/user" ...>ls -la</input>."""
     attributes = "".join(f' {name}="{html.escape(str(value))}"' for name, value in attrs.items())
     return f"<{tag}{attributes}>{body}</{tag}>"
+
+
+def json_body(data: object) -> str:
+    """JSON for the body of a message. Its text is untrusted, so <, > and & are written as
+    escapes: nothing in it can end the message early or start another one."""
+    text = json.dumps(data, ensure_ascii=False)
+    return text.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
 
 
 def decode(text: str) -> str:

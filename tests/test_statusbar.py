@@ -50,6 +50,9 @@ def test_describe_and_model_names():
     assert describe("mcp__sound_card__set_volume", {}) == "sound_card: set_volume"
     assert describe("addon_help", {"name": "music"}) == "reading the manual of music"
     assert describe("list_addons", {}) == "listing the addons"
+    assert describe("addon_listen", {"name": "window"}) == "listening to window"
+    assert describe("addon_listen", {"name": "window", "on": True}) == "listening to window"
+    assert describe("addon_listen", {"name": "window", "on": False}) == "no longer listening to window"
     assert short_model("claude-opus-5-5") == "opus 5.5"
     assert short_model("claude-haiku-4-5-20251001") == "haiku 4.5"
     assert short_model("sonnet") == "sonnet"
@@ -78,3 +81,16 @@ def test_a_note_replaces_the_idle_hint():
     assert text(bar, 100).startswith(" • live updates paused: tick budget used")
     bar.update(busy=True, started=0.0)
     assert "thinking…" in text(bar, 100, now=1.0)            # work still shows while busy
+
+
+def test_the_idle_bar_says_when_the_machine_listens():
+    bar = StatusBar("claude-opus-5-5", "low")
+    bar.update(listening="window, bell")
+    assert text(bar, 100).startswith(" • listening: window, bell ")
+    assert "power off" not in text(bar, 100)
+    bar.update(note="addon music skipped: No module named 'numpy'")
+    assert text(bar, 100).startswith(" • addon music skipped")       # a note still comes first
+    bar.update(note=None, busy=True, started=0.0)
+    assert "thinking…" in text(bar, 100, now=1.0)
+    bar.update(busy=False, listening="")
+    assert text(bar, 100).startswith(" • power off: ctrl+shift+del")

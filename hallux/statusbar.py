@@ -26,7 +26,7 @@ VERBS = {"list_dir": "listing", "stat": "checking", "read_file": "reading", "fin
          "write_file": "writing", "edit_file": "editing", "make_dir": "creating",
          "chdir": "entering", "remove": "removing", "move": "moving", "copy": "copying",
          "save_field": "saving", "list_addons": "listing the addons",
-         "addon_help": "reading the manual of"}
+         "addon_help": "reading the manual of", "addon_listen": "listening to"}
 
 
 def describe(tool: str, args: dict) -> str:
@@ -36,6 +36,8 @@ def describe(tool: str, args: dict) -> str:
         return f"{addon}: {function}"
     if tool.startswith("memory_"):
         return "remembering…"
+    if tool == "addon_listen" and args.get("on") is False:
+        return f"no longer listening to {args.get('name', '')}".strip()
     target = str(args.get("path") or args.get("src") or args.get("name") or "")
     return f"{VERBS.get(tool, tool.replace('_', ' '))} {target}".strip()
 
@@ -56,6 +58,7 @@ class Status:
     tools: int = 0                    # tool calls in the current turn
     error: str | None = None
     note: str | None = None           # shown instead of the idle hint (e.g. ticks paused)
+    listening: str = ""               # the addons whose events the AI hears: "window, bell"
     cost: float = 0.0                 # dollars since hallux started
     seconds: float | None = None      # how long the last answer took
     started: float = field(default=0.0)
@@ -85,6 +88,8 @@ class StatusBar:
                 text += f" ({s.tools})"
         elif s.note:
             light, light_color, text, text_color = "•", GRAY, s.note, YELLOW_NOTE
+        elif s.listening:
+            light, light_color, text, text_color = "•", GRAY, f"listening: {s.listening}", GRAY
         else:
             light, light_color, text, text_color = "•", GRAY, IDLE_HINT, DIM
         info = " · ".join(part for part in (
