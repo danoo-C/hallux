@@ -1,7 +1,7 @@
 # Plan: the addon system
 
-**Status:** steps 1 to 6 are built. Step 7 (the disk handle) and step 8 (the documentation)
-are not. The design it follows is [addons.md](../addons.md), sections 1 to 6.
+**Status:** steps 1 to 6 and step 8 (the documentation) are built. Step 7, the disk handle,
+is not. The design it follows is [addons.md](../addons.md), sections 1 to 6.
 
 **Not in this plan:** the music addon ([addon-music.md](../addon-music.md)) and worker agents
 (section 8 of the design). The first addon built on this system is the small example in

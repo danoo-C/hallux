@@ -1,7 +1,27 @@
 # Addons
 
-**Status:** a proposal as discussed. Nothing here is implemented, and no code exists for it yet.
-The open questions are at the end, with my recommendations.
+**Status:** built, except what is marked "later". This document is the design as it was
+proposed. The step-by-step record, with every decision taken while building, is
+[plans/addons-plan.md](plans/addons-plan.md).
+
+**What is built:** the loader, the tools, the list in `<boot>`, the prompt section, the
+per-world setting and the `stop()` hooks (`hallux/addons.py` and around it), and events
+(section 9). The first addon is a window with a text box, `addons/window.py`
+([plans/addon-pygame-example-plan.md](plans/addon-pygame-example-plan.md)), not the music addon
+of section 7.
+
+**What isn't:** the handle through which an addon reads the machine's files (open question
+4), the music addon, and worker agents (section 8).
+
+**Where the code went further than this document:**
+- The loader makes nine checks, not four. An exposed function needs a docstring and type
+  hints, `EXPOSED` can't be empty, and a function can't be `async`.
+- A call that takes longer than 10 seconds, or returns more than 4000 characters, is a tool
+  error.
+- `stop()` is also called at the end of every boot in which the addon was never used.
+- An addons folder inside a machine's folder is never loaded.
+
+The six open questions at the end were all settled as recommended.
 
 ## In short
 
@@ -50,8 +70,9 @@ Where each kind of thing belongs:
 | The module docstring's first line | yes | The one-line summary shown in the addon list |
 | `prompt()` | yes | Returns the manual as text. It must exist and return something |
 | `EXPOSED` | yes | The list of functions the AI may call. Nothing else in the file is reachable |
-| The exposed functions | yes | Plain functions with type hints; Hallux builds the argument schemas from the hints |
+| The exposed functions | yes | Plain functions with a docstring and type hints; Hallux builds the tool's description from the docstring and the argument schema from the hints |
 | `stop()` | no | Called on halt, reboot and the hard exit, to end whatever is still running |
+| `connect(emit)` | no | Called once at load. The addon keeps `emit` and reports events with it ([addon-events.md](addon-events.md)) |
 | `agent()` | no, later | A worker agent the addon brings (section 8) |
 
 A sketch of the contract, with the bodies left out:
@@ -258,10 +279,10 @@ chat between models.
 
 ## 9. Later: events from addons
 
-In everything above, the AI acts only when the user types. An addon could also wake the AI
-by itself: a button pressed in a window, a key on a MIDI keyboard. The AI would hear about
-an addon's events only after it has asked to listen in that boot. The design has its own
-document: [addon-events.md](addon-events.md).
+In everything above, the AI acts only when the user types. An addon can also wake the AI by
+itself: a button pressed in a window, a key on a MIDI keyboard. The AI hears about an
+addon's events only after it has asked to listen in that boot. This is built; the design has
+its own document: [addon-events.md](addon-events.md).
 
 ---
 

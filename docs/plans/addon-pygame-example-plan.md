@@ -1,6 +1,6 @@
 # Plan: an example addon with a real window
 
-**Status:** built, except the live run (step 5 in section 6): `addons/window.py` and
+**Status:** built, and the live run worked on 2026-10-01: `addons/window.py` and
 `tests/test_addon_window.py`. It runs on the addon system from
 [addons-plan.md](addons-plan.md), steps 1 to 6.
 

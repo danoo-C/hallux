@@ -1,7 +1,7 @@
 # Plan: events from addons
 
-**Status:** steps 1 to 6 are built, and the live run (step 7) worked on 2026-10-01. Step 8,
-the documentation, is not done. The design it follows is
+**Status:** done. Steps 1 to 6 are built, the live run (step 7) worked on 2026-10-01, and
+the documentation (step 8) is written. The design it follows is
 [addon-events.md](../addon-events.md), with its six decisions.
 
 **Not in this plan:** events inside full-screen programs, and a script line that fakes an

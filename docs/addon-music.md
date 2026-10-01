@@ -1,8 +1,10 @@
 # The music addon
 
-**Status:** a proposal as discussed. Nothing here is implemented, and no code exists for it yet.
-What an addon is, and how Hallux loads one, is in [addons.md](addons.md). The open questions
-are at the end, with my recommendations.
+**Status:** a proposal as discussed. Nothing of the music addon is implemented. The addon
+system it would run on is built, except the handle through which `play(path)` reads a file
+of the machine (step 7 of [plans/addons-plan.md](plans/addons-plan.md)). What an addon is, and
+how Hallux loads one, is in [addons.md](addons.md). The open questions are at the end, with my
+recommendations.
 
 ## In short
 

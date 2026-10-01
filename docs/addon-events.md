@@ -1,8 +1,9 @@
 # Events from addons
 
-**Status:** a design, agreed on 2026-10-01. Nothing here is built. The step-by-step plan is
-[plans/addon-events-plan.md](plans/addon-events-plan.md). What an addon is, and how Hallux
-loads one, is in [addons.md](addons.md).
+**Status:** built, and tried live on 2026-10-01 with the window addon's `Send` button. Not
+built: events inside full-screen programs, and a script line that fakes an event. The
+step-by-step record is [plans/addon-events-plan.md](plans/addon-events-plan.md). What an addon
+is, and how Hallux loads one, is in [addons.md](addons.md).
 
 **What was decided:** an addon can wake the AI by itself; the event carries its data; the AI
 hears about an addon's events only after it has asked to listen in that boot; and the six
@@ -190,16 +191,6 @@ Every delivered event is a model call, and it can happen with nobody at the keyb
 | `tests/` | All of it with a fake model and a fake addon, as now |
 
 In size it's about steps 5 and 6 of the addon plan together.
-
----
-
-## Before building
-
-**Finish the live checks of what exists:** that `reboot` and `poweroff` close the window,
-that Ctrl+Shift+Del does, and that `hallux.log` shows `addon_help` before the first call.
-Events build on the hooks and on the per-boot state.
-
-Not needed first: the disk handle (step 7 of the addon plan) and the documentation (step 8).
 
 ---
 
