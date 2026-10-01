@@ -10,10 +10,13 @@
 
 ## Principles
 
-1. **Every character on screen comes from the AI.** There are no shortcuts and no local fast
-   paths. The Python program is a dumb terminal: it only passes keys and clicks in and text out.
-   The only characters it doesn't get from the AI are the ones you type, which your terminal
-   echoes like any real terminal does.
+1. **Every character on the machine's screen comes from the AI.** There are no shortcuts and
+   no local fast paths. The Python program is a dumb terminal: it only passes keys and clicks
+   in and text out. There are two exceptions:
+   - the characters you type, which your terminal echoes like any real terminal does;
+   - hallux's **status bar** on the bottom row, which is the front panel of the case and not
+     part of the machine's screen. The AI never draws there. See
+     [light-and-keys.md](light-and-keys.md).
 2. **The disk is real.** Whatever a command does to files, like `echo hi > a.txt`, `rm`, or a
    Python script that writes `out.txt`, really happens in the root folder.
 3. **Everything else is imagined, and consistent.** The OS, kernel, CPU, network, processes,
@@ -202,14 +205,15 @@ There are three kinds of commands:
   and switch it off again when they exit. The two costs:
   - **Every click is a model round trip**, so clicking feels like remote desktop over a slow
     connection. That's fine for buttons, menus and games, and useless for dragging.
-  - **Clicks need raw input mode**, described below.
+  - **Clicks go through block mode or raw mode**, both described below. In block mode, a
+    click inside a field just moves the cursor locally.
 
 ### Three layers, just like a real Linux terminal
 
 | Real Linux | In Hallux | Controlled by |
 |---|---|---|
 | **Terminal emulator**: draws text and colors, clears, reports mouse clicks | Your real terminal app | Escape codes the AI prints |
-| **TTY line discipline**: *cooked* (line by line) or *raw* (every key) | `hallux.py` | `<tty mode="raw"/>` / `<tty mode="cooked"/>` from the AI, its `stty` |
+| **TTY line discipline**: *cooked* (line by line) or *raw* (every key) | `hallux.py` | The AI's reply: a normal prompt (cooked), or a full-screen form, with `raw="yes"` for every key |
 | **Programs**: bash, python3, htop, vim | The AI | — |
 
 `hallux.py` knows nothing about colors or mice. It passes bytes in both directions. Your
@@ -246,85 +250,154 @@ This cheat sheet goes into the system prompt:
 Mouse mode `1000` reports presses, releases and the wheel. `1002` adds dragging. `1003` reports
 **every movement**, which would mean a model call for every pixel, so the AI must never use it.
 
+In long, colorful output (a boot log), the model sometimes drops the `␛` and writes a bare
+`[38;5;218m`. The terminal repairs those: a `[`, digits and semicolons, and an `m` is treated as
+the color code it was meant to be. Spelled-out codes like `\e[31m` in a `.bashrc` being
+shown stay text, and ordinary brackets like `[  OK  ]` are never touched.
+
 The one catch: running `cat` on a file that literally contains control-picture characters would
 turn them into real control bytes. That's rare, and it's acceptable.
+
+### Block mode: full-screen programs without a model call per key
+
+Your first live test showed the problem. `nano hello.txt` drew a convincing nano, but you
+couldn't use it. Sending every keypress to the AI isn't an option either, because each round
+trip takes seconds and costs money.
+
+This was solved in the 1970s. An **IBM 3270** mainframe terminal didn't send keystrokes. The
+mainframe sent a screen with **fields** on it, the terminal let you edit those fields by
+itself, and it only contacted the mainframe when you pressed Enter or a function key. Hallux
+does the same (`hallux/blockmode.py`):
+
+```text
+<screen>
+  GNU nano 7.2              hello.txt
+</screen><prompt></prompt><form keys="C-o C-x C-w" focus="text" keymap="nano">
+<editor id="text" top="3" left="1" height="21" width="120" file="/home/user/hello.txt"/>
+</form>
+```
+
+- **The AI draws the whole screen** and declares fields on it:
+  - `<editor>`: multi-line text.
+  - `<line>`: a single line, where Enter acts. Used for prompts and search boxes.
+  - `<pager>`: read-only scrolling text, for `less` and `man`. A pager plus Enter makes a menu.
+- **You type, move, scroll and click inside the fields locally**, with no model calls. A
+  `keymap` adds local editing keys:
+  - `nano`: ^K cuts, ^U pastes, ^Y/^V page, M-U undoes.
+  - `vi`: vi keys, with `:` as the action key that opens a command line.
+  - `emacs`: the default.
+- **Only action keys go to the AI** (`^O`, `^X`, `^W`, `q`, ...), plus clicks outside the fields
+  and Ctrl-C. The action carries each field's text and cursor position. Text the AI has already
+  seen is left out, so a nano session costs only a few AI calls.
+- **`file="..."` fields are filled from the disk by the terminal,** so a file's contents never
+  pass through the AI. The `save_field` tool writes a field's exact text back. That keeps big
+  files cheap, and the AI can never garble them by retyping.
+- **The AI never has to count rows.** A `<footer>` in the form is pinned to the bottom, which
+  is where status and help lines belong. `height="0"` fields stretch down to it, and
+  a negative `top` counts from the bottom. If the AI still draws too many rows, blank rows
+  that no field covers are dropped from the bottom up (fields below move up with their text).
+  If that's not enough, the footer is kept and the screen is cut. (In a live test, nano's help
+  lines had fallen off: 31 rows drawn for a 29-row screen.)
+- **A field the AI shows again keeps whatever it doesn't restate:** position, size, style,
+  file, and your text. So `<editor id="text"/>` means "leave the editor as it is", and a
+  repeated `file=` never reloads the file over unsaved edits. (Before this rule, the
+  "Save modified buffer?" screen dropped the editor to the top-left, where it covered nano.)
+- **Partial redraws.** Once a program is on screen, the AI can answer with only the rows that
+  changed, `<patch><rows from="-3">[ Wrote 3 lines ]</rows></patch>`, instead of a whole
+  `<screen>`. Rows count from the top (`1`) or from the bottom (`-1`, the footer's last
+  row), and a `<rows>` block replaces that many consecutive rows. Block mode keeps its copy of
+  the screen and patches it. Fields stay where they were, and after a window resize the stored
+  screen is fitted again. A whole screen is the fallback whenever the layout changes. (In a
+  live test, a split-screen chat program redrew about 160×40 characters for every message:
+  about 10 s and $0.04 each.)
+- **The screen stays up while the AI thinks.** The next form replaces it in place, for example
+  nano's `File Name to Write:` as a `<line>` on the status row. A reply without a form ends
+  block mode and brings the shell back.
+
+The design principle holds: the terminal only echoes and edits **your own typing**, inside
+fields the AI created, just as it already does at the prompt. Everything else is the AI's.
+
+Raw mode, described next, is still the plan for programs that genuinely need every key or
+live updates, such as action games and `top`.
 
 ### Input: cooked mode and raw mode
 
 **Cooked mode** is the default, used at the prompt:
 
-- The tty reads a whole line with `readline` and sends it as `<input>`. Arrow keys and backspace
-  work locally, because line editing is the keyboard side, just like the kernel's line editing
-  in real Linux.
+- The tty reads a whole line with `prompt_toolkit` and sends it as `<input>`. Arrow keys,
+  backspace and ↑/↓ recall of what you typed work locally, because line editing is the keyboard
+  side, just like the kernel's line editing in real Linux. prompt_toolkit is async, so it shares
+  the event loop with the SDK client. It also measures colored prompts correctly.
 - Mouse reporting is **off**, so your terminal app's selection, copy and paste, and scrollback
   work normally.
 
-**Raw mode** is for full-screen programs:
+**Raw mode** is for programs that need every key, or that change on their own: `top`,
+`htop`, `watch`, games and single-key menus. It's built on block mode (`hallux/blockmode.py`):
 
-- The AI's reply ends with `<tty mode="raw"/>`. The tty switches your real terminal to raw mode,
-  and every key, paste and click becomes an event:
+- **A form with `raw="yes"` and no fields.** The AI draws the screen the same way as in block
+  mode, with the form first, an optional footer and the status bar below. Streaming stays off,
+  and leaving works the same way, with a normal screen and prompt.
+- **Every key and click goes to the AI** as events:
   ```text
-  <keys cwd="/home/user" time="..." cols="120" rows="32"><text>jj</text><key>Down</key><mouse button="left" action="press" col="42" row="7"/></keys>
+  <keys cwd="/home/user" time="..." cols="120" rows="31"><text>jj</text><key>Up</key><key>C-c</key></keys>
+  <keys ...><mouse button="left" row="7" col="42"/></keys>
   ```
-- **Type-ahead:** keys you press while the model is busy are collected and sent together in the
-  next `<keys>`. A fast typist therefore costs one model call, not ten.
-- The AI answers with a `<screen>` that redraws the screen, and an empty `<prompt>`. When the
-  program exits, it switches back with `<tty mode="cooked"/>`.
+  Key names are `Enter`, `Escape`, `Tab`, `Backspace`, `Up`, `PageDown`, `F2`, `C-x`, `C-Up`,
+  and so on. The wheel arrives as `wheel-up` and `wheel-down` clicks.
+- **Type-ahead batching:** the first key goes out at once. Keys pressed while the AI answers
+  go out **together** with the next screen, so a fast typist costs one model call, not ten.
+- **Ticks:** `tick="3"` wakes the AI every 3 s (1–60 s) with `<tick>` while nothing is pressed,
+  so `top`'s clock and numbers move. Ticks cost money, so they stop when `tick_budget_usd`
+  (default $0.25 per program run) is spent. The status bar then says
+  `live updates paused: tick budget used`, and the program just waits for a key.
+- **Ctrl-C** reaches the program as a key, and still counts toward the triple-Ctrl-C hard exit.
+  While the AI is answering, it interrupts the answer.
+- **The screen is padded to the full rectangle,** so a click anywhere, even on empty space,
+  maps to the exact row and column the AI drew.
 
-Every envelope carries the terminal size (`cols`, `rows`). The AI uses it to lay out full-screen
-programs and to know what sits under a click.
-
-### How a click works
-
-```text
-cow daysi moo> htop
-```
-
-1. The AI replies:
-   ```text
-   <screen>␛[?1049h␛[?1000h␛[?1006h␛[H␛[2J ...a full htop frame... </screen><prompt></prompt><tty mode="raw"/>
-   ```
-2. Your terminal app switches to the alternate screen and starts reporting clicks. The tty
-   switches to raw mode.
-3. You click the `F10 Quit` label at column 71, row 32. Your terminal sends `ESC[<0;71;32M`, and
-   the tty forwards it as `<mouse button="left" action="press" col="71" row="32"/>`.
-4. The AI knows what it drew at (71, 32): the Quit button. It replies with
-   `<screen>␛[?1000l␛[?1006l␛[?1049l</screen><prompt>cow daysi moo> </prompt><tty mode="cooked"/>`,
-   and the shell screen comes back exactly as it was.
-
-Rules that make clicks reliable:
-
-- **Clicks only in full-screen mode.** On the alternate screen, the AI drew every cell itself at
-  known positions. In the scrolling shell it can't know what's where, because of scrollback and
-  wrapped lines. That's why mouse reporting stays off at the prompt.
-- **Redraw the whole screen on every reply** in v1: clear it, then draw a full frame. It costs
-  more tokens, but the AI's picture of the screen and the real screen can never drift apart.
-  Partial updates are an optimization for later.
-- **React to the press.** Ignore the release unless the program is dragging.
-- **Always leave cleanly:** mouse off, alternate screen off, `<tty mode="cooked"/>`. If a program
-  "crashes" and forgets, you get garbage at the prompt, just like on real Linux, and `reset`
-  fixes it: the AI prints the reset codes.
+Every envelope carries the terminal size (`cols`, `rows`), without the status bar's row.
+The AI uses it to lay out full-screen programs and to know what sits under a click.
 
 ### Keys and signals
 
-| You press | Cooked mode (the prompt) | Raw mode (a full-screen program) |
+The key rule (implemented in `hallux/terminal.py`):
+
+| Who owns the key | Keys | What happens |
 |---|---|---|
-| Enter | Sends the line as `<input>` | `<key>Enter</key>` |
-| Ctrl-C | Interrupts the model (`client.interrupt()`) and sends `<signal>SIGINT</signal>`. The AI prints `^C` and a new prompt. | `<key>C-c</key>`. The program decides what happens, like in real raw mode. |
-| Ctrl-D | `<eof/>`: bash prints `exit` and halts; Python leaves the REPL | `<key>C-d</key>` |
-| Ctrl-L | readline would clear the screen itself, so rebind it to send `clear` to the AI | `<key>C-l</key>` |
-| Tab, ↑ / ↓ | readline handles them for now. AI completion and history are on the roadmap. | `<key>Tab</key>`, `<key>Up</key>`, ... |
-| Mouse | Your terminal app's own selection and scrolling | `<mouse .../>` events |
-| Resizing the window | The new size goes with the next envelope | Same. An immediate redraw (SIGWINCH) is on the roadmap. |
+| **The keyboard side** (local) | Printable characters, Backspace, Delete, arrows, Home/End, ↑/↓ recall, Ctrl-A/E/K/U/W, and Ctrl-D on a non-empty line | Line editing, instantly, like the kernel's line editing |
+| **The machine** (the AI decides) | Ctrl-C, Ctrl-D on an empty line, Ctrl-Z, Ctrl-\\, Ctrl-L, Ctrl-R, Ctrl-S, Ctrl-O, Ctrl-G, Ctrl-Q, Ctrl-V, Ctrl-X, Tab, Alt-., F1–F12 | Sent as `<key name="C-c" cursor="7">the typed line</key>` |
+| **hallux** (never reaches the AI) | Ctrl+Shift+Del, or Ctrl-C three times within a second | The hard exit: hallux quits at once, whatever the AI is doing |
+
+More details:
+- **Line-ending keys:** Ctrl-C, Ctrl-D, Ctrl-Z and Ctrl-\\ end the line. The terminal echoes
+  `^C`, `^Z` or `^\` the way the kernel's tty driver would, and the next prompt starts empty.
+- **Other keys work in place:** the prompt line is replaced by the AI's answer and your line
+  comes back. The AI can put different text back with `<edit>…</edit>`, for Tab completion,
+  Alt-. and Ctrl-R.
+- **Ctrl-C while the AI is working:** the AI's turn is interrupted (`client.interrupt()`).
+  The AI then receives `<key name="C-c" interrupted="yes">` and prints `^C` and a new prompt.
+- **Block mode:** a form's action keys, and Ctrl-C always. While the AI thinks, Ctrl-C
+  interrupts it.
+- **hallux reads the keyboard all the time,** and the terminal stays in raw mode for the whole
+  session:
+  - keys typed while the AI works wait for the next prompt instead of being echoed into its
+    output;
+  - a Ctrl-C can never turn into a real SIGINT that crashes hallux;
+  - the hard exit works at any moment.
+- **Mouse:** in the shell, your terminal app's own selection and scrolling. In block mode,
+  clicks outside the fields go to the AI.
+- **Resizing the window:** the new size goes with the next envelope, and the status bar moves
+  to the new bottom row.
 
 ### What the tty never does
 
 - **No local prompt.** It doesn't know the prompt. It only knows what the AI last sent.
 - **No fast path.** Even `pwd`, `clear` and an empty Enter go to the model.
 - **No meta-commands.** Debug output, tool calls and cost go to a log file
-  (`tail -f ~/.hallux.log` in a second window), never to the screen.
-- **The only exception:** if the model can't be reached (no network, expired login), the tty
-  prints one line to stderr. That's the "hardware" failing, not the machine talking.
+  (`tail -f ~/hallux-world/.hallux/hallux.log` in a second window), never to the screen.
+- **It doesn't draw on the machine's screen.** hallux's own messages go to the status bar,
+  including model failures such as a network problem or an expired login. That's the
+  hardware talking, not the machine. With `status_bar = false`, they go to stderr instead.
 
 Two raw-mode gotchas the sketch already handles:
 
@@ -419,6 +492,27 @@ works like Linux's **overlayfs**:
 - **Whiteouts.** Deleting a base-image file that isn't on disk records it under *Whiteouts* in
   memory, so it stays gone.
 
+### How a boot works
+
+Booting used to take 23–27 s and 11 round trips, because the AI read its memory, then wrote
+files one by one. Now (`hallux/machine.py`, `boot_report`):
+
+- **`<boot>` brings everything.** It carries the memory and the files that define the
+  machine: `/etc/hostname`, `/etc/os-release`, `/etc/motd`, `/etc/issue`, `/etc/passwd` and
+  every home's `.bashrc`. A normal boot needs **no tool calls**, just one answer.
+- **A new machine** (`first="yes"`) gets an empty Linux directory tree first: `/etc`,
+  `/home/user`, `/root`, `/tmp`, `/var/log` and `/usr/local/bin`. The AI hands the machine
+  over **in its answer**, with `<memory>…</memory>` and `<file path="…">…</file>` after the
+  prompt, and hallux writes them. That takes no tool calls at all. (Asked for parallel tool
+  calls instead, the AI still made them one by one: 17 s, 6 round trips.) A whole new
+  memory is only accepted in the answer to a first boot.
+- **`<file>` works for any write the AI knows will succeed,** such as `echo … > note.txt` or
+  a `.bashrc` change. It saves the tool round trip, which took about 2 s in the reboot
+  check. `write_file` stays for writes whose errors the user should see, and it gained
+  `parents=true` for copy-up into new folders.
+- **`<cwd>/home/user</cwd>`** in the reply starts the shell in the home directory without a
+  `chdir` round trip. It also works for `cd ~` and `cd ..`.
+
 ### When memory is written
 
 - **Right away**, whenever something that must persist changes: a `hallux` rule, a package
@@ -495,9 +589,10 @@ The rules for all of them:
   `os.listdir()` becomes `list_dir`. Only the *printed* output is imagined.
 - **Line-based interactive programs just work**, because the AI owns the prompt. The `python3`
   REPL (`>>>` / `...`), `sqlite3`, `bc` and text adventures all keep state within the session.
-- **Full-screen programs** (`htop`, `mc`, `vim`, `less`, invented games with menus) use the
-  alternate screen and raw mode, and the mouse if they support it. See
-  [the terminal](#the-terminal-colors-clearing-and-the-mouse).
+- **Full-screen programs** (`nano`, `vim`, `less`, `man`, invented games with menus) run in
+  [block mode](#block-mode-full-screen-programs-without-a-model-call-per-key). You edit
+  locally and the AI only hears about action keys. Programs that need every key (`top`,
+  action games) will get raw mode.
 - **Installs are bookkeeping.** `apt install cowsay` or `pip install requests` prints a
   believable install log (with a `␍` progress bar) and records the package in memory. After
   that, `import requests` works inside simulated Python. There is **no real network**, so
@@ -537,6 +632,7 @@ layers win:
    model = "claude-sonnet-5-5"
    effort = "low"
    fallback_model = "claude-haiku-4-5"   # used if the main model is unavailable
+max_budget_usd = 1.00                 # optional: the machine stops after spending this per boot
    ```
 3. **Command-line flags**, for a one-off run:
    ```bash
@@ -599,18 +695,25 @@ startup cost even worse.
 
 ### The tools (MCP server)
 
+These are implemented in `hallux/disk.py`, the filesystem logic, and `hallux/tools.py`, which
+wraps them as SDK tools. `tests/` covers both.
+
 | Tool | Arguments | Used for |
 |---|---|---|
-| `list_dir` | `path` | `ls`, globbing. Returns name, mode (`drwxr-xr-x`), size and mtime, so `ls -la` needs one call. |
-| `read_file` | `path` (+ later `offset`, `limit`) | `cat`, reading scripts, copy-up checks. Capped at 64 KB, and binary files are flagged. |
+| `list_dir` | `path` | `ls`, globbing. Returns name, mode (`drwxr-xr-x`), size, mtime (local ISO time) and symlink target, so `ls -la` needs one call. |
+| `stat` | `path` | `ls -l <file>`, `ls -d`, `test -e/-f/-d`. Describes the path itself without following symlinks. |
+| `read_file` | `path`, `offset` | `cat`, reading scripts, copy-up checks. Returns 64 KB per call; when `truncated`, continue from `next_offset`. Never splits a UTF-8 character, and flags binary files. |
+| `find` | `path`, `pattern` | `find`, `grep -r` (then `read_file`). Returns up to 1000 entries with their type. |
 | `write_file` | `path`, `content`, `append` | `>`, `>>`, `touch`, `tee`, program output files, copy-up |
 | `edit_file` | `path`, `old`, `new` | `sed -i`, editing `~/.bashrc` for `hallux` changes |
 | `make_dir` | `path`, `parents` | `mkdir [-p]` |
-| `chdir` | `path` | `cd`. Validates the path and updates the tty's `cwd`. |
-| `remove`, `move`, `copy` | ... | `rm`, `mv`, `cp` |
-| `find` *(optional)* | `path`, `glob` | Saves many round trips for `find` and `grep -r` |
+| `chdir` | `path` | `cd`. Validates the path and updates the `cwd` that relative paths resolve against. |
+| `remove` | `path`, `recursive` | `rm [-r]`. Removes a symlink itself, never its target. `rm -rf /` empties the machine but keeps its memory. |
+| `move` | `src`, `dst` | `mv`. Moves into `dst` if it's a directory, and refuses to move a directory into itself. |
+| `copy` | `src`, `dst`, `recursive` | `cp [-r]`. Copies symlinks as links, so nothing from outside the root gets copied in. |
 | `memory_read` | — | Boot: read `/.hallux/memory.md` |
-| `memory_edit` | `old`, `new` | Update one part of memory. An empty `old` appends. |
+| `memory_edit` | `old`, `new` | Update one part of memory. An empty `old` appends. It writes atomically, so a crash never leaves half a memory. |
+| `save_field` | `field`, `path` | Block mode: writes a field's exact text to a file (nano's `^O`, vim's `:w`). |
 
 There is **no "run command" tool**, and that's the whole point. Errors come back as errno names
 (`{"error": "ENOENT"}`), and the AI turns them into bash messages, or into haiku if a rule says so.
@@ -629,15 +732,17 @@ def to_real(path: str) -> Path:
     return real
 ```
 
-This was tested against these cases:
+`tests/test_disk.py` tests this against these cases:
 
 - `..` above the root clamps to `/`, like a real shell.
-- A symlink pointing outside `ROOT` is refused.
+- A symlink pointing outside `ROOT` is refused for every operation.
 - `/.hallux`, including `config.toml` and a symlink pointing into it, looks like it doesn't exist.
 
 ### The system prompt: this is where the magic is
 
-Put it in `prompt.md`. It's the part you'll iterate on the most. A first draft:
+Put it in `prompt.md`. It's the part you'll iterate on the most. Below is the **first draft**,
+kept for history; the prompt actually in use is `hallux/prompt.md`, which has grown block mode,
+raw mode, the key rule, `<file>`/`<cwd>`/`<memory>` and more:
 
 ```text
 You are an entire Linux machine called "hallux": kernel, bash and every program on it.
@@ -714,7 +819,11 @@ change it, so say that it's set in .hallux/config.toml outside the machine.
 
 ## Minimal sketch
 
-This is untested against a live model and a real TTY. It compiles, and the following were
+This sketch shows the whole design in one file. The real implementation is being built in
+`hallux/`, following [the roadmap](roadmap.md). The sketch's tools section is already replaced
+by `hallux/disk.py` and `hallux/tools.py`.
+
+The sketch is untested against a live model and a real TTY. It compiles, and the following were
 tested with a stubbed SDK:
 
 - the path jail and the hidden `/.hallux` folder (including `config.toml`);
@@ -1061,9 +1170,16 @@ too, which helps the illusion. The levers:
 - **Type-ahead batching** in raw mode: one model call per burst of keys, not one per key.
 - **Coarse tools.** `list_dir` returns full stat info, and `find` or `read_many` help if the log
   file shows chains of calls.
-- **Streaming.** Print characters as they arrive between `<screen>` and `</screen>`. This needs
-  `include_partial_messages=True` and a small incremental parser, and only works once the model
-  reliably skips narration before tool calls.
+- **Streaming** (implemented). With `include_partial_messages=True`, the SDK delivers the
+  answer as it's written. `ScreenStream` (`hallux/protocol.py`) prints what's between
+  `<screen>` and `</screen>` right away. It holds back only:
+  - a tail that might become `</screen>`;
+  - half-received escape codes, so the layout filter sees whole sequences.
+
+  Narration before `<screen>` is dropped, and at the end only the part not yet shown is
+  printed. Full-screen programs write their `<form>` **first**, so the terminal knows at once
+  not to stream them. If the AI puts the form last anyway, the streamed lines are erased again
+  before the full-screen view opens. Nothing streams while a full-screen program is on screen.
 
 ### Output fidelity
 
@@ -1097,6 +1213,31 @@ Capping `read_file` output keeps `cat bigfile.log` from being expensive.
   The jail still holds whatever happens.
 - **Use a dedicated folder and `git init` it.** A hallucinated `rm -rf /` really deletes the
   files in it, but not the memory. **Never** point Hallux at your home directory.
+- **Only harmless terminal codes reach your terminal.** `decode()` in `hallux/protocol.py`
+  keeps an allowlist: colors, cursor moves, erasing, scrolling, hiding the cursor, and window
+  titles. It drops everything else:
+  - clipboard writes (OSC 52) and hyperlinks;
+  - queries your terminal would answer by "typing" the answer (cursor position, device
+    attributes, window title);
+  - scroll regions, the alternate screen, mouse and keyboard modes, and resets;
+  - device control strings (DCS, APC);
+  - control characters like ENQ (answerback) and C1 codes.
+
+  This also holds for streamed pieces, and for block-mode screens.
+- **Claude Code keeps no transcript of hallux sessions** (`keep_transcripts = false`, the
+  default: it passes `--no-session-persistence`). `hallux.log` in the world already has
+  everything, and hallux sessions stay out of your `claude --resume` list.
+- **Optional: the operating system enforces the fence too** (`os_sandbox = true`,
+  `hallux/sandbox.py`). Claude Code then runs under bubblewrap:
+  - the filesystem is read-only;
+  - your home folder is hidden, except `~/.claude`, where its login lives;
+  - `/tmp` is private, and other processes are invisible.
+
+  hallux's tools run in the hallux process, so the machine still works. It's a second wall
+  in case anything in the first one (no built-in tools, one path gatekeeper) ever has a bug.
+- **What's still outside the fence:** hard links or mount points that *you* put inside the
+  world folder, and the fact that everything the AI reads is sent to Anthropic's API, because
+  that's where the model runs. Keep real secrets out of worlds.
 
 ---
 
@@ -1111,13 +1252,20 @@ The folder is real and the terminal is just bytes, so there are three good autom
    3. Diff the outputs and the resulting folders.
 
    The grounded commands should match closely.
-2. **The reboot test (persistence).**
-   1. Run a script: set a prompt with `hallux`, add a rule, `apt install` something, create a
-      file, then run `uname -a`, `hostname`, `python3 --version` and `ip a`.
-   2. `reboot`.
-   3. Run the same checks again.
+2. **The reboot test (persistence)** is built in:
+   `python hallux.py test-reboot --check reboot` (`hallux/script.py`).
+   1. It builds a new machine.
+   2. It sets a prompt and an error rule with `hallux`, grants passwordless sudo (scripts
+      can't type passwords), creates a file and runs `sudo apt install cowsay`.
+   3. It runs the checks: `hostname`, `uname -r`, `head -2 /etc/os-release`, `cat note.txt`,
+      `cat nope.txt` (the rule), `cowsay moo` and `hallux`.
+   4. It runs `sudo reboot` and the checks again. The AI faithfully refuses a plain `reboot`
+      from a normal user, so the report also fails if no reboot actually happened.
 
-   Everything in the "Survives" table must come out identical.
+   Outputs that must be identical are compared exactly. The rule and the installed program
+   must still apply, and the prompt must survive. It prints a report and the boot times, and
+   exits with status 1 on a failure. Any list of commands can be run the same way with
+   `--script FILE`.
 3. **Terminal unit tests (no model needed).** Feed recorded byte sequences (keys, pastes, SGR
    mouse reports) into the event parser, and sample replies into the reply parser.
 
@@ -1128,27 +1276,7 @@ and the tools. Running them on each model is also the best way to choose your de
 
 ## Roadmap
 
-1. **Tools and jail.** All file tools plus the memory tools, with unit tests for escapes (`..`,
-   absolute paths, symlinks, `/.hallux`).
-2. **The tty in cooked mode.**
-   - Envelopes, the reply parser, control pictures, colored prompts.
-   - Boot, `<halt/>` and `<reboot/>`.
-   - Configuration: flags and `config.toml`.
-3. **First boot and memory.** First-boot creation, the memory format, copy-up and whiteouts, and
-   the reboot test.
-4. **The `hallux` command.** Rules, dotfile changes, `hallux` alone, forgetting a rule.
-5. **Programs.** Script simulation, the Python REPL, package installs, program cards.
-6. **Raw mode and the mouse.** Full-screen programs, the alternate screen, key and click events,
-   type-ahead, clean exits and `reset`.
-7. **Prompt iteration** with the diff test and the reboot test, run on each model.
-8. **Polish.** Streaming, Ctrl-C signals, a log file with tool calls and cost, SIGWINCH redraws.
-9. **Stretch goals:**
-   - AI tab completion and history.
-   - `<tick/>` events so live programs like `top` or a clock can update.
-   - Partial screen updates.
-   - A stronger "CPU" subagent for simulating programs.
-   - A standalone MCP server, so the same machine can be mounted in Claude Code.
-   - Several users sharing one machine.
+The step-by-step plan, with progress, is in [roadmap.md](roadmap.md).
 
 ## Open decisions
 

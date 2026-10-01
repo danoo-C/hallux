@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hallux"
+version = "0.1.0"
+description = "A hallucinated shell: a Claude agent pretends to be a Linux machine on top of a real folder."
+readme = { file = "README.MD", content-type = "text/markdown" }
+requires-python = ">=3.11"
+dependencies = [
+    "claude-agent-sdk",
+    "prompt_toolkit>=3.0",
+    "pygments",                 # syntax colors in block-mode editors
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+hallux = "hallux.app:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Only the hallux/ package. Without this, setuptools would also pick up the root-level
+# hallux.py and install.py as top-level modules.
+[tool.setuptools.packages.find]
+include = ["hallux*"]
+
+[tool.setuptools.package-data]
+hallux = ["prompt.md"]
