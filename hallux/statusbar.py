@@ -19,6 +19,7 @@ FRAME_SECONDS = 0.08
 FADE_SECONDS = 1.6
 GREEN, YELLOW = (0x5F, 0xD7, 0x87), (0xD7, 0xD7, 0x5F)
 GRAY, DIM, RED, BACKGROUND = "#808080", "#5c5c5c", "#ff5f5f", "#1c1c1c"
+YELLOW_NOTE = "#d7af5f"
 IDLE_HINT = "power off: ctrl+shift+del · ctrl+c ×3"
 
 VERBS = {"list_dir": "listing", "stat": "checking", "read_file": "reading", "find": "searching",
@@ -50,6 +51,7 @@ class Status:
     activity: str = ""
     tools: int = 0                    # tool calls in the current turn
     error: str | None = None
+    note: str | None = None           # shown instead of the idle hint (e.g. ticks paused)
     cost: float = 0.0                 # dollars since hallux started
     seconds: float | None = None      # how long the last answer took
     started: float = field(default=0.0)
@@ -77,6 +79,8 @@ class StatusBar:
             text = s.activity or "thinking…"
             if s.tools > 1:
                 text += f" ({s.tools})"
+        elif s.note:
+            light, light_color, text, text_color = "•", GRAY, s.note, YELLOW_NOTE
         else:
             light, light_color, text, text_color = "•", GRAY, IDLE_HINT, DIM
         info = " · ".join(part for part in (

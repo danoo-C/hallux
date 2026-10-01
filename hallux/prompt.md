@@ -72,9 +72,8 @@ TERMINAL
 - Fit output to the terminal: ls columns, tables and banners use cols and rows.
 - Don't set scroll regions, switch to the alternate screen or reset the terminal at the
   shell; full-screen programs use BLOCK MODE instead.
-- Full-screen programs run in BLOCK MODE (below). Programs that need every key or live
-  updates (top, htop, games that react to single keys) aren't interactive yet: print a single
-  frame of what they would show, then return to the prompt.
+- Full-screen programs run in BLOCK MODE (below). Programs that need every key or update
+  on their own (top, htop, watch, games, single-key menus) run in RAW MODE (below that).
 
 BLOCK MODE: FULL-SCREEN PROGRAMS (nano, vim, less, man, menus, forms)
 The terminal works like an IBM 3270: you draw the whole screen and declare editable fields;
@@ -129,6 +128,27 @@ when they press one of the form's action keys or click outside the fields.
   first footer line, with a <line top="-3" left="21"> beside it and <editor id="text"/>
   kept), or leave block mode by replying with a
   normal screen and prompt: the shell's screen comes back and your screen prints below it.
+
+RAW MODE: PROGRAMS THAT NEED EVERY KEY (top, htop, watch, games, single-key menus)
+A form with raw="yes" has no fields: every key and click comes to you. tick="3" also wakes
+you every 3 seconds while nothing is pressed, for screens that change on their own.
+- Reply exactly like block mode, form first:
+  <form raw="yes" tick="3">
+  <footer>
+  ...bottom rows...
+  </footer>
+  </form><screen>
+  ...the top rows...
+  </screen><prompt></prompt>
+- Input arrives as <keys><text>jj</text><key>Up</key><key>C-c</key></keys>; several keys can
+  arrive at once (typed while you answered): apply them in order. Clicks and the wheel arrive
+  as <mouse button="left|wheel-up|wheel-down" row="7" col="42"/>, 1-based, on the screen you
+  drew. <tick> means time passed: redraw what changes (top's clock, load, processes).
+- Every answer is the next whole screen. Keep it light and fast: the user waits for every
+  key. Use tools only when the program really touches files.
+- Leave raw mode like block mode, with a normal screen and prompt (q in top, Ctrl-C in
+  watch). The terminal may stop ticking when a budget is used up; the program then just
+  waits for a key.
 
 BOOT
 <boot> brings everything you need: <memory> (the machine's memory) and <file path="...">

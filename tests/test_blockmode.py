@@ -273,3 +273,72 @@ def test_block_mode_lays_out_a_footer():
         return await next_action(block)
 
     assert session(script).key == "C-x"
+
+
+# ---------------------------------------------------------------- raw mode
+
+TOP = Form((), raw=True, tick=0)
+
+
+def test_raw_mode_sends_every_key_and_batches_what_was_typed_meanwhile():
+    async def script(block, keys):
+        await block.show("top\n", TOP)
+        keys("j")
+        first = await next_action(block)
+        keys("jk\x1b[A\r")                             # typed while the AI is answering
+        await asyncio.sleep(0.3)
+        await block.show("top\n", TOP)                 # ... goes out with the next screen
+        return first, await next_action(block)
+
+    first, batch = session(script)
+    assert (first.key, first.events) == ("keys", ("<text>j</text>",))
+    assert batch.events == ("<text>jk</text>", "<key>Up</key>", "<key>Enter</key>")
+
+
+def test_raw_mode_key_names():
+    expected = {"\x1b": "Escape", "\x1bOQ": "F2", "\x1b[5~": "PageUp", "\x7f": "Backspace",
+                "\t": "Tab", "\x0c": "C-l", "\x1b[1;5A": "C-Up", "\x1b[3~": "Delete"}
+
+    async def script(block, keys):
+        names = {}
+        for sequence in expected:
+            await block.show("x\n", TOP)
+            keys(sequence)
+            names[sequence] = (await next_action(block)).events
+        return names
+
+    assert session(script) == {seq: (f"<key>{name}</key>",) for seq, name in expected.items()}
+
+
+def test_raw_mode_ticks_when_idle():
+    async def script(block, keys):
+        await block.show("top - 01:02:03\n", Form((), raw=True, tick=1.0))
+        started = asyncio.get_running_loop().time()
+        action = await next_action(block)
+        return action.key, asyncio.get_running_loop().time() - started
+
+    key, waited = session(script)
+    assert key == "tick" and 0.9 < waited < 2
+
+
+def test_raw_mode_clicks_and_the_wheel_anywhere_on_screen():
+    async def script(block, keys):
+        events = []
+        for sgr in ("\x1b[<0;70;30M\x1b[<0;70;30m", "\x1b[<65;3;4M"):
+            await block.show("one short line\n", TOP)
+            keys(sgr)
+            events += (await next_action(block)).events
+        return events
+
+    assert session(script) == ['<mouse button="left" row="30" col="70"/>',
+                               '<mouse button="wheel-down" row="4" col="3"/>']
+
+
+def test_raw_mode_ctrl_c_is_a_key_and_still_counts_for_the_hard_exit():
+    async def script(block, keys):
+        await block.show("top\n", TOP)
+        keys("\x03")
+        return await next_action(block)
+
+    action, calls = hooked_session(script)
+    assert action.events == ("<key>C-c</key>",) and calls == [("ctrl-c", False)]

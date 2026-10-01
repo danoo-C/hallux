@@ -8,6 +8,7 @@ is the AI's, except what you type into its fields.
 from __future__ import annotations
 
 import asyncio
+import html
 import re
 from dataclasses import replace
 from typing import Callable
@@ -19,14 +20,16 @@ from prompt_toolkit.filters import Condition, vi_navigation_mode
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import DynamicKeyBindings, KeyBindings
 from prompt_toolkit.key_binding.bindings.scroll import scroll_page_down, scroll_page_up
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import DynamicContainer, Float, FloatContainer, HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import TextArea
 
-from hallux.protocol import Action, Field, FieldState, Form
+from hallux.protocol import Action, Field, FieldState, Form, plain
 from hallux.statusbar import StatusBar
 
 POWER_CUT_KEY = "c-s-delete"
@@ -54,6 +57,56 @@ def key_sequence(name: str) -> tuple[str, ...] | None:
     return None
 
 
+KEY_NAMES = {code: name for name, code in SPECIAL_KEYS.items() if name != "Space"}
+KEY_NAMES |= {"c-m": "Enter", "c-i": "Tab", "c-h": "Backspace", "s-tab": "S-Tab"}
+NOT_KEYS = {Keys.Vt100MouseEvent, Keys.CPRResponse, Keys.ScrollUp, Keys.ScrollDown,
+            Keys.WindowsMouseEvent, Keys.Ignore}
+
+
+def key_event(press) -> tuple[str, str] | None:
+    """A key press as raw mode sends it: ("text", "j") or ("key", "C-Up"); None for non-keys."""
+    if press.key in NOT_KEYS:
+        return None
+    if press.key == Keys.BracketedPaste:
+        return "text", press.data
+    code = press.key.value if isinstance(press.key, Keys) else press.key
+    if len(code) == 1 and code.isprintable():
+        return "text", code
+    return "key", _key_name(code)
+
+
+def _key_name(code: str) -> str:
+    if code in KEY_NAMES:
+        return KEY_NAMES[code]
+    if re.fullmatch(r"f\d+", code):
+        return code.upper()
+    for prefix, name in (("c-s-", "C-S-"), ("c-", "C-"), ("s-", "S-")):
+        if code.startswith(prefix):
+            rest = code[len(prefix):]
+            return name + KEY_NAMES.get(rest, rest)
+    return code
+
+
+def render_events(presses) -> tuple[str, ...]:
+    """Key presses as events for the AI; typed text is joined: <text>jj</text><key>Up</key>."""
+    events, text = [], ""
+    for press in presses:
+        event = key_event(press)
+        if event is None:
+            continue
+        kind, value = event
+        if kind == "text":
+            text += value
+            continue
+        if text:
+            events.append(f"<text>{html.escape(text, quote=False)}</text>")
+            text = ""
+        events.append(f"<key>{value}</key>")
+    if text:
+        events.append(f"<text>{html.escape(text, quote=False)}</text>")
+    return tuple(events)
+
+
 def _lexer(lang: str | None) -> PygmentsLexer | None:
     if not lang:
         return None
@@ -79,6 +132,12 @@ SGR_RESET = re.compile(r"\x1b\[0?m")
 def _blank(line: str) -> bool:
     """Nothing to see: only spaces (any other escape code, like a colored bar, counts)."""
     return not SGR_RESET.sub("", line).strip()
+
+
+def _pad(line: str, columns: int) -> str:
+    """A screen row padded with spaces to the screen's width (colors reset first)."""
+    width = get_cwidth(plain(line))
+    return line + "\x1b[0m" + " " * (columns - width) if width < columns else line
 
 
 def fit_screen(lines: list[str], footer: list[str], rows: int,
@@ -117,15 +176,20 @@ def fit_screen(lines: list[str], footer: list[str], rows: int,
 
 
 class Background(FormattedTextControl):
-    """The AI's screen behind the fields. Clicks on it go to the AI."""
+    """The AI's screen behind the fields. Clicks on it go to the AI (in raw mode, the wheel too)."""
 
-    def __init__(self, screen: str, on_click: Callable[[int, int], None]):
-        super().__init__(ANSI(screen), focusable=False)
-        self.on_click = on_click
+    def __init__(self, screen: str, on_click: Callable[[str, int, int], None], raw: bool = False):
+        super().__init__(ANSI(screen), focusable=raw)  # in raw mode it holds the focus itself
+        self.on_click, self.raw = on_click, raw
 
     def mouse_handler(self, mouse_event: MouseEvent):
+        row, col = mouse_event.position.y + 1, mouse_event.position.x + 1
         if mouse_event.event_type == MouseEventType.MOUSE_UP:
-            self.on_click(mouse_event.position.y + 1, mouse_event.position.x + 1)
+            self.on_click("left", row, col)
+            return None
+        if self.raw and mouse_event.event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
+            self.on_click("wheel-up" if mouse_event.event_type == MouseEventType.SCROLL_UP
+                          else "wheel-down", row, col)
             return None
         return NotImplemented
 
@@ -146,6 +210,7 @@ class BlockMode:
         self.seen: dict[str, str | None] = {}          # the text the AI has seen, per field
         self.baseline: dict[str, str] = {}             # the text when loaded, set or saved
         self.container = Window()
+        self.background: Window | None = None          # the screen behind the fields
         self.bindings = KeyBindings()
         self.waiting = False                           # an action is with the AI
         self.actions: asyncio.Queue[Action] = asyncio.Queue()
@@ -175,13 +240,21 @@ class BlockMode:
             process_keys = processor.process_keys      # in the queue for the next screen
             processor.process_keys = lambda: self._hold_keys() if self.waiting else process_keys()
         self.app.editing_mode = EditingMode.VI if form.keymap == "vi" else EditingMode.EMACS
-        focus = self.areas.get(form.focus or "") or next(
-            (self.areas[f.id] for f in form.fields if f.kind != "pager"), self.areas[form.fields[0].id])
+        if form.fields:
+            focus = self.areas.get(form.focus or "") or next(
+                (self.areas[f.id] for f in form.fields if f.kind != "pager"),
+                self.areas[form.fields[0].id])
+        else:
+            focus = self.background
         self.app.layout.focus(focus)
         self.waiting = False
         await self._drawn()
-        self._release_keys()
-        self.app.key_processor.process_keys()           # type-ahead goes into the new form
+        if form.raw and self.held:                      # raw mode: what was typed meanwhile
+            held, self.held = self.held, []             # goes to the AI as one batch
+            self._send_events(held)
+        else:
+            self._release_keys()
+            self.app.key_processor.process_keys()       # type-ahead goes into the new form
 
     async def _drawn(self) -> None:
         """Wait until the new screen is on display: clicks only reach what has been drawn."""
@@ -200,11 +273,18 @@ class BlockMode:
             self.app.after_render -= after_render
 
     async def next_action(self) -> Action:
-        """Wait for an action key or a click. Raises EOFError if the full-screen app died."""
+        """Wait for an action key or a click; in raw mode with a tick, at most `tick` seconds,
+        then return a tick. Raises EOFError if the full-screen app died."""
         getter = asyncio.ensure_future(self.actions.get())
-        done, _ = await asyncio.wait({getter, self.running}, return_when=asyncio.FIRST_COMPLETED)
+        tick = self.form.tick if self.form is not None and self.form.raw else 0
+        done, _ = await asyncio.wait({getter, self.running}, timeout=tick or None,
+                                     return_when=asyncio.FIRST_COMPLETED)
         if getter in done:
             return getter.result()
+        if not done:                                    # nothing happened: time for a tick
+            getter.cancel()
+            self.waiting = True                         # keys pressed now wait for the redraw
+            return Action(key="tick", focus=None)
         getter.cancel()
         self.running.result()                          # re-raises whatever killed the app
         raise EOFError("block mode ended")
@@ -293,7 +373,10 @@ class BlockMode:
             height = f.height or (lambda top=top: max(1, rows - len(footer) - top + 1))
             floats.append(Float(content=self.areas[f.id], top=top - 1, left=f.left - 1,
                                 width=width, height=height))
-        background = Window(Background("\n".join(body), self._click), wrap_lines=False)
+        columns = self._screen_size().columns              # padded to the full rectangle, so
+        body = [_pad(line, columns) for line in body]      # a click anywhere maps exactly
+        background = Window(Background("\n".join(body), self._click, raw=form.raw), wrap_lines=False)
+        self.background = background
         screen_area = FloatContainer(content=background, floats=floats)
         if self.bar is None:
             return screen_area
@@ -320,6 +403,19 @@ class BlockMode:
 
     def _key_bindings(self, form: Form) -> KeyBindings:
         kb = KeyBindings()
+        if form.raw:                                    # every key goes to the AI
+            # not eager: an eager catch-all would also swallow mouse events before the mouse
+            # bindings see them (eager matches win over more specific ones)
+            kb.add(Keys.Any)(lambda event: self._send_events(event.key_sequence))
+            kb.add(Keys.BracketedPaste, eager=True)(lambda event: self._send_events(event.key_sequence))
+
+            @kb.add("c-c", eager=True)
+            def _ctrl_c(event) -> None:
+                if not self.ctrl_c(False):
+                    self._send_events(event.key_sequence)
+
+            kb.add(POWER_CUT_KEY, eager=True)(lambda e: self.power_cut())
+            return kb
         kind = lambda k: Condition(lambda: (f := self._focused()) is not None and f.kind == k)  # noqa: E731
         editor, line, pager = kind("editor"), kind("line"), kind("pager")
 
@@ -370,8 +466,17 @@ class BlockMode:
             self._send(Action(key=name, focus=getattr(self._focused(), "id", None)))
         return handle
 
-    def _click(self, row: int, col: int) -> None:
-        self._send(Action(key="click", focus=getattr(self._focused(), "id", None), row=row, col=col))
+    def _click(self, button: str, row: int, col: int) -> None:
+        if self.form is not None and self.form.raw:
+            self._send(Action(key="keys", focus=None,
+                              events=(f'<mouse button="{button}" row="{row}" col="{col}"/>',)))
+        elif button == "left":
+            self._send(Action(key="click", focus=getattr(self._focused(), "id", None),
+                              row=row, col=col))
+
+    def _send_events(self, presses) -> None:
+        if events := render_events(presses):
+            self._send(Action(key="keys", focus=None, events=events))
 
     def _send(self, action: Action) -> None:
         if self.waiting or self.form is None:
@@ -387,7 +492,8 @@ class BlockMode:
                 modified=text != self.baseline.get(f.id),
                 changed=text != self.seen.get(f.id)))
             self.seen[f.id] = text                     # the AI is about to see it
-        self.actions.put_nowait(Action(action.key, action.focus, tuple(states), action.row, action.col))
+        self.actions.put_nowait(Action(action.key, action.focus, tuple(states), action.row,
+                                       action.col, action.events))
         self._hold_keys()                              # keys typed right after the action key
 
     def _hold_keys(self) -> None:

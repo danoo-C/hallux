@@ -86,6 +86,8 @@ class Form:
     focus: str | None = None      # the id of the field that gets the cursor
     keymap: str = "emacs"         # local editing keys: "emacs", "nano" or "vi"
     footer: str | None = None     # lines pinned to the bottom of the screen (status, help)
+    raw: bool = False             # raw mode: every key goes to the AI, not just action keys
+    tick: float = 0               # raw mode: wake the AI every this many seconds (0: never)
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,7 @@ class Action:
     fields: tuple[FieldState, ...] = ()
     row: int | None = None        # where a click landed, 1-based
     col: int | None = None
+    events: tuple[str, ...] = ()  # raw mode: <text>, <key> and <mouse> events, in order
 
 
 @dataclass(frozen=True)
@@ -296,12 +299,18 @@ def parse_form(text: str) -> Form | None:
             style=a.get("style"),
             lang=a.get("lang"),
         ))
-    if not fields:
+    raw = attrs.get("raw") == "yes"
+    if not fields and not raw:                         # raw programs need no fields
         return None
     keymap = attrs.get("keymap", "emacs")
+    try:
+        tick = float(attrs.get("tick", 0))
+    except ValueError:
+        tick = 0
     return Form(fields=tuple(fields), keys=tuple(attrs.get("keys", "").split()),
                 focus=attrs.get("focus"), keymap=keymap if keymap in KEYMAPS else "emacs",
-                footer=decode(footer[1].removeprefix("\n")) if footer else None)
+                footer=decode(footer[1].removeprefix("\n")) if footer else None,
+                raw=raw, tick=min(60.0, max(1.0, tick)) if raw and tick > 0 else 0)
 
 
 def _attributes(text: str) -> dict[str, str]:

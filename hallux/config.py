@@ -22,6 +22,7 @@ class Hardware:
     status_bar: bool = True                   # hallux's own bottom row: activity, model, cost
     keep_transcripts: bool = False            # True: Claude Code also keeps its own transcript
     os_sandbox: bool = False                  # True: Claude Code runs inside bubblewrap
+    tick_budget_usd: float = 0.25             # raw mode: live updates per program run, then pause
 
     @property
     def model_effort(self) -> str | None:
@@ -58,6 +59,9 @@ def _validate(hw: Hardware, path: Path) -> None:
     for name in ("status_bar", "keep_transcripts", "os_sandbox"):
         if not isinstance(getattr(hw, name), bool):
             raise ValueError(f"{path}: {name} must be true or false")
+    tick = hw.tick_budget_usd
+    if isinstance(tick, bool) or not isinstance(tick, int | float) or tick < 0:
+        raise ValueError(f"{path}: tick_budget_usd must be a number, 0 or more")
     budget = hw.max_budget_usd
     if budget is not None and (isinstance(budget, bool) or not isinstance(budget, int | float)
                                or budget <= 0):

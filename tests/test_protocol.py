@@ -227,3 +227,12 @@ def test_a_clipboard_write_split_across_streamed_pieces_is_still_dropped():
     for size in range(1, 21):
         stream, pieces = streamed(reply, size)
         assert "".join(pieces) == parse(reply).screen
+
+
+def test_raw_forms():
+    form = form_of('<form raw="yes" tick="3"><footer>\nq quit\n</footer></form>')
+    assert form.raw and form.tick == 3 and form.fields == () and form.footer == "q quit\n"
+    assert form_of('<form raw="yes" tick="0.1"></form>').tick == 1          # at most once a second
+    assert form_of('<form raw="yes" tick="soon"></form>').tick == 0
+    assert form_of('<form tick="3"><line id="a">x</line></form>').tick == 0  # ticks are for raw mode
+    assert form_of('<form keys="q"></form>') is None                        # no fields, not raw

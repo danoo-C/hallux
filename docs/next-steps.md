@@ -8,6 +8,12 @@ lives in [roadmap.md](roadmap.md); the design behind everything is in [concept.m
 
 ## 1. Raw mode: `top`, live updates, games (roadmap 6b)
 
+**Status:** implemented as described below, with the recommended answers, except
+`raw_mode_model`. The design is in [concept.md](concept.md) under "Input: cooked mode and raw
+mode". The difference from this plan: raw mode is a block-mode form with `raw="yes"` (and
+`tick`) instead of a separate `<tty mode="raw"/>` switch. That way it gets block mode's
+full-screen layout, footer, status bar, held keys and form-first streaming rule for free.
+
 **Goal:** programs that need every key, or that change on their own:
 - `top` / `htop` with numbers that tick;
 - a snake game;

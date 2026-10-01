@@ -29,8 +29,10 @@ next, in detail, is in [next-steps.md](next-steps.md).
   - `file=` fields loaded from the disk, and the `save_field` tool;
   - `nano`, `vi` and `emacs` keymaps;
   - pagers as menus. The code is in `hallux/blockmode.py`.
-- [ ] **6b. Raw mode:** every key to the AI, for programs that need it (`top`, action games),
-  with live updates (`<tick/>`).
+- [x] **6b. Raw mode:**
+  - a form with `raw="yes"` sends every key and click to the AI, batched while it answers;
+  - `tick="3"` gives live updates, within `tick_budget_usd`;
+  - for `top`, `htop`, `watch`, games and single-key menus.
 - [x] **6c. Status bar, hard exit, key rule:**
   - a bottom status bar with activity, model, cost and a spinner (`hallux/statusbar.py`);
   - Ctrl+Shift+Del and Ctrl-C ×3 as the hard exit;

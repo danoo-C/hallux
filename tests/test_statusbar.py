@@ -66,3 +66,11 @@ def test_pinning_the_bar():
     drawn = statusbar.draw(StatusBar("claude-opus-5-5", "low"), 30, 120)
     assert drawn.startswith("\x1b7\x1b[1;29r\x1b[30;1H") and drawn.endswith("\x1b[0m\x1b8")
     assert statusbar.uninstall(30) == "\x1b7\x1b[r\x1b[30;1H\x1b[0m\x1b[2K\x1b8"
+
+
+def test_a_note_replaces_the_idle_hint():
+    bar = StatusBar("claude-opus-5-5", "low")
+    bar.update(note="live updates paused: tick budget used")
+    assert text(bar, 100).startswith(" • live updates paused: tick budget used")
+    bar.update(busy=True, started=0.0)
+    assert "thinking…" in text(bar, 100, now=1.0)            # work still shows while busy

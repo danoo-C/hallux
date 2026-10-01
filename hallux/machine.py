@@ -89,6 +89,9 @@ class Machine:
         self.spent = 0.0                         # dollars, all boots
         self.session_spent = 0.0                 # dollars, this boot (the SDK reports a total)
         self.fields: dict[str, Field] = {}       # block mode: the fields on screen now
+        self.in_form = False                     # a full-screen program is on screen
+        self.tick_spent = 0.0                    # raw mode: dollars spent on ticks this run
+        self.last_turn_cost = 0.0
         self.stream: ScreenStream | None = None  # what the last answer showed while written
 
     def options(self) -> ClaudeAgentOptions:
@@ -171,7 +174,11 @@ class Machine:
         """Show the AI's form, let the user work in it, send back the action they end with."""
         form, to_load = resolve(reply.form, self.fields)
         form = self.load_files(form, to_load)
+        if form.tick and self.tick_spent >= self.hardware.tick_budget_usd:
+            form = dataclasses.replace(form, tick=0)             # live updates stop here
+            self.terminal.set_status(note="live updates paused: tick budget used")
         self.fields = {field.id: field for field in form.fields}
+        self.in_form = True
         await self.terminal.show_form(reply.screen, form)
         try:
             action = await self.terminal.next_action()
@@ -179,6 +186,12 @@ class Machine:
             log.error("block mode ended unexpectedly")
             await self.leave_block_mode()
             return await self.send(client, "key", "", name="C-c")
+        if action.key == "tick":                  # raw mode: time passed, nothing was pressed
+            reply = await self.send(client, "tick", activity="updating…")
+            self.tick_spent += self.last_turn_cost
+            return reply
+        if action.events:                         # raw mode: every key, as events
+            return await self.send(client, "keys", "".join(action.events))
         attrs: dict[str, object] = {"key": action.key}
         if action.focus:
             attrs["focus"] = action.focus
@@ -265,7 +278,9 @@ class Machine:
                 self.terminal.set_status(error=f"couldn't write {write.path}")
 
     async def leave_block_mode(self) -> None:
-        self.fields = {}
+        if self.in_form and self.tick_spent:
+            self.terminal.set_status(note=None)
+        self.fields, self.in_form, self.tick_spent = {}, False, 0.0
         await self.terminal.end_form()
 
     def envelope(self, tag: str, body: str = "", **attrs: object) -> str:
@@ -290,7 +305,7 @@ class Machine:
             loop.add_signal_handler(signal.SIGINT, interrupt)       # in case no raw keyboard
         result, tools = None, 0
         stream = self.stream = (ScreenStream() if getattr(self.terminal, "streams", False)
-                                and not self.fields else None)     # never under a form
+                                and not self.in_form else None)    # never under a form
         try:
             async with self.terminal.busy(interrupt, activity):
                 await client.query(message)
@@ -313,7 +328,7 @@ class Machine:
                 loop.remove_signal_handler(signal.SIGINT)
         if result is not None:
             session_total = result.total_cost_usd or self.session_spent
-            turn_cost = session_total - self.session_spent
+            turn_cost = self.last_turn_cost = session_total - self.session_spent
             self.session_spent = session_total
             self.spent += turn_cost
             self.terminal.set_status(cost=self.spent, seconds=result.duration_ms / 1000)

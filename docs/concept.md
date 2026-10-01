@@ -213,7 +213,7 @@ There are three kinds of commands:
 | Real Linux | In Hallux | Controlled by |
 |---|---|---|
 | **Terminal emulator**: draws text and colors, clears, reports mouse clicks | Your real terminal app | Escape codes the AI prints |
-| **TTY line discipline**: *cooked* (line by line) or *raw* (every key) | `hallux.py` | `<tty mode="raw"/>` / `<tty mode="cooked"/>` from the AI, its `stty` |
+| **TTY line discipline**: *cooked* (line by line) or *raw* (every key) | `hallux.py` | The AI's reply: a normal prompt (cooked), or a full-screen form, with `raw="yes"` for every key |
 | **Programs**: bash, python3, htop, vim | The AI | — |
 
 `hallux.py` knows nothing about colors or mice. It passes bytes in both directions. Your
@@ -323,51 +323,32 @@ live updates, such as action games and `top`.
 - Mouse reporting is **off**, so your terminal app's selection, copy and paste, and scrollback
   work normally.
 
-**Raw mode** is for full-screen programs:
+**Raw mode** is for programs that need every key, or that change on their own: `top`,
+`htop`, `watch`, games and single-key menus. It's built on block mode (`hallux/blockmode.py`):
 
-- The AI's reply ends with `<tty mode="raw"/>`. The tty switches your real terminal to raw mode,
-  and every key, paste and click becomes an event:
+- **A form with `raw="yes"` and no fields.** The AI draws the screen the same way as in block
+  mode, with the form first, an optional footer and the status bar below. Streaming stays off,
+  and leaving works the same way, with a normal screen and prompt.
+- **Every key and click goes to the AI** as events:
   ```text
-  <keys cwd="/home/user" time="..." cols="120" rows="32"><text>jj</text><key>Down</key><mouse button="left" action="press" col="42" row="7"/></keys>
+  <keys cwd="/home/user" time="..." cols="120" rows="31"><text>jj</text><key>Up</key><key>C-c</key></keys>
+  <keys ...><mouse button="left" row="7" col="42"/></keys>
   ```
-- **Type-ahead:** keys you press while the model is busy are collected and sent together in the
-  next `<keys>`. A fast typist therefore costs one model call, not ten.
-- The AI answers with a `<screen>` that redraws the screen, and an empty `<prompt>`. When the
-  program exits, it switches back with `<tty mode="cooked"/>`.
+  Key names are `Enter`, `Escape`, `Tab`, `Backspace`, `Up`, `PageDown`, `F2`, `C-x`, `C-Up`,
+  and so on. The wheel arrives as `wheel-up` and `wheel-down` clicks.
+- **Type-ahead batching:** the first key goes out at once. Keys pressed while the AI answers
+  go out **together** with the next screen, so a fast typist costs one model call, not ten.
+- **Ticks:** `tick="3"` wakes the AI every 3 s (1–60 s) with `<tick>` while nothing is pressed,
+  so `top`'s clock and numbers move. Ticks cost money, so they stop when `tick_budget_usd`
+  (default $0.25 per program run) is spent. The status bar then says
+  `live updates paused: tick budget used`, and the program just waits for a key.
+- **Ctrl-C** reaches the program as a key, and still counts toward the triple-Ctrl-C hard exit.
+  While the AI is answering, it interrupts the answer.
+- **The screen is padded to the full rectangle,** so a click anywhere, even on empty space,
+  maps to the exact row and column the AI drew.
 
-Every envelope carries the terminal size (`cols`, `rows`). The AI uses it to lay out full-screen
-programs and to know what sits under a click.
-
-### How a click works
-
-```text
-cow daysi moo> htop
-```
-
-1. The AI replies:
-   ```text
-   <screen>␛[?1049h␛[?1000h␛[?1006h␛[H␛[2J ...a full htop frame... </screen><prompt></prompt><tty mode="raw"/>
-   ```
-2. Your terminal app switches to the alternate screen and starts reporting clicks. The tty
-   switches to raw mode.
-3. You click the `F10 Quit` label at column 71, row 32. Your terminal sends `ESC[<0;71;32M`, and
-   the tty forwards it as `<mouse button="left" action="press" col="71" row="32"/>`.
-4. The AI knows what it drew at (71, 32): the Quit button. It replies with
-   `<screen>␛[?1000l␛[?1006l␛[?1049l</screen><prompt>cow daysi moo> </prompt><tty mode="cooked"/>`,
-   and the shell screen comes back exactly as it was.
-
-Rules that make clicks reliable:
-
-- **Clicks only in full-screen mode.** On the alternate screen, the AI drew every cell itself at
-  known positions. In the scrolling shell it can't know what's where, because of scrollback and
-  wrapped lines. That's why mouse reporting stays off at the prompt.
-- **Redraw the whole screen on every reply** in v1: clear it, then draw a full frame. It costs
-  more tokens, but the AI's picture of the screen and the real screen can never drift apart.
-  Partial updates are an optimization for later.
-- **React to the press.** Ignore the release unless the program is dragging.
-- **Always leave cleanly:** mouse off, alternate screen off, `<tty mode="cooked"/>`. If a program
-  "crashes" and forgets, you get garbage at the prompt, just like on real Linux, and `reset`
-  fixes it: the AI prints the reset codes.
+Every envelope carries the terminal size (`cols`, `rows`), without the status bar's row.
+The AI uses it to lay out full-screen programs and to know what sits under a click.
 
 ### Keys and signals
 
@@ -751,7 +732,9 @@ def to_real(path: str) -> Path:
 
 ### The system prompt: this is where the magic is
 
-Put it in `prompt.md`. It's the part you'll iterate on the most. A first draft:
+Put it in `prompt.md`. It's the part you'll iterate on the most. Below is the **first draft**,
+kept for history; the prompt actually in use is `hallux/prompt.md`, which has grown block mode,
+raw mode, the key rule, `<file>`/`<cwd>`/`<memory>` and more:
 
 ```text
 You are an entire Linux machine called "hallux": kernel, bash and every program on it.

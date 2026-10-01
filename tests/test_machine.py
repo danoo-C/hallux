@@ -471,3 +471,34 @@ def test_os_sandbox_runs_claude_code_through_the_wrapper(tmp_path, monkeypatch):
     model = FakeModel(screen("", prompt="", tail="<halt/>"))
     run(tmp_path, model, FakeTerminal(), Hardware(os_sandbox=True))
     assert model.options[0].cli_path == tmp_path / ".hallux" / "claude-in-bwrap"
+
+
+TOP = ('<form raw="yes" tick="3"><footer>\nq quit\n</footer></form>'
+       '<screen>\ntop - 01:02:03 up 3 days\n</screen><prompt></prompt>')
+
+
+def test_raw_mode_sends_keys_and_ticks(tmp_path):
+    model = FakeModel(screen(""), TOP, TOP, TOP, screen("", prompt="$ "), screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("top", Action("tick", None), Action("keys", None, events=("<key>Down</key>",)),
+                            Action("keys", None, events=("<text>q</text>",)), "exit")
+    terminal.streams = True
+    run(tmp_path, model, terminal)
+    _, top, tick, down, q, _ = model.sessions[0]
+    assert tick.startswith("<tick ") and tick.endswith("></tick>")
+    assert down.startswith("<keys ") and down.endswith("><key>Down</key></keys>")
+    assert q.endswith("><text>q</text></keys>")
+    assert terminal.forms[0][1].raw and terminal.forms[0][1].tick == 3
+    assert "top - 01:02:03" not in terminal.screen          # never streamed into the shell
+    assert "updating…" in terminal.activities
+
+
+def test_ticks_pause_when_their_budget_is_spent(tmp_path):
+    model = FakeModel(screen(""), TOP, result(TOP, total=0.2), result(TOP, total=0.4),
+                      screen("", prompt="$ "), screen("", prompt="", tail="<halt/>"))
+    terminal = FakeTerminal("top", Action("tick", None), Action("tick", None),
+                            Action("keys", None, events=("<text>q</text>",)), "exit")
+    run(tmp_path, model, terminal, Hardware(tick_budget_usd=0.3))
+    ticks = [form.tick for _, form in terminal.forms]
+    assert ticks == [3, 3, 0]                               # $0.40 spent on ticks: paused
+    assert {"note": "live updates paused: tick budget used"} in terminal.statuses
+    assert {"note": None} in terminal.statuses              # cleared when top exits
