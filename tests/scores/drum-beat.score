@@ -1,0 +1,28 @@
+BPM = 120
+
+INSTRUMENT kick:
+    sin(p + (65536 - decay(t, 900)) * 5) * decay(t, 5000) * vel >> 24
+
+INSTRUMENT snare:
+    body = sin(p + (65536 - decay(t, 500)) * 2) * decay(t, 1500)
+    hiss = noise(t) * decay(t, 2200)
+    (body + hiss) * vel >> 25
+
+INSTRUMENT hat:
+    (noise(t) - noise(t - 1)) * decay(t, 600) * vel >> 25
+
+# one bar: the kick on beats 1 and 3, the snare on 2 and 4, a hat on every other eighth note
+PATTERN beat 32:
+    (0,  4, A1, kick)
+    (4,  4, C6, hat, 150)
+    (8,  4, G3, snare, 230)
+    (8,  4, C6, hat, 90)
+    (12, 4, C6, hat, 150)
+    (16, 4, A1, kick)
+    (20, 4, C6, hat, 150)
+    (24, 4, G3, snare, 230)
+    (24, 4, C6, hat, 90)
+    (28, 4, C6, hat, 150)
+
+SONG:
+    (0, beat, 0, 4)

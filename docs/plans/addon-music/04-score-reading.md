@@ -87,6 +87,58 @@ limit, and then `… and 7 more`.
 The three scores read clean, and a score with three mistakes comes back with three lines
 that say what to write.
 
+## As built
+
+Built on 2026-10-02. The three scores of the design are files in `tests/scores/`, and a test
+keeps them the same as the blocks in the design. Decided while building:
+
+- **`BPM` has to be set.** A file without it gets `the file has no BPM`. The design gives a
+  default for `STEPS` only.
+- **A line is one of three things, not two:** `Notes` (an event on an instrument), `Change`
+  (an event on a variable) and `Placement`. The two events have different fields, and step 5
+  treats them differently.
+- **`INSTRUMENT`, `PATTERN` and `SONG` are taken names** too, beside those the design lists.
+- **A number outside an expression** is decimal, may have a `-` in front, and has to fit 64
+  bits. `0xFF` is only for expressions, as the design says.
+- **A pattern is known from the end of its block,** so it can't place itself:
+  `verse can't be placed inside itself`.
+- **One mistake doesn't make the lines below it wrong.** A part, an instrument or a pattern
+  with a problem is still declared, the lines of a block with a bad header are still read,
+  and a `+` after a line with a problem isn't a second problem.
+- **The problems come out by line.** Those of the whole file, `the file has no BPM` and
+  `the file has no SONG:`, come last.
+- **A problem is cut at 160 characters,** so that twenty of them stay a small result. A name
+  of 400 letters is otherwise repeated in full.
+- **A mark at the start of the file** (a byte order mark) is skipped, and a line ends at
+  `\n` only, so the line numbers are those an editor shows.
+- **`score.key_of(note)`** gives a note's number, for step 5's messages.
+- **The limits of this step are in `limits.py`:** 64 KB, 20 problems, `BPM` and `STEPS`, 16
+  named parts, and a tail of 441,000 samples. Step 6 confirms the numbers.
+
+**More problems than the table has,** each because the AI is likely to write it:
+
+| The AI wrote | Message |
+|---|---|
+| No `BPM` | `the file has no BPM` |
+| A comment after a header or a setting | `line 3: a comment can't follow this line: put it on a line of its own` |
+| `pattern riff:` | `line 7: the keywords are in upper case: write PATTERN` |
+| An event that isn't indented | `line 8: this line must be indented: it belongs to a PATTERN or to SONG:` |
+| An event without its brackets | `line 8: can't read this line: an event is (start, duration, value, target, velocity), in brackets` |
+| No `)`, or text after it | `line 8: the ) is missing`, `line 8: only a comment, with a # in front, can follow the )` |
+| A header without its colon, or with too many words | `line 4: INSTRUMENT needs a : at the end of its line`, `line 4: an instrument starts with INSTRUMENT name: or INSTRUMENT name tail:` |
+| A name that isn't one | `line 4: my-lead isn't a name: a name is letters, digits and _, and starts with a letter` |
+| A second expression, or a part below the expression | `line 9: the expression on line 8 has to be the last line of INSTRUMENT pad` |
+| More named parts than the limit | `line 22: INSTRUMENT pad has more than 16 named parts` |
+| A tail that is negative or too long | `line 4: a tail is 0 to 441000 samples` |
+| A number that isn't one, or is too big | `line 2: the value of VOL is a whole number, not 0.5`, `line 2: the number … doesn't fit 64 bits` |
+| An event on a pattern | `line 14: riff is a pattern: place it with (0, riff)` |
+| An event on a named part | `line 14: env is a named part of an instrument: an event can't change it` |
+| A number where a note belongs | `line 14: lead is an instrument: its value is a note such as A4, not 128` |
+| A pattern placed in itself, or zero times | `line 9: verse can't be placed inside itself`, `line 14: a pattern is placed 1 time or more` |
+| A placement with too many fields | `line 14: a placement is (start, pattern, transpose, times)` |
+| A length of 0, or a name on `SONG` | `line 7: a pattern's length is 1 or more`, `line 20: SONG: has no name` |
+| A second `SONG:` | `line 30: SONG: is declared twice (first on line 20)` |
+
 ## Not in this step
 
 Anything that needs the patterns unfolded: a note that leaves C0 to B9 only after
