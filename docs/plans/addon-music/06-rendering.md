@@ -128,7 +128,59 @@ it.
 - The timing table is filled in, and the limits follow the rule.
 - Section 6 of the design has the numbers, and its "Still to find out" section is gone.
 
+## As built
+
+Built on 2026-10-02. The renderer gives the samples of the reference, one for one, for all
+four rows, with one thing to know about the second:
+
+- **The reference's second score kept the pad of the first.** Its lead followed `VOL` and
+  `BRIGHT`, but its pads were `sin(p) * vel >> 8` and didn't fade with `VOL`. In the design
+  both instruments name `VOL`. The test renders the score the way the reference did and gets
+  its samples exactly. The score as the design has it differs from what was heard in the
+  pads only: by at most 60 levels in the middle, and by the fade itself in the first 0.6
+  seconds and the last 1.2. Its largest sample is 30,766, not 30,825, and its peak is 94.
+
+**The timing,** from `tests/music_timing.py`, on this computer (an i5-11400H, one core, numpy
+2.5.3), best of three, in seconds:
+
+| Score | Notes | Length | Reading | Unfolding | Rendering | To 16 bits | Total |
+|---|---|---|---|---|---|---|---|
+| The longest song, 8 voices with `saw` and two gliding variables | 8 | 300 s | 0.000 | 0.000 | 2.291 | 0.019 | 2.31 |
+| The most events, short drum notes | 9984 | 156 s | 0.001 | 0.023 | 1.945 | 0.031 | 2.00 |
+| The same with automation | 24 | 9.6 s | 0.000 | 0.000 | 0.021 | 0.000 | 0.02 |
+| Chords and a melody | 24 | 9.6 s | 0.000 | 0.000 | 0.016 | 0.000 | 0.02 |
+| The drum beat | 40 | 8.0 s | 0.000 | 0.000 | 0.011 | 0.000 | 0.01 |
+
+- **Both stress scores are under 4 seconds, so the first numbers of the limits stand.** They
+  are in `limits.py`, and section 6 of the design has them.
+- **A drum note costs about 0.2 ms,** nearly all of it sample maths. Using a computed note
+  again wasn't needed, and it isn't built.
+- **The limits don't bound the length and the voices together.** 64 voices that all sound
+  for 300 seconds take 18.4 seconds here. The addon's 8 seconds catch that
+  (step 8). A limit on the notes' lengths added up would say it before the render; it isn't
+  in the design, and it isn't built.
+
+Decided while building:
+
+- **`render` returns a `Rendered`,** with the six parts of the table above and `report()`,
+  which gives what `play` tells the AI.
+- **A voice is 32 bits wide in the mix,** and 64 only while a mix that is too loud is turned
+  down, a million samples at a time.
+- **Turning down rounds down,** like the fades and the glides.
+- **`seconds` is rounded to the nearest tenth,** with a half rounded up: the pad with a tail
+  is 3.95 seconds and reads 4.0.
+- **An instrument only gets the variables it names.** The others aren't worked out for it.
+- **A variable is kept as its changes.** For a block in which it stands still it is one
+  number, and otherwise only that block's values are made.
+- **A sample of -32768 counts as too loud:** the largest is taken without its sign, and
+  32,768 is over full scale. The peak then reads 101 and the mix is turned down to 99.
+
 ## For the user
 
 A WAV file of the three scores, made by the real renderer from the three score files. It
 should sound exactly like the one of 2026-10-02.
+
+**Heard on 2026-10-02.** The file is `test-music/step6-scores.wav`, in a folder that git
+ignores: the three scores and the pad with a tail, as the real renderer makes them from the
+score files. The user listened to it: it "sounds great". That includes the second score as
+the design has it, with pads that fade with `VOL`.

@@ -21,8 +21,8 @@ them. The third score of section 5 is new.
 **The open questions were answered on 2026-10-02.** There were ten: four from the first
 version, and six details that I had settled while writing and nobody had confirmed. Each had
 a recommendation. The user read them all and accepted every one. The answers are now part of
-the sections, and the third table under Decisions lists them. What nobody knows yet is under
-Still to find out.
+the sections, and the third table under Decisions lists them. The one thing nobody knew then,
+the numbers of the limits, was measured later the same day (section 6).
 
 **Later on 2026-10-02** the user listened to the first two scores ("they sound good"), and
 changed how the sound gets out. It no longer matters that it goes straight to PulseAudio; it
@@ -335,8 +335,8 @@ drums were liked. Nothing was said about the others, and nobody has heard the un
 
 - **The kick's pitch falls the way its level does.** `(65536 - decay(t, h)) * n` starts the
   note about `n × 30,600 / h` Hz too high and halves that gap every `h` samples. With
-  `h = 900` and `n = 5`, a kick played at A1 (55 Hz) starts at 223 Hz, is at 139 Hz after
-  20 ms and at 62 Hz after 100 ms.
+  `h = 900` and `n = 5`, a kick played at A1 (55 Hz) starts at 223 Hz, is at 141 Hz after
+  20 ms and at 61 Hz after 100 ms.
 - **Vibrato made this way is the same number of Hz at every pitch,** so it's wider on a low
   note than on a high one.
 - **It works with every wave,** not only the sine: `saw(p + x)`.
@@ -719,22 +719,29 @@ SONG:
   been played yet is thrown away. On the hard exit the child goes away with Hallux.
 
 **The limits.** The AI writes every part of a score, possibly led by text it read in a file,
-so the addon treats all of it as untrusted. The numbers are to be chosen when it's built.
+so the addon treats all of it as untrusted. The numbers were set on 2026-10-02, by timing a
+whole render (section 8).
 
 | What | Limited to |
 |---|---|
-| Song length | A maximum number of seconds, short enough that rendering fits well inside the 10 seconds Hallux gives a call |
-| File size | A maximum number of bytes |
-| Events, once the patterns are unfolded | A maximum number. It also bounds repeats and patterns inside patterns |
-| Patterns inside patterns | A maximum depth |
-| An expression | A maximum length and nesting depth |
-| An instrument | A maximum number of named parts |
-| A tail | A maximum number of samples |
+| Song length | 300 seconds, with its tails. Rendering that fits well inside the 10 seconds Hallux gives a call |
+| File size | 64 KB |
+| Events, once the patterns are unfolded | 10,000 notes and changes. It also bounds repeats and patterns inside patterns |
+| Patterns inside patterns | 8 deep |
+| An expression | 500 characters, nested 40 deep |
+| An instrument | 16 named parts |
+| A tail | 441,000 samples, which is 10 seconds |
 | Whole numbers | What fits in 64 bits |
 | Notes | C0 to B9, after transposing |
 | Names | Only the names and functions of section 3, the declared variables, and an instrument's own named parts |
-| Voices at once | A maximum number |
-| Problems reported by one `play` | A maximum number, so the result stays small |
+| Voices at once | 64, with the tails that still sound |
+| Problems reported by one `play` | 20, each cut at 160 characters, so the result stays small |
+| `BPM`, `STEPS` | 20 to 400, and 1 to 96 |
+
+**A score inside every limit can still be too slow.** The limits bound the length and the
+voices one by one, not both together: 64 voices that all sound for 300 seconds take
+about 18 seconds here. The addon ends a render that takes longer than 8 seconds, and `play`
+fails with `the song took too long to render`.
 
 ---
 
@@ -769,10 +776,18 @@ so the addon treats all of it as untrusted. The numbers are to be chosen when it
   - Five minutes with eight voices sounding all the time would then take about 0.6 seconds.
   - `saw(p)` costs 4.4 ns per sample, and the raw form 0.9 ns. With `saw` in that `lead`, the
     same five minutes come to about 1 second by these numbers.
-  - Only the expression was timed. Reading the score, mixing, the fades and handing the
-    samples over weren't, so the limit on a song's length still has to come from a
-    measurement of the whole thing. The sound starts only after the render, and the call has
-    to finish within Hallux's 10 seconds.
+  - Only the expression was timed then. The sound starts only after the render, and the call
+    has to finish within Hallux's 10 seconds.
+- **A whole render was timed later that day,** with the real renderer: reading the file,
+  unfolding it, computing and mixing every note, and turning the mix into 16-bit samples.
+  - The longest song allowed, 300 seconds with eight voices that sound all the time, each a
+    `saw` with two gliding variables: 2.3 seconds.
+  - The most events allowed, 9984 short drum notes in 156 seconds: 2.0 seconds.
+  - Each of the three scores of section 5: 0.01 to 0.02 seconds.
+  - Nearly all of it is computing the notes. Reading a score takes about a thousandth of a
+    second, and unfolding 10,000 notes 0.03 seconds.
+  - Both big ones are under 4 seconds, half of the 8 seconds the addon allows a render, so a
+    computer half as fast still fits. The limits of section 6 are set by that.
 - **pygame's mixer makes a real sound on this computer.** On 2026-10-02 the user ran a
   throwaway script that played the drum beat of section 5 through it, at 44100 Hz, 16-bit,
   one channel, with SDL's PulseAudio driver and WSLg's sound server. The user heard it. I
@@ -866,16 +881,6 @@ on this computer and confirmed it.
 | How the sound gets out | pygame's mixer, in the child. Until then it was `libpulse-simple` through `ctypes` | Required: a Python library that pip installs into the venv. On 2026-10-01 pygame was turned down as not direct enough; now the way doesn't matter, as long as the sound can be heard. pygame's package brings its own sound drivers, so nothing comes from the system, and the window addon needs it anyway. In a test its mixer passed the samples on unchanged, and a queued sound followed without a gap. `sounddevice` was looked at again: on Linux its package has no PortAudio inside, so it would need a system library |
 | Where the two libraries come from | numpy and pygame, both from pip, as the optional install `.[music]` | Nothing has to come from the system |
 
-## Still to find out
-
-No question about the design is open. One thing needs a measurement, not a decision:
-
-- **The numbers of the limits** in section 6. They have to come from timing a whole render,
-  not only the expression (section 8).
-
-The handle through which `play` reads a file of the machine is built. It belongs to the
-addon system, not to this design (step 7 of [plans/addons-plan.md](plans/addons-plan.md)).
-
 ## Order of work
 
 **The step-by-step plan is in [plans/addon-music/](plans/addon-music/README.md),** written on
@@ -891,8 +896,8 @@ has to exist before step 5. It is step 1 of the plan, and it is built.
 2. A throwaway script that renders the scores of section 5 to a WAV file. It's for listening
    to the instruments and for timing the render. Partly done on 2026-10-02, in a scratch
    folder outside the repository: the expressions were timed, and the instruments and the
-   three scores were rendered to WAV files. The user listened to all of them. What's left is
-   timing a whole render.
+   three scores were rendered to WAV files. The user listened to all of them. A whole render
+   was timed later, with the real renderer (section 8).
 3. The expression parser with its functions and named parts, its arithmetic and its limits,
    with tests against known values.
 4. The score reader, unfolding the patterns and turning a score into samples, with tests that
