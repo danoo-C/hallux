@@ -78,7 +78,42 @@ python -m music_engine
 {"cmd": "stop", "id": 2}
 ```
 
+## As built
+
+Built on 2026-10-02. The tests pass on SDL's disk driver: a song arrives in the file as the
+samples `render` gave, and a loop with a tail as `first`, `again`, `again`, with not one
+sample between them. **Nobody has heard it yet:** my sandbox can't reach the sound card, and
+there the child answers `no sound device: ALSA: Couldn't open audio device: Connection
+refused`, as planned. Decided while building:
+
+- **A render has a thread of its own.** While it runs, the main loop goes on asking the
+  player every 50 ms. Without that, a loop with a tail would fall silent during a long
+  render: its next round is queued by that asking. A test renders for more than a second
+  over such a loop and finds no gap. The child still answers nothing else meanwhile.
+- **A short round is queued several at once.** A queued sound is at least half a second
+  long, made of whole rounds, so that 50 ms are always enough to queue the next one. A loop
+  of one step would otherwise run dry.
+- **`stop` and a new `play` throw away what was queued.** Tried with the disk driver:
+  pygame's `stop()` doesn't start the queued sound, and a new `play()` on the channel starts
+  on the next sample and drops it.
+- **A `play` without `loop` plays once.** One whose `text` isn't text, or whose `loop` isn't
+  true or false, answers `addon bug: play takes a text, and true or false for loop`.
+- **An unknown message** answers `unknown message: rewind`. A line that isn't JSON is
+  ignored, as the window does.
+- **A bug's answer is cut at 200 characters.**
+- **`tests/music_play.py`** is the small script for the run by hand, below.
+
 ## For the user
 
-That run by hand, or a small script that does it. My sandbox can't reach the sound card, so
-only the user can say whether the loop is heard without a gap.
+Run this, and listen:
+
+```text
+.venv/bin/python tests/music_play.py tests/scores/drum-beat.score
+.venv/bin/python tests/music_play.py --loop tests/scores/drum-beat.score
+```
+
+It prints what the child answers, and Enter stops the sound. The first should play the beat
+once and then print `{"event": "finished"}`. The second should go round without a gap.
+
+My sandbox can't reach the sound card, so only the user can say whether the loop is heard
+without a gap.
