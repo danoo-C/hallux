@@ -12,11 +12,15 @@ whatever the addons still have running.
 An addon can also report that something happened, such as a button pressed in its window
 (docs/addon-events.md). It defines connect(emit), and what it emits waits in Events, the hub,
 if the AI listens to that addon.
+
+An addon must not open a path of the machine by itself: it would work around the path jail.
+A function whose first parameter is called disk gets a DiskHandle instead.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import functools
 import importlib.util
 import inspect
@@ -32,10 +36,13 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Iterable
 
+from hallux.disk import Disk
+
 log = logging.getLogger("hallux")
 
 MODULE_PREFIX = "hallux_addon_"               # so an addon called music can't shadow a package
 RESERVED = "hallux"                           # the disk tools' group (hallux.tools.SERVER)
+DISK = "disk"                                 # a first parameter of this name gets the handle
 # No double underscore: the AI sees mcp__<addon>__<function>, split at the "__".
 ADDON_NAME = re.compile(r"[a-z](_?[a-z0-9])*")
 FUNCTION_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
@@ -58,6 +65,43 @@ class Addon:
 
 class Skip(Exception):
     """A check failed; the message is the reason."""
+
+
+class DiskHandle:
+    """The machine's files for an addon function, through the path jail (hallux.disk).
+
+    A function whose first parameter is called disk gets one with every call. Paths are the
+    machine's: absolute, or relative to its working directory. What the jail refuses raises
+    what Disk raises, an OSError or a ValueError, so the function can catch it. One that it
+    lets through reaches the AI the way the disk tools say it: {"error": "ENOENT"}."""
+
+    def __init__(self, disk: Disk):
+        self._disk = disk
+        self._raised: BaseException | None = None
+
+    def read_text(self, path: str) -> str:
+        """A whole text file. One over 1 MB is EFBIG, a binary one a ValueError."""
+        return self._through(self._disk.read_text, path)
+
+    def write_text(self, path: str, content: str) -> None:
+        """Create or overwrite a file. Its folder must exist."""
+        self._through(self._disk.write_file, path, content)
+
+    def _through(self, method: Callable, *args: object) -> Any:
+        try:
+            return method(*args)
+        except (OSError, ValueError) as e:
+            self._raised = e
+            raise
+
+    def refusal(self, error: BaseException) -> str | None:
+        """What the AI is told, if `error` is the one this handle raised last. An error of the
+        addon's own is none of the handle's, even when it is an OSError too."""
+        if error is not self._raised:
+            return None
+        if isinstance(error, OSError):
+            return errno.errorcode.get(error.errno, "EIO")
+        return str(error)
 
 
 class Events:
@@ -282,14 +326,20 @@ def description_for(function: Callable) -> str:
 def schema_for(function: Callable) -> dict[str, Any]:
     """The strict JSON schema of a function's arguments, built from its type hints.
 
-    A parameter with a default is optional. Raises Skip, with the reason, for a parameter
-    that has no hint or one that can't become a schema."""
+    A parameter with a default is optional. A first parameter called disk is Hallux's to fill
+    (see DiskHandle): it needs no hint, and the AI never sees it. Raises Skip, with the reason,
+    for a parameter that has no hint or one that can't become a schema."""
     properties, required = {}, []
-    for p in inspect.signature(function, eval_str=True).parameters.values():
+    parameters = inspect.signature(function, eval_str=True).parameters.values()
+    for position, p in enumerate(parameters):
         where = f"{function.__name__}({p.name})"
         if p.kind not in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY):
             raise Skip(f"{where}: only named parameters work, not *args, **kwargs or "
                        f"positional-only ones")
+        if p.name == DISK:
+            if position:
+                raise Skip(f"{where}: {DISK} must be the first parameter")
+            continue
         if p.annotation is p.empty:
             raise Skip(f"{where} has no type hint")
         json_type = next((t for hint, t in JSON_TYPES.items() if p.annotation is hint), None)
@@ -302,9 +352,16 @@ def schema_for(function: Callable) -> dict[str, Any]:
             "additionalProperties": False}
 
 
-async def call(function: Callable, args: dict[str, Any]) -> dict[str, Any]:
+def takes_disk(function: Callable) -> bool:
+    """Does the function want the disk handle? It does if its first parameter is called disk."""
+    return next(iter(inspect.signature(function).parameters), None) == DISK
+
+
+async def call(function: Callable, args: dict[str, Any],
+               disk: Disk | None = None) -> dict[str, Any]:
     """Run an addon function for the AI and turn whatever happens into a tool result.
 
+    `disk` is the machine's disk, for a function that takes the handle.
     The function gets a thread of its own, so a slow one freezes neither the keyboard nor the
     status bar. A thread can't be stopped: after the timeout the AI gets its error, and the
     function runs on with nobody waiting for it."""
@@ -316,7 +373,7 @@ async def call(function: Callable, args: dict[str, Any]) -> dict[str, Any]:
             outcome.set_result(result)
 
     def work() -> None:
-        result = _run(function, args)
+        result = _run(function, args, disk)
         try:
             loop.call_soon_threadsafe(deliver, result)
         except RuntimeError:                  # the loop is closed: the machine is off
@@ -362,11 +419,22 @@ def stop_all(addons: Iterable[Addon], seconds: float = TIMEOUT) -> list[str]:
     return failures
 
 
-def _run(function: Callable, args: dict[str, Any]) -> tuple[dict, bool]:
+def _run(function: Callable, args: dict[str, Any],
+         disk: Disk | None = None) -> tuple[dict, bool]:
     """Call the function. Returns what the AI gets, and whether that is an error."""
+    handle = None
+    if takes_disk(function):
+        if disk is None:
+            log.warning("addon call %s got no disk", _label(function))
+            return {"error": f"{function.__name__} needs the machine's disk, and this call "
+                             f"has none"}, True
+        handle = DiskHandle(disk)
     try:
-        result = function(**args)
+        # By name, so that a disk among the AI's arguments is an error and never the handle.
+        result = function(**args) if handle is None else function(**{DISK: handle}, **args)
     except (Exception, SystemExit) as e:
+        if handle is not None and (refused := handle.refusal(e)):
+            return {"error": refused}, True   # the jail said no: no fault of the addon's
         log.warning("addon call %s raised", _label(function), exc_info=True)
         return {"error": _describe(e)}, True
     if problem := _problem_with(result):

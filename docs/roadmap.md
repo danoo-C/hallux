@@ -63,6 +63,7 @@ next, in detail, is in [next-steps.md](next-steps.md).
   - the list of addons in `<boot>`, `list_addons` and `addon_help`;
   - `addons = [...]` per world in `config.toml`;
   - `stop()` hooks on halt, reboot and the hard exit;
+  - a disk handle, so that an addon reads the machine's files through the jail;
   - the example: a real window with a text box (`addons/window.py`).
 - [x] **9b. Events from addons:** an addon wakes the machine by itself, such as with a button
   in its window. The design is in [addon-events.md](addon-events.md).
@@ -70,7 +71,6 @@ next, in detail, is in [next-steps.md](next-steps.md).
   - an event interrupts the shell prompt, and the half-typed line comes back;
   - `event_budget_usd` limits what events spend while nobody types.
 - [ ] **Later:**
-  - a disk handle for addons, so that one can read the machine's files through the jail;
   - the music addon ([addon-music.md](addon-music.md));
   - events inside full-screen programs, and a script line that fakes an event;
   - worker agents that an addon brings;

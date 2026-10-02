@@ -5,13 +5,12 @@ proposed. The step-by-step record, with every decision taken while building, is
 [plans/addons-plan.md](plans/addons-plan.md).
 
 **What is built:** the loader, the tools, the list in `<boot>`, the prompt section, the
-per-world setting and the `stop()` hooks (`hallux/addons.py` and around it), and events
-(section 9). The first addon is a window with a text box, `addons/window.py`
+per-world setting, the `stop()` hooks and the disk handle (`hallux/addons.py` and around
+it), and events (section 9). The first addon is a window with a text box, `addons/window.py`
 ([plans/addon-pygame-example-plan.md](plans/addon-pygame-example-plan.md)), not the music addon
 of section 7.
 
-**What isn't:** the handle through which an addon reads the machine's files (open question
-4), the music addon, and worker agents (section 8).
+**What isn't:** the music addon, and worker agents (section 8).
 
 **Where the code went further than this document:**
 - The loader makes nine checks, not four. An exposed function needs a docstring and type
@@ -20,6 +19,8 @@ of section 7.
   error.
 - `stop()` is also called at the end of every boot in which the addon was never used.
 - An addons folder inside a machine's folder is never loaded.
+- The handle of open question 4 goes to a function whose first parameter is called `disk`.
+  It has `read_text(path)` and `write_text(path, content)`, and the AI never sees it.
 
 The six open questions at the end were all settled as recommended.
 

@@ -60,6 +60,13 @@ In `tests/test_addons.py`, with fake addons in a temporary folder, as the others
 A fake addon's `count_lines(disk, path)` works on a file in a test world, called through the
 tool that the AI would use.
 
+## As built
+
+Built on 2026-10-02. One thing differs from the list above: only the handle's own errors are
+said as errno names, and an addon's own exceptions keep their name in front, as before. That
+and the other decisions taken while building are under step 7 of
+[addons-plan.md](../addons-plan.md).
+
 ## Also in this step
 
 - The status line of [addons-plan.md](../addons-plan.md) says that step 7 is built.

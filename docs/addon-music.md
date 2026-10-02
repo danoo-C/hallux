@@ -1,7 +1,7 @@
 # The music addon
 
 **Status:** a proposal as discussed. Nothing of the music addon is implemented. The addon
-system it would run on is built, except the handle through which `play(path)` reads a file
+system it would run on is built, with the handle through which `play(path)` reads a file
 of the machine (step 7 of [plans/addons-plan.md](plans/addons-plan.md)). What an addon is, and
 how Hallux loads one, is in [addons.md](addons.md). The plan for building it is in
 [plans/addon-music/](plans/addon-music/README.md).
@@ -872,9 +872,8 @@ No question about the design is open. One thing needs a measurement, not a decis
 - **The numbers of the limits** in section 6. They have to come from timing a whole render,
   not only the expression (section 8).
 
-The handle through which `play` reads a file of the machine isn't built either. That belongs
-to the addon system, not to this design (step 7 of
-[plans/addons-plan.md](plans/addons-plan.md)).
+The handle through which `play` reads a file of the machine is built. It belongs to the
+addon system, not to this design (step 7 of [plans/addons-plan.md](plans/addons-plan.md)).
 
 ## Order of work
 
@@ -883,7 +882,7 @@ to the addon system, not to this design (step 7 of
 outline that the plan grew from, and the plan is what counts where the two differ.
 
 The handle for the machine's files (step 7 of [plans/addons-plan.md](plans/addons-plan.md))
-has to exist before step 5. It is step 1 of the plan.
+has to exist before step 5. It is step 1 of the plan, and it is built.
 
 1. Check that the child's way of making sound works on this computer: a real sound through
    pygame's mixer at 44100 Hz and 16 bits. Done on 2026-10-02: the user heard the drum beat

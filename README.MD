@@ -221,6 +221,10 @@ EXPOSED = [roll]
 - **`EXPOSED`** lists the functions the AI may call. Nothing else in the file is reachable.
 - **Each function** needs a docstring and type hints (`str`, `int`, `float` or `bool`). It
   returns a small dictionary, and it returns quickly: after 10 seconds the AI gets an error.
+- **A file of the machine** is read through a handle, never opened by the addon itself: that
+  would work around the path jail. A function whose first parameter is called `disk`, as in
+  `def play(disk, path: str)`, gets one with `read_text(path)` and `write_text(path, content)`.
+  The AI never sees that parameter.
 - **Optional:** `stop()`, called when a boot ends, to close whatever is still open; and
   `connect(emit)`, to report events.
 
