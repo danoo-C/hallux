@@ -1,7 +1,11 @@
 # Plan: the music addon
 
-**Status:** steps 1 and 2 are built: the disk handle, and reading an expression. A machine
-has no music addon yet. The design it follows is [addon-music.md](../../addon-music.md), in
+**Status:** steps 1 to 9 are built: the disk handle, reading and computing an expression,
+reading and unfolding a score, rendering, the child that plays, the addon, and its manual. A
+machine has the music addon: `play` and `stop`, the `finished` event, and a manual of 7987
+characters from which the AI writes scores. Reading it should cost about 2500 tokens; that
+is an estimate from its size, and the live run measures it. What is left is step 10: the
+live run with a real model and real sound, and the documentation. The design it follows is [addon-music.md](../../addon-music.md), in
 which no question is open. Two checks from the design's order of work are done: a real sound
 came out of pygame's mixer on this computer, and the three scores of the design were rendered
 by a throwaway script and heard.
@@ -149,13 +153,13 @@ Each step can be merged by itself. A step needs the ones named beside it.
 |---|---|---|---|
 | 1. The disk handle | [01-disk-handle.md](01-disk-handle.md) | | Built on 2026-10-02 |
 | 2. Reading an expression | [02-expression-reading.md](02-expression-reading.md) | | Built on 2026-10-02 |
-| 3. Computing an expression | [03-expression-computing.md](03-expression-computing.md) | 2 | Not started |
-| 4. Reading a score | [04-score-reading.md](04-score-reading.md) | 2 | Not started |
-| 5. Unfolding a score | [05-score-unfolding.md](05-score-unfolding.md) | 4 | Not started |
-| 6. Rendering | [06-rendering.md](06-rendering.md) | 3, 5 | Not started |
-| 7. The child | [07-child.md](07-child.md) | 6 | Not started |
-| 8. The addon | [08-addon.md](08-addon.md) | 1, 7 | Not started |
-| 9. The manual | [09-manual.md](09-manual.md) | 8 | Not started |
+| 3. Computing an expression | [03-expression-computing.md](03-expression-computing.md) | 2 | Built on 2026-10-02 |
+| 4. Reading a score | [04-score-reading.md](04-score-reading.md) | 2 | Built on 2026-10-02 |
+| 5. Unfolding a score | [05-score-unfolding.md](05-score-unfolding.md) | 4 | Built on 2026-10-02 |
+| 6. Rendering | [06-rendering.md](06-rendering.md) | 3, 5 | Built on 2026-10-02, and heard: "sound great" |
+| 7. The child | [07-child.md](07-child.md) | 6 | Built on 2026-10-02; the user still has to hear it |
+| 8. The addon | [08-addon.md](08-addon.md) | 1, 7 | Built on 2026-10-02 |
+| 9. The manual | [09-manual.md](09-manual.md) | 8 | Built on 2026-10-02 |
 | 10. The live run, and the documentation | [10-live-run.md](10-live-run.md) | 9 | Not started |
 
 Steps 1 and 2 don't depend on each other, and either can come first. This table is the only
@@ -168,11 +172,13 @@ place that holds the status.
 - **The AI may need several tries for a score.** Every failed check is a round trip, and the
   user waits. The problems have to say what to write, not only what is wrong (steps 2 and
   4), and the live run counts the tries (step 10).
-- **The manual is long, and it is read at every boot that uses the addon.** Step 9 gives it
-  a size limit and measures what it costs.
-- **A whole render has never been timed.** Only the expression was. If reading, mixing and
-  handing over turn out slow, the song has to be shorter than hoped. Step 6 measures it
-  before step 7 builds on it.
+- **The manual is long, and it is read at every boot that uses the addon.** It is 7987
+  characters, under its limit of 8000. What that costs in tokens is still an estimate;
+  step 10 reads it from `hallux.log`.
+- **A score inside every limit can still render too slowly.** Step 6 timed whole renders, and
+  the limits stand: the two stress scores take 2.3 and 2.0 seconds. But 64 voices that all
+  sound for 300 seconds take about 18 (measured: 18.4). The addon's 8 seconds catch that
+  (step 8).
 - **I can't hear, and I can't reach the sound card.** My sandbox doesn't let the socket to the
   sound server through. Every test here runs without sound, and each step that changes what
   is heard ends with something for the user to listen to.

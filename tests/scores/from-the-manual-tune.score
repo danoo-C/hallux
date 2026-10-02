@@ -1,0 +1,86 @@
+BPM = 120
+
+INSTRUMENT bass:
+    (tri(p) * 3 + saw(p)) * decay(t, 20000) * vel >> 26
+
+INSTRUMENT pad 35280:
+    env = min(t, 4000) * decay(t - dur, 6000) >> 12
+    (saw(p) + saw(p + (p >> 8)) + saw(p - (p >> 8))) * env * vel >> 26
+
+INSTRUMENT piano:
+    sin(p + (sin(p) * decay(t, 3000 + (96 - key) * 60) * vel >> 25)) * decay(t, 16000) * vel >> 24
+
+# half a bar of bass on C: root, octave, root
+PATTERN beat 16:
+    (0, 8, C2, bass, 75)
+    (+, 4, C3, bass, 60)
+    (+, 4, C2, bass, 75)
+
+# four bars: C, Am, F, G
+PATTERN bass1 128:
+    (0, beat, 0, 2)
+    (+, beat, -3, 2)
+    (+, beat, 5, 2)
+    (+, beat, -5, 2)
+
+# four bars: C, Am, F and G, C
+PATTERN bass2 128:
+    (0, beat, 0, 2)
+    (+, beat, -3, 2)
+    (+, beat, 5)
+    (+, beat, -5)
+    (+, 32, C2, bass, 75)
+
+PATTERN chords1 128:
+    (0, 32, C4 E4 G4, pad, 32)
+    (+, 32, C4 E4 A4, pad, 32)
+    (+, 32, C4 F4 A4, pad, 32)
+    (+, 32, B3 D4 G4, pad, 32)
+
+PATTERN chords2 128:
+    (0, 32, C4 E4 G4, pad, 32)
+    (+, 32, C4 E4 A4, pad, 32)
+    (+, 16, C4 F4 A4, pad, 32)
+    (+, 16, B3 D4 G4, pad, 32)
+    (+, 32, C4 E4 G4, pad, 32)
+
+PATTERN tune1 128:
+    (0, 8, E5, piano, 100)
+    (+, 8, G5, piano, 100)
+    (+, 4, E5, piano, 100)
+    (+, 4, D5, piano, 100)
+    (+, 8, C5, piano, 100)
+    (+, 8, A4, piano, 100)
+    (+, 8, C5, piano, 100)
+    (+, 16, E5, piano, 100)
+    (+, 8, F5, piano, 100)
+    (+, 4, E5, piano, 100)
+    (+, 4, D5, piano, 100)
+    (+, 8, C5, piano, 100)
+    (+, 8, A4, piano, 100)
+    (+, 8, B4, piano, 100)
+    (+, 8, D5, piano, 100)
+    (+, 16, G5, piano, 100)
+
+PATTERN tune2 128:
+    (0, 8, E5, piano, 100)
+    (+, 8, G5, piano, 100)
+    (+, 8, C6, piano, 100)
+    (+, 8, G5, piano, 100)
+    (+, 8, A5, piano, 100)
+    (+, 4, G5, piano, 100)
+    (+, 4, E5, piano, 100)
+    (+, 16, C5, piano, 100)
+    (+, 8, A5, piano, 100)
+    (+, 8, F5, piano, 100)
+    (+, 8, G5, piano, 100)
+    (+, 8, D5, piano, 100)
+    (+, 32, C5, piano, 100)
+
+SONG:
+    (0, chords1)
+    (+, chords2)
+    (0, bass1)
+    (+, bass2)
+    (0, tune1)
+    (+, tune2)
