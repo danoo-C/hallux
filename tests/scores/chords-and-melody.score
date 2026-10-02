@@ -1,0 +1,31 @@
+BPM = 100
+
+INSTRUMENT pad:
+    sin(p) * vel >> 8
+
+INSTRUMENT lead:
+    (saw(p) + sin(p)) * vel >> 9
+
+# C major, held for a bar
+PATTERN major 32:
+    (0, 32, C3 E3 G3, pad, 60)
+
+# A minor, held for a bar
+PATTERN minor 32:
+    (0, 32, A2 C3 E3, pad, 60)
+
+# root, fifth, octave: it fits a major and a minor chord
+PATTERN riff 32:
+    (0,  8, C4, lead, 140)
+    (+,  8, G4, lead, 140)
+    (+, 16, C5, lead, 140)
+
+SONG:
+    (0,  major)        # bar 1: C major
+    (0,  riff)
+    (32, major, -5)    # bar 2: G major, five semitones down
+    (32, riff, -5)
+    (64, minor)        # bar 3: A minor
+    (64, riff, -3)
+    (96, major, -7)    # bar 4: F major, seven semitones down
+    (96, riff, -7)

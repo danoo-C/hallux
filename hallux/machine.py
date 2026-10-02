@@ -123,7 +123,7 @@ class Machine:
     def options(self) -> ClaudeAgentOptions:
         server, allowed = build_server(self.disk, fields=self.terminal, addons=self.addons,
                                        events=self.events)
-        addon_servers, addon_tools = build_addon_servers(self.addons)
+        addon_servers, addon_tools = build_addon_servers(self.addons, self.disk)
         hw = self.hardware
         return ClaudeAgentOptions(
             system_prompt=SYSTEM_PROMPT,

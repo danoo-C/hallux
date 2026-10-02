@@ -1,0 +1,68 @@
+BPM = 110
+BVOL = 255
+
+INSTRUMENT kick:
+    sin(p + (65536 - decay(t, 900)) * 5) * decay(t, 5000) * vel >> 24
+
+INSTRUMENT snare:
+    body = sin(p + (65536 - decay(t, 500)) * 2) * decay(t, 1500)
+    hiss = noise(t) * decay(t, 2200)
+    (body + hiss) * vel >> 25
+
+INSTRUMENT hat:
+    (noise(t) - noise(t - 1)) * decay(t, 600) * vel >> 25
+
+INSTRUMENT bass:
+    (saw(p) + sin(p) * 3) * decay(t, 12000) * vel * BVOL >> 34
+
+# one bar of drums
+PATTERN drums 32:
+    (0, 4, A1, kick, 140)
+    (8, 4, G3, snare, 120)
+    (16, 4, A1, kick, 140)
+    (24, 4, G3, snare, 120)
+    (0, 4, C5, hat, 40)
+    (+, 4, C5, hat, 90)
+    (+, 4, C5, hat, 40)
+    (+, 4, C5, hat, 90)
+    (+, 4, C5, hat, 40)
+    (+, 4, C5, hat, 90)
+    (+, 4, C5, hat, 40)
+    (+, 4, C5, hat, 90)
+
+# the last bar: four rising snares at the end
+PATTERN fill 32:
+    (0, 4, A1, kick, 140)
+    (8, 4, G3, snare, 120)
+    (16, 4, A1, kick, 140)
+    (24, 2, G3, snare, 70)
+    (+, 2, G3, snare, 90)
+    (+, 2, G3, snare, 110)
+    (+, 2, G3, snare, 130)
+    (0, 4, C5, hat, 40)
+    (+, 4, C5, hat, 90)
+    (+, 4, C5, hat, 40)
+    (+, 4, C5, hat, 90)
+    (+, 4, C5, hat, 40)
+    (+, 4, C5, hat, 90)
+
+# one bar of bass on A: root, fifth and octave only, so it transposes anywhere
+PATTERN riff 32:
+    (0, 4, A2, bass, 70)
+    (+2, 2, A2, bass, 70)
+    (+, 4, A3, bass, 70)
+    (+, 4, A2, bass, 70)
+    (+4, 4, E3, bass, 70)
+    (+, 4, A3, bass, 70)
+    (+, 4, E3, bass, 70)
+
+SONG:
+    (0, drums, 0, 7)
+    (+, fill)
+    (0, riff, 0, 2)
+    (+, riff, -4)
+    (+, riff, -2)
+    (+, riff, 0, 2)
+    (+, riff, -4)
+    (+, riff, -5)
+    (192, 64, 40, BVOL)    # the bass fades over the last two bars

@@ -5,13 +5,13 @@ proposed. The step-by-step record, with every decision taken while building, is
 [plans/addons-plan.md](plans/addons-plan.md).
 
 **What is built:** the loader, the tools, the list in `<boot>`, the prompt section, the
-per-world setting and the `stop()` hooks (`hallux/addons.py` and around it), and events
-(section 9). The first addon is a window with a text box, `addons/window.py`
-([plans/addon-pygame-example-plan.md](plans/addon-pygame-example-plan.md)), not the music addon
-of section 7.
+per-world setting, the `stop()` hooks and the disk handle (`hallux/addons.py` and around
+it), and events (section 9). The first addon was a window with a text box,
+`addons/window.py` ([plans/addon-pygame-example-plan.md](plans/addon-pygame-example-plan.md)).
+The music addon of section 7 is the second, `addons/music.py`
+([plans/addon-music/](plans/addon-music/README.md)).
 
-**What isn't:** the handle through which an addon reads the machine's files (open question
-4), the music addon, and worker agents (section 8).
+**What isn't:** worker agents (section 8).
 
 **Where the code went further than this document:**
 - The loader makes nine checks, not four. An exposed function needs a docstring and type
@@ -20,6 +20,8 @@ of section 7.
   error.
 - `stop()` is also called at the end of every boot in which the addon was never used.
 - An addons folder inside a machine's folder is never loaded.
+- The handle of open question 4 goes to a function whose first parameter is called `disk`.
+  It has `read_text(path)` and `write_text(path, content)`, and the AI never sees it.
 
 The six open questions at the end were all settled as recommended.
 
@@ -216,25 +218,29 @@ This is the example the idea started from. Its design has its own document:
 [addon-music.md](addon-music.md).
 
 **What it is, in short:**
-- **Two functions:** `play(path)` and `stop()`.
+- **Two functions:** `play(path, loop)` and `stop()`.
 - **A song is one score file on the machine's disk,** and `play(path)` reads it. The file
-  holds the sample rate, the tempo, the variables, the instruments, the patterns and the song.
-  The song then survives a reboot, the user can edit it in nano, and playing it again costs no
-  tokens. It's the same trick as `file=` fields and `save_field`.
-- **An instrument is a bytebeat expression** of `t`, `note` and `vel`, read by a small parser
-  with a whitelist.
+  holds the tempo, the variables, the instruments, the patterns and the song. The song then
+  survives a reboot, the user can edit it in nano, and playing it again costs no tokens. It's
+  the same trick as `file=` fields and `save_field`.
+- **The sound is 16-bit at 44100 Hz.**
+- **An instrument is an expression in the style of bytebeat,** of `t`, `p`, `vel`, `dur` and
+  `key`, with a few built-in waves and a level that dies away, read by a small parser with a
+  whitelist.
 - **Everything that happens is an event,** `(start, duration, value, target, velocity)`,
-  counted in 32nd notes. A note and a change to a variable have the same shape.
-- **A pattern holds events that repeat, and the song places patterns in time,** transposed if
-  wanted. That keeps the score short: the AI writes every character, and the user waits for
-  each one.
+  counted in 32nd notes unless the score says otherwise. A note and a change to a variable
+  have the same shape.
+- **A pattern holds events that repeat, and the song places patterns in time,** transposed
+  and repeated if wanted. That keeps the score short: the AI writes every character, and the
+  user waits for each one.
 
 **What it replaced:** the first idea had four kinds of function (`createSynth`, `createMusic`,
 `setBPM`, and `play` with `stop`). One score file needs one call where that needed four, which
 is the point of section 6.
 
-**Still to settle:** the exact syntax of the file, and whether audio works from WSL. They're
-listed in the music document.
+**It is built,** as `addons/music.py` and the child process in `addons/music_engine/`. The
+limits were set by timing whole renders. In a live run on 2026-10-02 the AI composed seven
+songs for the user, and each played on the first try.
 
 ---
 

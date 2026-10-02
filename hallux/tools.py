@@ -164,23 +164,24 @@ def build_server(disk: Disk, fields: Fields | None = None, addons: Sequence[Addo
     return create_sdk_mcp_server(SERVER, tools=tools), [f"mcp__{SERVER}__{t.name}" for t in tools]
 
 
-def build_addon_tools(addon: Addon) -> list[SdkMcpTool]:
-    """An addon's exposed functions as tools. A function's docstring is its description."""
+def build_addon_tools(addon: Addon, disk: Disk | None = None) -> list[SdkMcpTool]:
+    """An addon's exposed functions as tools. A function's docstring is its description.
+    `disk` is the machine's disk, for the functions that take the handle."""
     def make(name: str, function: Callable) -> SdkMcpTool:
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
-            return await call(function, args)
+            return await call(function, args, disk)
         return tool(name, description_for(function), schema_for(function))(handler)
 
     return [make(name, function) for name, function in addon.functions.items()]
 
 
-def build_addon_servers(
-        addons: Sequence[Addon]) -> tuple[dict[str, McpSdkServerConfig], list[str]]:
+def build_addon_servers(addons: Sequence[Addon], disk: Disk | None = None
+                        ) -> tuple[dict[str, McpSdkServerConfig], list[str]]:
     """One MCP server per addon, so two addons can each have a play: the AI sees
     mcp__music__play. Returns the servers by name, and the names for allowed_tools."""
     servers, allowed = {}, []
     for addon in addons:
-        tools = build_addon_tools(addon)
+        tools = build_addon_tools(addon, disk)
         servers[addon.name] = create_sdk_mcp_server(addon.name, tools=tools)
         allowed += [f"mcp__{addon.name}__{t.name}" for t in tools]
     return servers, allowed

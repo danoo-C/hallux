@@ -1,0 +1,54 @@
+BPM = 96
+
+INSTRUMENT glass 30000:
+    wob = sin(t * 9) >> 3
+    amp = min(t, 2048) * decay(t - dur, 6000) >> 11
+    tone = tri(p + wob) * 3 + sin(p * 3)
+    tone * amp * vel >> 26
+
+INSTRUMENT deep 12000:
+    hold = min(t, 2048) * decay(t - dur, 4000) >> 11
+    (sin(p) * 3 + saw(p)) * hold * vel >> 26
+
+INSTRUMENT blip:
+    (square(p) + sin(p * 2) * 2) * decay(t, 3500) * vel >> 26
+
+# half a bar: root, fifth, octave, ninth
+PATTERN arp 16:
+    (0, 4, A3, blip, 70)
+    (+, 4, E4, blip, 55)
+    (+, 4, A4, blip, 70)
+    (+, 4, B4, blip, 55)
+
+# one bar: the arpeggio twice over a held root
+PATTERN cell 32:
+    (0, arp, 0, 2)
+    (0, 32, A2, deep, 60)
+
+# four bars: A, F, G, A
+PATTERN verse 128:
+    (0, cell)
+    (+, cell, -4)
+    (+, cell, -2)
+    (+, cell)
+
+PATTERN air 128:
+    (0, 12, E5, glass, 60)
+    (+, 4, C5, glass, 60)
+    (+, 8, E5, glass, 60)
+    (+, 8, A5, glass, 60)
+    (+, 8, A5, glass, 60)
+    (+, 8, G5, glass, 60)
+    (+, 8, F5, glass, 60)
+    (+, 8, C5, glass, 60)
+    (+, 12, D5, glass, 60)
+    (+, 4, B4, glass, 60)
+    (+, 8, D5, glass, 60)
+    (+, 8, G5, glass, 60)
+    (+, 8, E5, glass, 60)
+    (+, 8, C5, glass, 60)
+    (+, 16, A4, glass, 60)
+
+SONG:
+    (0, verse)
+    (0, air)

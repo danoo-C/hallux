@@ -1,0 +1,38 @@
+BPM = 100
+VOL = 0
+BRIGHT = 0
+
+INSTRUMENT pad:
+    sin(p) * vel * VOL >> 16
+
+INSTRUMENT lead:
+    (saw(p) * BRIGHT + sin(p) * (255 - BRIGHT)) * vel * VOL >> 24
+
+# C major, held for a bar
+PATTERN major 32:
+    (0, 32, C3 E3 G3, pad, 40)
+
+# A minor, held for a bar
+PATTERN minor 32:
+    (0, 32, A2 C3 E3, pad, 40)
+
+PATTERN riff 32:
+    # the tone opens up over three beats and closes again on the fourth
+    (0, 24, 255, BRIGHT)
+    (+,  8,   0, BRIGHT)
+    (0,  8, C4, lead, 130)
+    (+,  8, G4, lead, 130)
+    (+, 16, C5, lead, 130)
+
+SONG:
+    # fade in over the first quarter note, and out over the last half note
+    (0,    8, 255, VOL)
+    (112, 16,   0, VOL)
+    (0,  major)        # bar 1: C major
+    (0,  riff)
+    (32, major, -5)    # bar 2: G major
+    (32, riff, -5)
+    (64, minor)        # bar 3: A minor
+    (64, riff, -3)
+    (96, major, -7)    # bar 4: F major
+    (96, riff, -7)

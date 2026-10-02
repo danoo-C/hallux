@@ -1,7 +1,8 @@
 # Plan: the addon system
 
-**Status:** steps 1 to 6 and step 8 (the documentation) are built. Step 7, the disk handle,
-is not. The design it follows is [addons.md](../addons.md), sections 1 to 6.
+**Status:** all eight steps are built. Step 7, the disk handle, was built on 2026-10-02 as
+step 1 of the music addon's plan. The design it follows is [addons.md](../addons.md),
+sections 1 to 6.
 
 **Not in this plan:** the music addon ([addon-music.md](../addon-music.md)) and worker agents
 (section 8 of the design). The first addon built on this system is the small example in
@@ -219,7 +220,22 @@ Ctrl+Shift+Del.
 
 **Done when:** a fake addon's `count_lines(disk, path)` works on a file in a test world.
 
-The example addon doesn't need this step. The music addon does.
+The example addon doesn't need this step. The music addon does, and its plan has this step
+as its first, with more detail: [addon-music/01-disk-handle.md](addon-music/01-disk-handle.md).
+
+**Built on 2026-10-02.** Decided while building:
+- **Only the handle's own errors are said the way the disk tools say them.** The handle raises
+  what `Disk` raises, so a function can catch a `FileNotFoundError`. One that it lets through
+  reaches the AI as `{"error": "ENOENT"}`, and isn't logged as a fault of the addon. Every
+  other exception keeps its name in front, as before: `ValueError: sides must be …`.
+- **The handle is passed by name.** A `disk` among the AI's arguments is then an error, and
+  never replaces the handle. The schema refuses it before that.
+- **`disk` as a positional-only parameter skips the addon,** by the check that exists for
+  every parameter.
+- **A function that takes the handle and is called without a disk** is a tool error:
+  `count_lines needs the machine's disk, and this call has none`. A machine always passes its
+  disk, so only a test can meet this.
+- **`write_text` returns nothing,** and the folder of the file has to exist.
 
 ### 8. Documentation
 

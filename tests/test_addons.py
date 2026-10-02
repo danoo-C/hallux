@@ -168,10 +168,18 @@ def test_stop_may_take_arguments_if_it_works_without_them(folder):
     ("unknown.py", fake(top="from __future__ import annotations",
                         functions=func("ping(color: Colour) -> dict")),
      "NameError: name 'Colour' is not defined"),
+    ("second.py", fake(functions=func("ping(path: str, disk) -> dict")),
+     r"ping\(disk\): disk must be the first parameter"),
+    ("hinted.py", fake(functions=func("ping(path: str, disk: str = '') -> dict")),
+     r"ping\(disk\): disk must be the first parameter"),
+    ("slash.py", fake(functions=func("ping(disk, /, path: str) -> dict")),
+     r"ping\(disk\): only named parameters"),
     # 8. stop
     ("force.py", fake(top=func("stop(force: bool) -> dict")),
      r"stop\(\) must work without arguments"),
     ("flag.py", fake(top="stop = True"), r"stop\(\) must work without arguments"),
+    ("needy.py", fake(top=func("stop(disk) -> dict"), exposed="EXPOSED = [ping, stop]"),
+     r"stop\(\) must work without arguments"),
     # 9. connect
     ("deaf.py", fake(top=func("connect()", "pass", doc="")), r"connect\(\) must work with one argument"),
     ("greedy.py", fake(top=func("connect(emit, loop)", "pass", doc="")),
@@ -300,6 +308,21 @@ def test_schema_refuses_what_it_cant_describe():
                              (positional, r"positional\(path\): only named parameters")]:
         with pytest.raises(addons.Skip, match=reason):
             addons.schema_for(function)
+
+
+def test_a_first_parameter_called_disk_is_not_in_the_schema():
+    def play(disk, path: str, loop: bool = False) -> dict: ...
+    def plain(path: str, loop: bool = False) -> dict: ...
+    def keyword(*, disk, path: str, loop: bool = False) -> dict: ...
+    def alone(disk) -> dict: ...
+    def stop() -> dict: ...
+
+    assert addons.schema_for(play) == addons.schema_for(plain) == addons.schema_for(keyword)
+    assert addons.schema_for(alone) == addons.schema_for(stop)
+    assert [addons.takes_disk(f) for f in (play, keyword, alone, plain, stop)] == [
+        True, True, True, False, False]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"disk": "/", "path": "song.score"}, addons.schema_for(play))
 
 
 # ---------------------------------------------------------------- the call wrapper
@@ -709,6 +732,176 @@ def test_an_addon_call_shows_on_the_status_bar(attached, tmp_path):
                         addons=attached).run())
     assert {"activity": "reading the manual of music", "tools": 1} in terminal.statuses
     assert {"activity": "music: play", "tools": 2} in terminal.statuses
+
+
+# ---------------------------------------------------------------- the disk handle
+
+LINES = fake(doc='"""A line counter: real counting."""',
+             functions=func("count_lines(disk, path: str) -> dict",
+                            'return {"lines": len(disk.read_text(path).splitlines())}',
+                            doc="Count the lines of a file.") + "\n\n\n"
+                       + func("save(disk, path: str, text: str) -> dict",
+                              'return {"written": disk.write_text(path, text)}',
+                              doc="Write a file."),
+             exposed="EXPOSED = [count_lines, save]")
+NOTES = "/home/user/notes.md"
+
+
+@pytest.fixture
+def lines(folder, world):
+    """An addon whose functions take the disk handle, as the tools of a machine in a test
+    world. Returns the tools and the machine's disk."""
+    (folder / "lines.py").write_text(LINES)
+    [addon], skipped = addons.load(folder)
+    assert skipped == {}
+    (world / "home" / "user").mkdir(parents=True)
+    (world / "home" / "user" / "notes.md").write_text("one\ntwo\nthree\n")
+    (world / ".hallux").mkdir()
+    (world / ".hallux" / "memory.md").write_text("# hallux memory\n")
+    (world.parent / "secret.txt").write_text("outside\nthe machine\n")
+    disk = Disk(world)
+    return tools.build_addon_tools(addon, disk), disk
+
+
+def invoke_on(disk, function, **args):
+    """invoke(), for a function that takes the disk handle."""
+    jsonschema.validate(args, addons.schema_for(function))
+    result = asyncio.run(addons.call(function, args, disk))
+    return json.loads(result["content"][0]["text"]), result["is_error"]
+
+
+def test_a_function_with_a_disk_reads_a_file_of_the_machine(lines):
+    counter, _ = lines
+    assert call_tool(counter, "count_lines", path=NOTES) == ({"lines": 3}, False)
+
+
+def test_the_handle_follows_the_working_directory(lines):
+    counter, disk = lines
+    assert call_tool(counter, "count_lines", path="notes.md") == ({"error": "ENOENT"}, True)
+    disk.chdir("/home/user")
+    assert call_tool(counter, "count_lines", path="notes.md") == ({"lines": 3}, False)
+    assert call_tool(counter, "count_lines", path="../user/notes.md") == ({"lines": 3}, False)
+    assert call_tool(counter, "save", path="new.txt", text="a\n") == ({"written": None}, False)
+    assert call_tool(counter, "count_lines", path="/home/user/new.txt") == ({"lines": 1}, False)
+
+
+def test_the_handle_cant_read_outside_the_machine(lines, world):
+    counter, _ = lines
+    (world / "out").symlink_to(world.parent / "secret.txt")
+    for path, error in [("../secret.txt", "ENOENT"),                  # .. stops at the root
+                        (str(world.parent / "secret.txt"), "ENOENT"),  # a path of the host
+                        ("/out", "EACCES"),                            # a link out of the machine
+                        ("/.hallux/memory.md", "ENOENT"),              # invisible to the OS
+                        ("/.hallux", "ENOENT")]:
+        assert call_tool(counter, "count_lines", path=path) == ({"error": error}, True), path
+
+
+def test_what_the_jail_refuses_is_said_as_the_disk_tools_say_it(lines, world, caplog):
+    counter, disk = lines
+    reader = tools.build_tools(disk)
+    (world / "photo.jpg").write_bytes(b"\xff\xd8\0\0")
+    (world / "big.txt").write_text("x" * 1024 * 1024)
+    assert call_tool(counter, "count_lines", path="/big.txt") == ({"lines": 1}, False)
+    (world / "big.txt").write_text("x" * (1024 * 1024 + 1))
+    for path, error in [("/nowhere.txt", "ENOENT"), ("/home", "EISDIR"),
+                        ("/big.txt", "EFBIG"), ("/photo.jpg", "binary file")]:
+        assert call_tool(counter, "count_lines", path=path) == ({"error": error}, True), path
+    for path in ("/nowhere.txt", "/home"):                 # the disk tools' own words
+        assert call_tool(counter, "count_lines", path=path) == call_tool(
+            reader, "read_file", path=path)
+    assert "raised" not in caplog.text                     # no fault of the addon's
+
+
+def test_write_text_writes_inside_the_machine_and_nowhere_else(lines, world):
+    counter, _ = lines
+    assert call_tool(counter, "save", path="/home/user/new.txt", text="žluťoučký\n")[1] is False
+    assert (world / "home/user/new.txt").read_text(encoding="utf-8") == "žluťoučký\n"
+    assert call_tool(counter, "save", path=NOTES, text="")[1] is False           # overwrites
+    assert (world / "home/user/notes.md").read_text() == ""
+    assert call_tool(counter, "save", path="../../escaped.txt", text="x")[1] is False
+    assert (world / "escaped.txt").read_text() == "x"                 # .. stops at the root
+    assert not (world.parent / "escaped.txt").exists()
+
+    (world / "out").symlink_to(world.parent / "secret.txt")
+    (world / "new").symlink_to(world.parent / "made.txt")
+    for path, error in [("/out", "EACCES"), ("/new", "EACCES"), ("/.hallux/memory.md", "ENOENT"),
+                        ("/.hallux/config.toml", "ENOENT"), ("/no/such/folder.txt", "ENOENT"),
+                        ("/home", "EISDIR")]:
+        assert call_tool(counter, "save", path=path, text="x") == ({"error": error}, True), path
+    assert (world.parent / "secret.txt").read_text() == "outside\nthe machine\n"
+    assert not (world.parent / "made.txt").exists()
+    assert (world / ".hallux" / "memory.md").read_text() == "# hallux memory\n"
+    assert not (world / ".hallux" / "config.toml").exists()
+
+
+def test_the_ai_never_sees_the_disk_and_cant_pass_one(lines):
+    counter, _ = lines
+    count = counter[0]
+    assert count.input_schema == {"type": "object", "properties": {"path": {"type": "string"}},
+                                  "required": ["path"], "additionalProperties": False}
+    with pytest.raises(jsonschema.ValidationError):
+        call_tool(counter, "count_lines", disk="/", path=NOTES)
+    # Even past the schema, what the AI passes as disk never replaces the handle.
+    result = asyncio.run(count.handler({"disk": "/", "path": NOTES}))
+    assert result["is_error"] and "multiple values for keyword argument 'disk'" in (
+        result["content"][0]["text"])
+
+
+def test_a_function_can_catch_what_the_handle_raises(world):
+    def lines_or_none(disk, path: str) -> dict:
+        try:
+            return {"lines": len(disk.read_text(path).splitlines())}
+        except FileNotFoundError:
+            return {"lines": None}
+
+    def renamed(disk, path: str) -> dict:
+        try:
+            disk.read_text(path)
+        except OSError as e:
+            raise RuntimeError("no score there") from e
+
+    assert invoke_on(Disk(world), lines_or_none, path="/nowhere") == ({"lines": None}, False)
+    assert invoke_on(Disk(world), renamed, path="/nowhere") == (
+        {"error": "RuntimeError: no score there"}, True)
+
+
+def test_an_error_of_the_addons_own_keeps_its_name(world, caplog):
+    def opens_it_itself(disk, path: str) -> dict:
+        open(world / "nowhere.txt")
+
+    def refuses(disk, path: str) -> dict:
+        raise ValueError("not a score")
+
+    payload, is_error = invoke_on(Disk(world), opens_it_itself, path="/nowhere.txt")
+    assert is_error and payload["error"].startswith("FileNotFoundError: [Errno 2]")
+    assert invoke_on(Disk(world), refuses, path="/x") == (
+        {"error": "ValueError: not a score"}, True)
+    assert caplog.text.count("raised") == 2 and "Traceback" in caplog.text
+
+
+def test_a_function_without_a_disk_is_called_as_before(attached, world):
+    music = tools.build_addon_tools(attached[0], Disk(world))
+    assert call_tool(music, "play", path="song.score") == ({"playing": "song.score"}, False)
+    assert call_tool(music, "stop") == ({"ok": True}, False)
+
+
+def test_a_function_that_takes_the_disk_fails_loudly_without_one(folder, caplog):
+    (folder / "lines.py").write_text(LINES)
+    [addon], _ = addons.load(folder)
+    assert call_tool(tools.build_addon_tools(addon), "count_lines", path=NOTES) == (
+        {"error": "count_lines needs the machine's disk, and this call has none"}, True)
+    assert "addon call lines.count_lines got no disk" in caplog.text
+
+
+def test_a_machine_hands_its_own_disk_to_its_addons(lines, folder, world, monkeypatch):
+    given = []
+    monkeypatch.setattr("hallux.machine.build_addon_servers",
+                        lambda loaded, disk=None: given.append(disk) or
+                        tools.build_addon_servers(loaded, disk))
+    loaded, _ = addons.load(folder)
+    machine = Machine(world, Hardware(), FakeTerminal(), addons=loaded)
+    assert machine.options().allowed_tools[-2:] == ["mcp__lines__count_lines", "mcp__lines__save"]
+    assert given == [machine.disk]
 
 
 # ---------------------------------------------------------------- stop() hooks
