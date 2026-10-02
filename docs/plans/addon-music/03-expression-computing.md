@@ -93,6 +93,35 @@ computed in blocks has to give exactly the samples of the same note computed in 
 The instruments of the three scores compute to the same samples in blocks as in one piece,
 and every rule of the arithmetic has a test that names the sentence of the design it checks.
 
+## As built
+
+Built on 2026-10-02. Every instrument of the three scores, and the pad with a tail, gives
+exactly the samples of the functions in [reference/scores.py](reference/scores.py), computed
+in blocks. Decided while building:
+
+- **`compute_instrument(parts, sample, values, more)`** takes the named parts and the last
+  line, not an instrument: the score reader of step 4 doesn't exist yet, and this module
+  doesn't need it. `more` is 1 when the values hold the one sample more that `saw` and
+  `square` look ahead to. That sample is dropped, and it doesn't count as clipped.
+- **`blocks(length, size)`** gives the pieces of a note: the first sample of each, the one
+  after its last, and whether it needs the sample more. The renderer of step 6 uses it.
+- **The last piece of a note is never a single sample.** The last sample of a note takes
+  its `d` from the sample before, so that sample has to be in the same piece. A piece that
+  would leave one sample over takes it along: a note of 16,385 samples is one piece.
+- **A plain number is an array of one number.** numpy wraps an array around in silence. For
+  a plain number it warns. The tests run with every warning as an error.
+- **`/` divides the sizes as unsigned numbers** and puts the sign back. With `abs` alone the
+  lowest number, -2^63, has no size, and half of it would come out positive.
+- **`tri` isn't mirrored exactly.** Its formula rounds toward 32767, so `tri(8192)` is 16384
+  and `tri(40960)` is -16383. The formula above is the definition, and it stays.
+- **The kick's pitch, measured:** 223 Hz in its first sample, 141 Hz after 20 ms and 61 Hz
+  after 100 ms. The design said 139 Hz and 62 Hz. Those two were estimates, and the design
+  now has the measured numbers.
+- **The saw's table of the design is a test:** -25, -19, -15 and -12 dB for the raw saw
+  against -41, -35, -32 and -28 dB for `saw(p)`, at A2, A4, C6 and C7.
+- **Timed here:** one voice for one minute, the lead of the second score with `saw` and two
+  gliding variables, in blocks of 16,384: 0.09 s.
+
 ## Not in this step
 
 The fades, the tail and the mix. They belong to the note, not to the expression, and they
