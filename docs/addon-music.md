@@ -1,9 +1,10 @@
 # The music addon
 
-**Status:** a proposal as discussed. Nothing of the music addon is implemented. The addon
-system it would run on is built, with the handle through which `play(path)` reads a file
-of the machine (step 7 of [plans/addons-plan.md](plans/addons-plan.md)). What an addon is, and
-how Hallux loads one, is in [addons.md](addons.md). The plan for building it is in
+**Status:** a proposal as discussed, and being built: the plan's status table says which
+steps are done. A machine has no music addon yet. The addon system it would run on is built,
+with the handle through which `play(path)` reads a file of the machine (step 7 of
+[plans/addons-plan.md](plans/addons-plan.md)). What an addon is, and how Hallux loads one, is
+in [addons.md](addons.md). The plan for building it is in
 [plans/addon-music/](plans/addon-music/README.md).
 
 **Revised on 2026-10-01,** after a review of the first version. Two requirements came from the

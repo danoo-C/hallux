@@ -81,3 +81,32 @@ One problem per expression is enough. The score reader collects them across the 
 
 Every recipe of the design reads into a tree, and each row of the problems table gives its
 message.
+
+## As built
+
+Built on 2026-10-02. numpy 2.5.3 is in the venv. Decided while building:
+
+- **A number fits 64 bits when it is below 2^64.** From 2^63 up it wraps around, as everything
+  does in the arithmetic, so `0xFFFFFFFFFFFFFFFF` is -1 and works as a mask. The tree holds
+  the wrapped number.
+- **A number that starts with 0 is refused,** apart from `0` itself and `0x…`. `017` is 15 in
+  C and 17 to a reader, so it is neither: `can't read the number 017: a number doesn't start
+  with 0`. A number that runs into letters, such as `1e3` or `2p`, is
+  `can't read the number 1e3: write it in decimal, or in hexadecimal with 0x`.
+- **What counts as nesting:** brackets, a function's brackets, a sign (`-x`, `~x`) and a
+  choice inside a choice. A long chain such as `a + b + c + …` isn't nesting.
+- **Three more problems that teach,** beside those of the table:
+
+| The AI wrote | Message |
+|---|---|
+| `//` | `// isn't an operator here: / already gives a whole number` |
+| `>>>` | `>>> isn't an operator here: use >>, which keeps the sign` |
+| `=` | `= isn't an operator here: a comparison is ==` |
+
+- **A name with brackets has its own message:**
+  `vel is a name, not a function: to multiply, write vel * (...)`.
+- **Nothing at all** is `the expression is empty`.
+- **A sign in front that isn't `-` or `~`,** such as `+x`, is `unexpected +`.
+- **The length is checked first,** before anything of the text is read.
+- **`expr.NAMES`** holds what every note gives its expression: `t`, `p`, `vel`, `dur`, `key`.
+  The score reader adds the variables and the named parts.

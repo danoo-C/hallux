@@ -1,10 +1,10 @@
 # Plan: the music addon
 
-**Status:** step 1, the disk handle, is built. Nothing of the music addon itself is. The
-design it follows is [addon-music.md](../../addon-music.md), in which no question is open.
-Two checks from the design's order of work are done: a real sound came out of pygame's mixer
-on this computer, and the three scores of the design were rendered by a throwaway script and
-heard.
+**Status:** steps 1 and 2 are built: the disk handle, and reading an expression. A machine
+has no music addon yet. The design it follows is [addon-music.md](../../addon-music.md), in
+which no question is open. Two checks from the design's order of work are done: a real sound
+came out of pygame's mixer on this computer, and the three scores of the design were rendered
+by a throwaway script and heard.
 
 **How this plan is laid out.** This file holds what the steps share: how the parts fit, the
 decisions, where the code goes, and the status. Every step has a file of its own in this
@@ -148,7 +148,7 @@ Each step can be merged by itself. A step needs the ones named beside it.
 | Step | File | Needs | Status |
 |---|---|---|---|
 | 1. The disk handle | [01-disk-handle.md](01-disk-handle.md) | | Built on 2026-10-02 |
-| 2. Reading an expression | [02-expression-reading.md](02-expression-reading.md) | | Not started |
+| 2. Reading an expression | [02-expression-reading.md](02-expression-reading.md) | | Built on 2026-10-02 |
 | 3. Computing an expression | [03-expression-computing.md](03-expression-computing.md) | 2 | Not started |
 | 4. Reading a score | [04-score-reading.md](04-score-reading.md) | 2 | Not started |
 | 5. Unfolding a score | [05-score-unfolding.md](05-score-unfolding.md) | 4 | Not started |
