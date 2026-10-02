@@ -70,8 +70,18 @@ next, in detail, is in [next-steps.md](next-steps.md).
   - `connect(emit)` in the addon, and the `addon_listen` tool for the AI;
   - an event interrupts the shell prompt, and the half-typed line comes back;
   - `event_budget_usd` limits what events spend while nobody types.
+- [x] **9c. The music addon:** a real sound card. The AI writes a score file and calls
+  `play`. The design is in [addon-music.md](addon-music.md), the ten steps in
+  [plans/addon-music/](plans/addon-music/README.md).
+  - a score file: tempo, variables, instruments, patterns and a song, checked with every
+    problem reported by its line;
+  - instruments as expressions in the style of bytebeat, at 44100 Hz and 16 bits, with
+    `sin`, `saw`, `square`, `tri`, `noise` and `decay`;
+  - a child process that renders the whole song with numpy and plays it through pygame's
+    mixer; `play`, `stop`, looping and the `finished` event;
+  - a manual of under 8000 characters that the AI writes its scores from: in the live run
+    seven new songs each played on the first try.
 - [ ] **Later:**
-  - the music addon ([addon-music.md](addon-music.md));
   - events inside full-screen programs, and a script line that fakes an event;
   - worker agents that an addon brings;
   - smarter AI tab completion;

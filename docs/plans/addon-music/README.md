@@ -1,11 +1,10 @@
 # Plan: the music addon
 
-**Status:** steps 1 to 9 are built: the disk handle, reading and computing an expression,
-reading and unfolding a score, rendering, the child that plays, the addon, and its manual. A
-machine has the music addon: `play` and `stop`, the `finished` event, and a manual of 7987
-characters from which the AI writes scores. Reading it should cost about 2500 tokens; that
-is an estimate from its size, and the live run measures it. What is left is step 10: the
-live run with a real model and real sound, and the documentation. The design it follows is [addon-music.md](../../addon-music.md), in
+**Status:** all ten steps are done. A machine has the music addon: `play` and `stop`, the
+`finished` event, and a manual of 7987 characters from which the AI writes scores. In the
+live run a real model composed seven songs, and each played on the first try. Reading the
+manual costs about $0.045 once per boot. What the live run didn't cover is at the end of
+[10-live-run.md](10-live-run.md). The design it follows is [addon-music.md](../../addon-music.md), in
 which no question is open. Two checks from the design's order of work are done: a real sound
 came out of pygame's mixer on this computer, and the three scores of the design were rendered
 by a throwaway script and heard.
@@ -160,7 +159,7 @@ Each step can be merged by itself. A step needs the ones named beside it.
 | 7. The child | [07-child.md](07-child.md) | 6 | Built on 2026-10-02; the user still has to hear it |
 | 8. The addon | [08-addon.md](08-addon.md) | 1, 7 | Built on 2026-10-02 |
 | 9. The manual | [09-manual.md](09-manual.md) | 8 | Built on 2026-10-02 |
-| 10. The live run, and the documentation | [10-live-run.md](10-live-run.md) | 9 | Not started |
+| 10. The live run, and the documentation | [10-live-run.md](10-live-run.md) | 9 | Done on 2026-10-03 |
 
 Steps 1 and 2 don't depend on each other, and either can come first. This table is the only
 place that holds the status.
@@ -171,10 +170,10 @@ place that holds the status.
 
 - **The AI may need several tries for a score.** Every failed check is a round trip, and the
   user waits. The problems have to say what to write, not only what is wrong (steps 2 and
-  4), and the live run counts the tries (step 10).
+  4). In the live run it needed one try for each of seven new scores, and one more after an
+  edit of its own that went wrong (step 10).
 - **The manual is long, and it is read at every boot that uses the addon.** It is 7987
-  characters, under its limit of 8000. What that costs in tokens is still an estimate;
-  step 10 reads it from `hallux.log`.
+  characters, under its limit of 8000. Reading it cost about $0.045 in the live run.
 - **A score inside every limit can still render too slowly.** Step 6 timed whole renders, and
   the limits stand: the two stress scores take 2.3 and 2.0 seconds. But 64 voices that all
   sound for 300 seconds take about 18 (measured: 18.4). The addon's 8 seconds catch that
@@ -185,4 +184,5 @@ place that holds the status.
 - **Samples have to be the same on every computer.** `decay` and the smoothed waves go
   through floating-point numbers before they are rounded. The reference render is the check
   on this computer; another computer could differ by one level in rare samples.
-- **The AI may imagine instead of calling.** Only the live run shows that.
+- **The AI may imagine instead of calling.** It didn't: in the live run and in the scripted
+  run every `play` on the screen was a call in the log.

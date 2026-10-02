@@ -6,11 +6,12 @@ proposed. The step-by-step record, with every decision taken while building, is
 
 **What is built:** the loader, the tools, the list in `<boot>`, the prompt section, the
 per-world setting, the `stop()` hooks and the disk handle (`hallux/addons.py` and around
-it), and events (section 9). The first addon is a window with a text box, `addons/window.py`
-([plans/addon-pygame-example-plan.md](plans/addon-pygame-example-plan.md)), not the music addon
-of section 7.
+it), and events (section 9). The first addon was a window with a text box,
+`addons/window.py` ([plans/addon-pygame-example-plan.md](plans/addon-pygame-example-plan.md)).
+The music addon of section 7 is the second, `addons/music.py`
+([plans/addon-music/](plans/addon-music/README.md)).
 
-**What isn't:** the music addon, and worker agents (section 8).
+**What isn't:** worker agents (section 8).
 
 **Where the code went further than this document:**
 - The loader makes nine checks, not four. An exposed function needs a docstring and type
@@ -237,9 +238,9 @@ This is the example the idea started from. Its design has its own document:
 `setBPM`, and `play` with `stop`). One score file needs one call where that needed four, which
 is the point of section 6.
 
-**Still to find out:** the numbers of the limits, which need a timed render. The design
-questions of the music document are all settled, and sound from WSL works: the user heard a
-drum beat played through pygame's mixer.
+**It is built,** as `addons/music.py` and the child process in `addons/music_engine/`. The
+limits were set by timing whole renders. In a live run on 2026-10-02 the AI composed seven
+songs for the user, and each played on the first try.
 
 ---
 

@@ -106,7 +106,8 @@ in [docs/concept.md](docs/concept.md).
   Claude Code, is installed for you.
 - **Optional:** [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) for the OS-level
   sandbox.
-- **Optional:** pygame, for the example addon (see [Addons](#addons)).
+- **Optional:** pygame for the window addon, and numpy and pygame for the music addon (see
+  [Addons](#addons)).
 
 ## Installation
 
@@ -193,6 +194,58 @@ user@hallux:~$ window paint                               # after typing tomato 
 painted the window tomato
 user@hallux:~$ window watch                               # now Send, or Enter, paints by itself
 ```
+
+### The music addon: a real sound card
+
+`addons/music.py` plays music through your speakers. A song is a score file on the machine's
+disk: a small text format with a tempo, instruments, patterns and a song. An instrument is
+one expression in the style of bytebeat, computed for every sample at 44100 Hz and 16 bits.
+The AI writes a score, calls `play`, and the sound is real. It needs numpy and pygame:
+
+```bash
+.venv/bin/python -m pip install -e ".[music]"
+```
+
+A short score:
+
+```text
+BPM = 120
+
+INSTRUMENT pluck:
+    sin(p) * decay(t, 5000) * vel >> 24
+
+PATTERN riff 32:
+    (0, 8, C4, pluck, 150)
+    (+, 8, G4, pluck, 150)
+    (+, 16, C5, pluck, 150)
+
+SONG:
+    (0, riff, 0, 2)
+    (+, riff, -5)
+    (+, riff)
+```
+
+- **`play(path, loop)`** checks the score, renders the whole song and starts it. It returns
+  the length and the peak, or every problem of the score with its line. **`stop()`** stops
+  the sound, and so does a halt or a reboot.
+- **The addon brings functions, not commands.** Ask the machine for the program you want:
+
+  ```text
+  user@hallux:~$ hallux install a program called play: "play FILE" plays a score file with
+  the music addon, "play -l FILE" loops it, "play stop" stops the sound
+  user@hallux:~$ hallux write a short tune with a bass, chords and a melody to tune.score
+  user@hallux:~$ play tune.score
+  tune.score: 16.8 s, peak 64%
+  ```
+
+- **A score is an ordinary file.** It survives a reboot, you can edit it in `nano`, and
+  playing it again costs one call.
+- **Writing a score is the slow part:** half a minute or so for a new song. Rendering it
+  takes a fraction of a second.
+- **To hear a score without the machine:** `.venv/bin/python tests/music_play.py FILE`.
+
+The format, the instruments and the limits are in [docs/addon-music.md](docs/addon-music.md).
+What the AI reads before it writes a score is the manual in `addons/music.py`.
 
 ### Writing an addon
 
@@ -305,7 +358,8 @@ hallux/
   script.py          headless runs and the reboot check
   sandbox.py         optional bubblewrap wrapper
   config.py          config.toml and flags
-addons/              the addons: window.py is the example
+addons/              the addons: window.py is the example, music.py the sound card,
+                     and music_engine/ the child process that renders and plays
 docs/                design, roadmap and next steps
 tests/               unit and integration tests (no model calls)
 ```

@@ -287,6 +287,17 @@ def test_scores_that_a_reader_of_the_manual_wrote_play(name, report):
     assert rendered.report() == report                    # between 50 and 100, as it advises
 
 
+def test_the_score_in_the_readme_plays():
+    readme = (Path(__file__).resolve().parent.parent / "README.MD").read_text(encoding="utf-8")
+    music = readme[readme.index("### The music addon"):readme.index("### Writing an addon")]
+    [text] = [block for block in re.findall(r"```text\n(.*?)```", music, re.S)
+              if block.startswith("BPM")]
+    read, rendered = play(text)
+    assert rendered.report() == {"seconds": 8.0, "peak": 58}
+    assert list(read.instruments) == ["pluck"] and len(read.song) == 3
+    assert 'pip install -e ".[music]"' in music and "tests/music_play.py" in music
+
+
 # ---------------------------------------------------------------- what play returns, the limits
 
 def test_the_answer_it_shows_is_a_real_one(manual):

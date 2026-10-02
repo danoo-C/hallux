@@ -1,11 +1,20 @@
 # The music addon
 
-**Status:** a proposal as discussed, and being built: the plan's status table says which
-steps are done. A machine has no music addon yet. The addon system it would run on is built,
-with the handle through which `play(path)` reads a file of the machine (step 7 of
-[plans/addons-plan.md](plans/addons-plan.md)). What an addon is, and how Hallux loads one, is
-in [addons.md](addons.md). The plan for building it is in
-[plans/addon-music/](plans/addon-music/README.md).
+**Status:** built, as `addons/music.py` and the child process in `addons/music_engine/`.
+This document is the design as it was proposed and revised. The step-by-step record, with
+every decision taken while building, is in [plans/addon-music/](plans/addon-music/README.md):
+each step's file ends with what was built. What an addon is, and how Hallux loads one, is in
+[addons.md](addons.md).
+
+**Where the code went further than this document:**
+- `BPM` has to be set. Only `STEPS` has a default.
+- `INSTRUMENT`, `PATTERN` and `SONG` are taken names too.
+- A song without a note is refused, and a problem is cut at 160 characters.
+- A render that takes longer than 8 seconds is ended, and `play` says so. A score inside
+  every limit can still take that long (section 6).
+- `stop()` also ends the child process. The next `play` starts a new one.
+- What the AI reads is the manual in `addons/music.py`: this document, shortened to under
+  8000 characters, with every example in it tested.
 
 **Revised on 2026-10-01,** after a review of the first version. Two requirements came from the
 user: sound at 44100 Hz, and samples finer than 8 bits. The other changes were my
@@ -80,7 +89,7 @@ through it, and said "it works".
   `{"error": "line 7: unknown name CUTOF\nline 12: two different changes to VOL at step 8"}`.
   The AI prints that the way a player would.
 - **The path is a path inside the machine.** The addon reads it through Hallux's path jail and
-  never opens it by itself. That depends on open question 4 in [addons.md](addons.md).
+  never opens it by itself. That handle was open question 4 in [addons.md](addons.md).
 
 **The event.** The addon reports one event (see [addon-events.md](addon-events.md)):
 
@@ -504,9 +513,9 @@ Two events, one line in `bar` and one in `SONG` give 16 bars: 128 notes. (The in
 
 ## 5. Three complete scores
 
-All three are written by hand. Nothing can play a score file yet. On 2026-10-02 a throwaway
-script rendered their notes, in the arithmetic of section 3 but without a parser, and the
-peaks below come from it. The user has heard all three: the drum beat was liked, and the
+All three are written by hand, and they are files in `tests/scores/`. On 2026-10-02 a
+throwaway script rendered their notes, in the arithmetic of section 3 but without a parser,
+and the peaks below come from it. The user has heard all three: the drum beat was liked, and the
 first two "sound good".
 
 ### Chords and a melody
@@ -798,7 +807,7 @@ fails with `the song took too long to render`.
   pygame for the sound.
   - Both are an optional install, `pip install -e ".[music]"`. Only addons need them, so
     Hallux itself doesn't require them.
-  - pygame is in this venv already, for the window addon. numpy isn't yet.
+  - Both are in this venv now.
   - Without either one the loader skips the addon and names what is missing, like any other
     addon that fails a check.
 - **pygame is big for what it does here:** about 37 MB, to play one buffer. Where the window
