@@ -219,7 +219,8 @@ Ctrl+Shift+Del.
 
 **Done when:** a fake addon's `count_lines(disk, path)` works on a file in a test world.
 
-The example addon doesn't need this step. The music addon does.
+The example addon doesn't need this step. The music addon does, and its plan has this step
+as its first, with more detail: [addon-music/01-disk-handle.md](addon-music/01-disk-handle.md).
 
 ### 8. Documentation
 

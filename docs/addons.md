@@ -222,8 +222,9 @@ This is the example the idea started from. Its design has its own document:
   survives a reboot, the user can edit it in nano, and playing it again costs no tokens. It's
   the same trick as `file=` fields and `save_field`.
 - **The sound is 16-bit at 44100 Hz.**
-- **An instrument is an expression in the style of bytebeat,** of `t`, `p`, `vel` and `dur`,
-  read by a small parser with a whitelist.
+- **An instrument is an expression in the style of bytebeat,** of `t`, `p`, `vel`, `dur` and
+  `key`, with a few built-in waves and a level that dies away, read by a small parser with a
+  whitelist.
 - **Everything that happens is an event,** `(start, duration, value, target, velocity)`,
   counted in 32nd notes unless the score says otherwise. A note and a change to a variable
   have the same shape.
@@ -235,8 +236,9 @@ This is the example the idea started from. Its design has its own document:
 `setBPM`, and `play` with `stop`). One score file needs one call where that needed four, which
 is the point of section 6.
 
-**Still to settle:** the exact syntax of the file, and whether audio works from WSL. They're
-listed in the music document.
+**Still to find out:** the numbers of the limits, which need a timed render. The design
+questions of the music document are all settled, and sound from WSL works: the user heard a
+drum beat played through pygame's mixer.
 
 ---
 
