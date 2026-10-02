@@ -79,6 +79,31 @@ doesn't do on demand:
 In a test world, `play` of the drum beat file returns its length and its peak through the
 tool the AI would use, and SDL's file holds the beat.
 
+## As built
+
+Built on 2026-10-02. In a test world, `play` of the drum beat file returns
+`{"ok": true, "seconds": 8.0, "peak": 98}` through the tool the AI would use, and SDL's file
+holds the beat. A world now gets `music` and `window`, and Hallux imports neither numpy nor
+pygame. Decided while building:
+
+- **`stop()` doesn't wait for a render.** It is Hallux's hook at a halt too, and a `play`
+  may be waiting up to 8 seconds for its answer. `stop()` then ends the child at once, and
+  that `play` fails with `MusicError: the sound card stopped`.
+- **A child that says nothing within 8 seconds** is `MusicError: the sound card didn't
+  start`. One that ends without a crash is `MusicError: the sound card stopped`.
+- **The addon's own size check says kilobytes:** `MusicError: the score is bigger than 64
+  KB`. The child would say it in bytes. The addon can't import the child's `limits.py`
+  without importing its package, so it has the number itself, and a test keeps the two the
+  same.
+- **A file over 1 MB is `EFBIG`,** from the disk handle, before the addon sees it.
+- **The child writes ASCII only,** so the pipe's encoding can't matter. A `…` goes over as
+  `\u2026`.
+- **The first line of a `play` can take both waits:** up to 8 seconds for the child to
+  start and 8 for the render. Hallux cuts a call at 10 with `timed out`. The child starts in
+  about half a second here, so it takes a very slow start to get there.
+- **The manual of this step is 855 characters:** `play`, `stop`, what `play` returns, and
+  the event. It doesn't say how a score is written.
+
 ## For the user
 
 Start Hallux and look at the status bar: no note about a skipped addon. `list_addons` in the
