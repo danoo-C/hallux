@@ -78,3 +78,29 @@ put it there:
 
 The three scores unfold to 24, 24 and 40 notes at the right samples, and each problem of the
 table is reported with its lines.
+
+## As built
+
+Built on 2026-10-02. The first score and the drum beat unfold to the notes that the
+reference render placed by hand, at the same samples. Decided while building:
+
+- **A change is a `Glide`:** its first sample, its last, and the new value. A jump is a glide
+  with no length. A `Note` has the five fields of the table above.
+- **Two changes are the same** when they have the same duration and the same value. A jump to
+  0 and a glide to 0 at one step are different.
+- **The nesting is checked before anything is placed.** A pattern only places patterns from
+  above it, so how deep each one goes is known from the file. When one is too deep, that is
+  the only problem reported, and it is said once.
+- **`the song has more than N events` names the line in `SONG:`** that was being placed when
+  the count ran over. Nothing more is unfolded after it.
+- **A note moved out of range names the placement directly around it,** with the whole
+  distance it was moved. When a pattern is placed up by 30 inside one that is placed up by
+  30, the message says 60. The note is named with a sharp where there is a choice: `A#3`.
+- **The length is said in seconds:** `the song is 840 seconds long, and the limit is 300`.
+  In minutes, a song of 301 seconds would be "5 minutes long, and the limit is 5".
+- **A song without a note is a problem:** `the song has no notes`. A song of only changes
+  would be silence, and one with a single jump would have no length at all.
+- **When the song is too long, the voices aren't counted.**
+- **The limits of this step are in `limits.py`:** 300 seconds, 10,000 events, 8 deep, 64
+  voices. Step 6 confirms the numbers.
+- **Timed here:** 10,000 notes unfold in 0.03 s.

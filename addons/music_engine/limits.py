@@ -13,6 +13,11 @@ BPM_MIN, BPM_MAX = 20, 400
 STEPS_MIN, STEPS_MAX = 1, 96                  # steps in a quarter note
 LOWEST_KEY, HIGHEST_KEY = 12, 131             # C0 and B9, as note numbers
 
+SONG_SECONDS = 300                            # the longest song, with its tails
+EVENTS = 10_000                               # notes and changes, once the patterns are unfolded
+PATTERN_DEPTH = 8                             # patterns inside patterns
+VOICES = 64                                   # notes that sound at once, tails included
+
 EXPRESSION_CHARS = 500                        # the longest expression
 EXPRESSION_DEPTH = 40                         # brackets, signs and choices inside each other
 PARTS = 16                                    # named parts of one instrument
