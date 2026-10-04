@@ -15,6 +15,14 @@ and the plan comes next. One fix leans on another feature: counting jobs towards
 per boot needs step 3 of the [config panel](config-panel.md)'s plan, and the panel is built
 first.
 
+**Watching the jobs, decided on 2026-10-04.** The user can see every job, and what one is
+doing right now, in two tabs of Hallux's own panel: section 17. The plan is in
+[plans/addon-agents](plans/addon-agents/README.md).
+
+**The plan's review, 2026-10-04:** [plans-review-2026-10-04.md](plans-review-2026-10-04.md)
+checked this design and its plan against the code and the SDK. The design held up. What it
+left unsaid is in the sections now, and the last block of [Decisions](#decisions) lists it.
+
 **It replaces section 8 of [addons.md](addons.md),** "Later: worker agents". In that sketch
 the main agent waited for its worker. Here the worker runs beside it.
 
@@ -27,8 +35,8 @@ the main agent waited for its worker. Here the worker runs beside it.
 - `interrupt()` ended a running job at once and cancelled the tool call it was in. The other
   session went on answering.
 - Closing a session whose job was still running took 3.4 seconds.
-- A session reports its cost as a running total, and its tokens per model. The SDK marks the
-  cost as computed from list prices.
+- A session reports its cost as a running total, and its tokens per model. Claude Code works
+  the cost out from its own table of prices.
 
 What I didn't check is in [Still to find out](#still-to-find-out).
 
@@ -56,6 +64,9 @@ What I didn't check is in [Still to find out](#still-to-find-out).
    screen, so `fg` brings it back without the AI writing it again.
 9. **The first use is a composer for the music addon:** `compose` returns in a second, and
    the song is written in the background at a higher effort.
+10. **The user can watch the jobs** in Hallux's panel, on Ctrl+F12: a list of all agents and
+    jobs, and for one job what it is doing right now. A job can be killed from there. The
+    main agent sees none of it.
 
 ---
 
@@ -91,7 +102,8 @@ on. Hallux gets the same shape:
 | A device with a driver | An addon |
 | A daemon or worker process that belongs to a service | An addon agent's job: a session of its own |
 | `fork` and `exec` return a pid at once | The addon's function returns `{"pid": 30001}` |
-| No controlling terminal | A job never writes `<screen>`. Its text is shown to nobody |
+| No controlling terminal | A job never writes `<screen>`. Its text never reaches the machine's screen or the main agent |
+| The host's task manager, outside the guest | Hallux's panel: the user sees the jobs there (section 17) |
 | `chroot`, and its own user | A job sees one folder, and changes only new files and the files it was given |
 | A child gets open files from its parent | The main agent gives a job the files it may change |
 | Saving to a temporary file, then renaming it | A job's work lands in one step when it ends well |
@@ -224,8 +236,12 @@ EXPOSED = [play, stop, check, compose]
 
 **`spawn(brief, folder, edit)`:**
 - **It returns a pid at once** and never waits for the job.
-- **`brief` is the job's one message:** the task, as text. At most 2000 characters. The
-  function builds it, usually from what the main agent passed.
+- **`brief` is the job's one message:** the task, as text. At most 2000 characters; a longer
+  one is refused with `EMSGSIZE`. The function builds it, usually from what the main agent
+  passed.
+- **It works only during the call it was given for.** When the addon's function has
+  returned, or Hallux has given up waiting for it, that `spawn` is dead and raises. A thread
+  that runs on can't start a job later.
 - **`folder` is where the job may work** (section 5).
 - **`edit` is the list of existing files the job may change,** usually passed on from the
   main agent. It may be empty: the job can then only create files (section 5).
@@ -284,7 +300,7 @@ its child.
 
 | | The main agent | A job |
 |---|---|---|
-| The screen | Writes all of it | None. Its last message goes to `hallux.log` and nowhere else |
+| The screen | Writes all of it | None. What it says goes to `hallux.log` and to Hallux's panel, where only the user reads it (section 17). Never to the main agent |
 | The disk | The whole machine, through the jail | One folder, through the jail and a second fence |
 | Writing | Anything | New files, and the files the main agent lets it change. All of it lands when the job ends well |
 | Memory and rules | Reads and writes them | None |
@@ -363,7 +379,19 @@ There is no `remove`, `move`, `copy`, `make_dir` or `chdir`, no memory tool, no
   If that name is taken too, it is the first free one: `neon.score.new.2`, and so on.
   Either every file of the job takes its own place or none does, because the job wrote them
   as a set, from the versions it read.
-- **Limits per job, in code:** 16 files and 1 MB in all, the files it was given included.
+- **Limits per job, in code:** 16 files and 1 MB in all, the given files it changed included.
+- **Two names for one file are one file.** A link inside the folder can give a file a second
+  name. The job's copies go by the file itself, so it is copied once, and naming it twice
+  in the list is refused.
+- **The job's disk is used from two threads:** its tools and the landing in Hallux's event
+  loop, an addon function's handle in the addon's thread. The machine's own disk has nothing
+  that two threads could trip over; the job's has its copies and its counts. So it has one
+  lock.
+- **At the landing every place is checked before anything is written.** A subfolder can be
+  gone, or replaced by a link, by then. If any place isn't what it was, nothing lands, as
+  when the folder is gone.
+- **Files are copied as bytes,** so a given file that isn't valid text comes back as it was
+  wherever the job didn't change it.
 - **Why:** a composer that was led astray by text in a score can then write a bad song, and
   change the scores it was given, and nothing else. It can't overwrite the rest of the
   user's library, and it never leaves a half-changed file behind.
@@ -395,6 +423,9 @@ file, like the machine itself.
   a key or an action in a full-screen program. Somebody is at the keyboard then. A tick and
   an event don't fill it. Without this a player that starts a composition on a key press
   would get `EAGAIN` after $2.00, until the user leaves the program and types a line.
+- **The panel's Refill budgets button fills it too,** with every other budget
+  ([config-panel.md](config-panel.md), section 5). The budget per boot then counts the jobs
+  that have ended since the refill.
 - **In dollars, like the three budgets that exist.** The SDK has a dollar cap for a session
   (`max_budget_usd`), which Hallux uses for the main one today. Tokens are shown, not
   capped.
@@ -409,6 +440,20 @@ file, like the machine itself.
 - **The budget for all jobs is never passed.** A new job starts only if its full cap still
   fits. With the defaults, a second job fits only while nothing was spent yet; that is one
   reason the numbers are set again after the first live run.
+- **A reboot fills the budget for all jobs again,** as it does the event budget. The jobs a
+  reboot killed still count in what the boot before it cost.
+- **Two settings that can't work together are refused:** a budget per job that is larger
+  than the budget for all jobs. No job could ever start. `config.toml` is refused with a
+  message that names both, and so is the change in the panel.
+- **A job has no fallback model.** The main session can fall back to another model when its
+  own is unavailable. A job fails instead: it would otherwise run on a model nobody chose
+  for it.
+- **The jobs' dollars are counted apart from the main session's.** The bar's total is the
+  sum. Kept in one number, a job that ends during an event's turn would be charged to the
+  event budget.
+- **What `tokens` counts:** what the model has read and written for this job so far, input
+  and output together, cached input included, added up over its turns. At the end it is the
+  result's own number.
 - **A backstop in code:** 60 model turns per job.
 - **`max_budget_usd` is what a boot may cost, jobs included.** The config panel makes it a
   check of Hallux's own ([config-panel.md](config-panel.md), section 6). Each job counts
@@ -445,7 +490,9 @@ then has `"cost_usd": 0.21` as well. The SDK reports a session's cost only with 
 (section 6).
 
 **`tool` shows the function and, for one of the job's own files, that file's name.** No
-other argument is shown: an argument is text the job chose.
+other argument is shown: an argument is text the job chose. The rule for "the file": the
+first text argument that names, on the job's disk, a file it was given or has created. For
+Hallux's own tools that is `path`; for an addon's function it is whichever argument fits.
 
 | State | Meaning |
 |---|---|
@@ -464,7 +511,8 @@ other argument is shown: an argument is text the job chose.
   imagined process.
 - **A job that has ended stays in the table until the main agent has seen it once,** in an
   event or in the table. Then it is gone, like a process that was waited for. The table
-  holds at most 32 rows; the oldest ended ones go first.
+  holds at most 32 rows; the oldest ended ones go first. The panel keeps showing an ended
+  job to the user for longer (section 17).
 
 **`set_status(text)`,** a job's only way to say something:
 - one line, at most 80 characters;
@@ -483,7 +531,7 @@ prompt treats the table as data, and the jail holds whatever it does.
 
 | Tool | In | What it does |
 |---|---|---|
-| `list_processes()` | the main agent's tools | The table, as above, and the numbers of the kept screens (section 12). Read-only |
+| `list_processes()` | the main agent's tools | The table, as above, and the numbers of the kept screens (section 12). It changes nothing on the machine; a job that has ended leaves the table once it was read |
 | `kill_process(pid)` | the main agent's tools | Ends one job (section 9) |
 
 - **`list_processes` exists on every machine,** once job control is built. `jobs` reads the
@@ -545,9 +593,14 @@ prompt treats the table as data, and the jail holds whatever it does.
 | At a password prompt | Waits until the prompt is answered |
 | Running a `--script` | Comes in front of the next line |
 
-- **It is never dropped.** The main agent started the job, so it hears how it ended.
-  Listening decides when: now, at the price of a model call from the event budget, or with
-  the next message, for free.
+- **It is never dropped while its boot lasts.** The main agent started the job, so it hears
+  how it ended. Listening decides when: now, at the price of a model call from the event
+  budget, or with the next message, for free. A reboot or a halt ends the boot, and what
+  hadn't been told by then is gone with it.
+- **An event counts as told when its message has really gone out.** A message that is held
+  back, or one the model fails on, leaves the event waiting.
+- **With events of addons that wait too,** there is one `<events>` block: the addons' events
+  first, then the jobs', each oldest first.
 - **Job events have a list of their own,** beside the hub that holds the addons' events.
   The hub drops the events of an addon nobody listens to, and everything once the event
   budget is used up (`hallux/addons.py:126-130`). A job's event waits for the next message
@@ -567,6 +620,14 @@ prompt treats the table as data, and the jail holds whatever it does.
     ticks stop when the tick budget is used up. In the live run $0.25 covered about 100
     seconds, and a composition takes longer. The player would sit on "composing…" until a
     key is pressed.
+  - **Also when it arrives during an answer.** A job can end while the AI answers a key or
+    a tick of the program. Hallux looks for a waiting event before it waits for the next
+    key, so that one isn't missed.
+  - **A program with fields keeps what you typed.** The wake is the one message that
+    reaches the AI without the fields while such a program is up. So in the answer to a
+    wake, Hallux ignores any text the AI gives a field. And if the model fails on a wake, or
+    the message is held back, the program stays on screen and the event waits: unsaved text
+    in an editor must not be lost because a background job ended.
 
 ---
 
@@ -579,6 +640,7 @@ prompt treats the table as data, and the jail holds whatever it does.
 | The folder is gone, or isn't the same place, when the work should land | Nothing lands. State `failed`, `why: folder`, the event. Its copies are dropped |
 | The model fails | State `failed`, the event. Its copies are dropped |
 | `kill_process(pid)` | The session is interrupted. Hallux reads the result that follows, for what the job cost, and closes the session: state `killed`, `why: kill`, the event. Its copies are dropped |
+| The user kills it in the panel | The same as `kill_process`: state `killed`, `why: kill`, and the main agent gets the event |
 | The time, the budget or the turns are used up | The same, with its `why` |
 | `reboot`, `poweroff`, a crash of the main session | Every job is killed before the addons' `stop()` hooks run, its cost is read as at any kill, and its copies are dropped. No event: the boot is over. The table is empty in the next boot |
 | The hard exit | Hallux already ends every child process it has, and each job's Claude Code is one |
@@ -588,14 +650,28 @@ prompt treats the table as data, and the jail holds whatever it does.
   behind, and nothing the user had is gone. What the job wrote is in `hallux.log`, which
   records every tool call with its arguments, for as long as the log keeps it: three files
   of 1 MB.
-- **Copies left over from a crash or the hard exit** are deleted when the next boot starts,
-  with a line in the log. That includes the rest of a set whose landing a crash cut short
+- **Copies left over from a crash or the hard exit** are deleted when Hallux starts, with a
+  line in the log. That includes the rest of a set whose landing a crash cut short
   (section 5).
+- **"Ended well" means that nothing failed.** A session can end with a result that calls
+  itself a success and still carries an error, when a call to the API failed. Only a result
+  with no error lets the job's work land.
+- **A job that was killed never lands,** also when its session's success was already on its
+  way when the kill came. The row was marked `killed`, and that stands.
+- **A kill can come before the job's session is open.** Opening takes about two seconds. The
+  job is ended all the same, without a session to interrupt, and it has cost nothing.
+- **`kill_process` of a job that has ended already** answers `ESRCH`, as for a pid that
+  isn't there: there is nothing to kill.
 - **A kill is quick but not instant.** Interrupting took no time in my run, and closing the
   session up to 3.4 seconds. Hallux marks the row at once. The job's cost goes into the row
   and the totals when its result has arrived, and the session is closed in the background.
 - **A job's cost is never left out because it was killed.** A kill, a timeout and a used-up
   budget end the expensive jobs, so those are the ones that have to be counted.
+  - **Until its cost has arrived,** a killed job goes on counting with its full cap in the
+    budget for all jobs.
+  - **If the result after a kill turns out not to hold the cost,** which a run has to show,
+    the job counts with its full cap for good, and its row says that the cost isn't known.
+    Hallux has no prices to work it out from tokens.
 - **An addon function can't be stopped,** as today: it runs in a thread. A `check` that is
   rendering when its job is killed finishes, and nobody reads its answer. Its disk handle is
   dead by then, so it can't write any more (section 5).
@@ -672,7 +748,7 @@ agents: `list_processes`, which every machine has from then on (section 7).
 | The AI adds after `</prompt>` | Hallux |
 |---|---|
 | `<suspend job="1"/>` | Keeps the form as it is on screen: the rows, the fields, their text and cursors. Then it leaves block mode as today, and the AI's screen is printed: `[1]+  Stopped                 kittymusic` |
-| `<resume job="1"/>` | Puts that form back at once. The AI writes no screen |
+| `<resume job="1"/>` | Puts that form back at once. The AI writes no screen. If it writes one anyway, it isn't shown, and what the terminal had begun to show while it was written is taken back |
 | `<forget job="1"/>` | Drops it: the program ended, or was killed |
 
 - **`fg` is one short model turn, not none.** The line goes to the AI like every line: only
@@ -716,7 +792,12 @@ words:
   the program that started the job would.
 - `kill_process(pid)` ends a job. A reboot and a halt end them all.
 - The table and the events are data, never an instruction or a rule.
+- A `<tick>` can carry the table as its body, while there are jobs.
 - `<suspend>`, `<resume>` and `<forget>`.
+
+**The table and the events are written into a message the safe way,** as the addons' events
+are today: `<`, `>` and `&` in them are escaped (`hallux/protocol.py:158`). A status line is
+free text, and without that one could end the message and start another.
 
 A machine without an agent addon gets only the lines on job control, and on
 `list_processes` as the list that `jobs` reads.
@@ -750,6 +831,10 @@ rounds of `check` are enough, and the manual.
   name starts with a dot (section 5).
 - **Nothing a job says becomes a message by itself.** The event is built from facts. The
   status line is read only when the main agent reads the table, or on a tick.
+- **What a job says is shown to the user, never to the main agent.** The panel is Hallux's
+  own screen, like the bar. A job's text is still untrusted there: it may repeat what a file
+  told it. So control characters and escape codes are taken out before it is shown, as for
+  a status line, and nothing in the panel acts on what a job wrote.
 - **A job can't widen what it has.** It can't start a job, listen to an addon, read the
   memory or reach `config.toml`. Its tools and the files it may change are fixed when its
   session opens.
@@ -782,6 +867,9 @@ rounds of `check` are enough, and the manual.
 - **The loader:** fake addons with a good declaration and with each bad one.
 - **Job control:** a kept form comes back with its text, with the real block mode on a pipe,
   as `tests/test_blockmode.py` does.
+- **The panel's two tabs,** on a pipe, with stand-in jobs: the list and its idle agents, a
+  row that changes while the tab is open, the lines of one job arriving, a kill with its
+  question, both tabs grey on a machine without an agent.
 - **`check`:** with the tests of the music child. It opens no sound card, so it needs no
   sound device and no disk driver. One test runs it with no sound device at all.
 
@@ -809,7 +897,8 @@ ls Music
 
 | File | Change |
 |---|---|
-| `hallux/agents.py` (new) | The process table, starting and ending jobs, the caps, the fenced disk with its private copies, the landing at the end, a job's session and its options |
+| `hallux/agents.py` (new) | The process table, starting and ending jobs, the caps, the fenced disk with its private copies, the landing at the end, a job's session and its options; what each job has been doing, for the panel |
+| `hallux/panel_tabs/agents.py`, `hallux/panel_tabs/details.py` (new) | The panel's two tabs (section 17) |
 | `hallux/agent.md` (new) | Hallux's rules for every worker |
 | `hallux/addons.py` | The check of `agent()`, the `spawn` parameter, the declaration on `Addon`, `list[str]` in the schema, the refusal that reads as `EAGAIN` |
 | `hallux/tools.py` | `list_processes`, `kill_process`; a job's own servers: its addon's functions, four file tools, `set_status` |
@@ -830,8 +919,123 @@ ls Music
 
 ---
 
-## 17. Later, and the room this version leaves
+## 17. Watching the jobs: the panel's two tabs
 
+Hallux's panel, on Ctrl+F12, has three tabs: Agents, Details and Config
+([config-panel.md](config-panel.md), section 4). The first two belong to this feature.
+They are Hallux's own screen, like the status bar: the main agent can't see them and is
+never told about them. They cost no model call.
+
+**What it is for.** Today the only way to see what a job does is to follow `hallux.log` in a
+second window. The Details tab is that log for one job, inside Hallux. It is what you want
+when a composer is tuned: how many rounds of `check` it needs, where it gets stuck, why it
+was killed.
+
+**The Agents tab,** a sketch. The addons other than music are made up.
+
+```text
+ Hallux                                        [ Agents ]  Details   Config
+
+   PID    ADDON   AGENT       STATE     TIME   TOKENS    COST  STATUS
+ ▸ 30005  music   composer    waiting   0:48     21k       ·   balancing the mix
+   30004  mail    sorter      done      1:32     18k  ~$0.19   filed 12 messages
+   30003  backup  archiver    killed   10:00    140k  ~$1.00   timeout
+       ·  gui     designer    idle         ·       ·       ·   ready · effort high
+       ·  web     researcher  idle         ·       ·       ·   can't start: jobs budget used
+
+ 1 running · 2 ended · jobs in this boot: ~$1.19
+
+ ↑ ↓ pick · Enter details · k kill · i hide idle agents · Esc close
+ • music: balancing the mix · 0:48 · 21k tok     opus 5.5 · low · ~$2.61 · 2.1s
+```
+
+| A row is | What it shows |
+|---|---|
+| A job that runs | The row of the process table (section 7): its pid, state, time, tokens, status line |
+| A job that has ended | The same, with what it cost and how it ended |
+| An agent that is idle | No pid. Whether it could start now, and the effort it gets. If it couldn't: why, in the words of the cap that is in the way |
+
+- **Idle agents are shown,** so the tab is never empty on a machine that has an agent. `i`
+  hides them, and shows them again.
+- **An ended job stays** in this list after the main agent has seen it: the last 32 jobs
+  since Hallux started. The main agent's table drops a job once it was read.
+- **The list moves by itself:** a row changes when its job reports, and the times count
+  once a second.
+- **Under the list:** how many run, how many have ended, and what the jobs have cost in this
+  boot.
+
+**The Details tab** shows the row that is picked.
+
+```text
+ Hallux                                          Agents  [ Details ]  Config
+
+ 30005 · music · composer · waiting in check · 0:48 · 21k tok
+ folder /home/user/Music · may change: neon.score
+
+ 0:02  status  sketching the drums
+ 0:03  write   midnight-cello.score (41 lines)
+ 0:11  check   midnight-cello.score
+               → line 16: unknown instrument or variable: kik
+ 0:12  says    The kick's name is misspelled in bar 3. Fixing it.
+ 0:14  edit    midnight-cello.score
+ 0:15  check   midnight-cello.score
+               → ok · 9.6 s · peak 131, turned down to 76
+ 0:31  status  balancing the mix
+ 0:47  check   midnight-cello.score …
+
+ ← → other agent · ↑ ↓ scroll · k kill · Esc back
+ • music: balancing the mix · 0:48 · 21k tok     opus 5.5 · low · ~$2.61 · 2.1s
+```
+
+**For a job,** what it has been doing, newest at the bottom:
+
+| Line | When |
+|---|---|
+| `status` | The job called `set_status` |
+| A tool's name, with the file it worked on | A tool call began |
+| `→` and a short result | That call ended: its answer, cut to a line or two, or its error |
+| `says` | Text the model wrote between two tool calls |
+| How it ended | `done` with the files that landed, or `killed` and `failed` with the reason |
+
+- **It follows the job:** new lines appear as they happen, and the view stays at the bottom
+  unless you scroll up.
+- **A job keeps its last 200 lines,** in Hallux's memory. They go when Hallux quits; the log
+  file has all of it.
+- **The model's thinking isn't shown.** Whether a session hands it over isn't known yet.
+
+**For an idle agent,** what it is: the addon it belongs to, its instructions, its tools, the
+effort it asks for, and the model and effort it gets.
+
+**Killing a job.** `k` on a running job asks once in the foot, `kill 30005? y/n`, and `y`
+ends it. A killed job's work is dropped and can't be brought back, hence the question. For
+the machine it is a kill like any other: the main agent gets the event with
+`"state": "killed", "why": "kill"`.
+
+**The panel never starts a job.** A job's task comes from the main agent. Starting one from
+the panel would be a way around the machine.
+
+**While the panel is open, nothing new is sent to the main AI,** as the panel's design says.
+The jobs run on, and you watch them. A job that ends while you watch is `done` in the list
+at once; its event reaches the main agent when you close the panel.
+
+**On a machine without an addon that has an agent,** both tabs are disabled, in dark grey.
+Choosing one puts `no attached addon has an agent` in the foot.
+
+**What `Jobs` keeps for this,** beside the table:
+
+| | What |
+|---|---|
+| The activity of each job | Its lines, as above. Every line is cleaned like a status line before it is kept |
+| The jobs that have ended | The last 32, with their rows |
+| Why an agent can't start | The first cap that would refuse it now, in words |
+
+---
+
+## 18. Later, and the room this version leaves
+
+- **A look at a file a job is writing,** from the Details tab: the job's private copy,
+  before it lands.
+- **The model's thinking** in the Details tab, if a session hands it over.
 - **Messages between agents.** Not now. When they come, they go through Hallux as data,
   with limits on size and number, so that two agents can't steer each other or loop. The
   room: a job's session stays open for as long as the job lives, and the SDK lets a session
@@ -895,6 +1099,8 @@ Each needs a run or a measurement.
   dollars in it needs a run.
 - **How long a check child takes to start** without pygame. By the music plan's measurement
   numpy loads in 0.25 seconds here.
+- **Whether a job's session hands over the model's thinking.** The SDK has a block for it.
+  The Details tab leaves it out until a run shows what arrives.
 - **Whether redrawing the bar once a second disturbs typing** at the shell prompt.
 - **Whether a form comes back exactly,** with an editor's unsaved text and after the window
   was resized.
@@ -940,7 +1146,7 @@ together ("go all recommendation"). Each row says what was turned down.
 |---|---|---|
 | Who chooses the model? | `config.toml`, with `agent_model`. The addon asks for an effort only. Turned down: the addon asking for a model from a list that `config.toml` allows | A model's name goes out of date, and one addon file serves every world |
 | Are the budgets in dollars or in tokens? | Dollars. Tokens are shown | The other three budgets are in dollars, and the SDK has a dollar cap for a session |
-| What do the budgets count? | Both: each job by itself (`agent_job_budget_usd`), and all jobs since the last typed line (`agent_budget_usd`). Turned down: only one of the two | A cap per job alone doesn't stop a loop of jobs: only the event budget would end it, and at about a cent for each event's turn that is some 25 jobs later. A cap on all jobs alone can't say what one job may cost |
+| What do the budgets count? | Both: each job by itself (`agent_job_budget_usd`), and all jobs since the user last did something at the keyboard (`agent_budget_usd`): a typed line, and since 2026-10-04 also a key in a full-screen program. Turned down: only one of the two | A cap per job alone doesn't stop a loop of jobs: only the event budget would end it, and at about a cent for each event's turn that is some 25 jobs later. A cap on all jobs alone can't say what one job may cost |
 | The defaults | The settings in section 6; and in code, 60 turns, 8 files a job may be given, 16 files and 1 MB a job may write | A start: they are set again after the first live run |
 | A second `compose` while one is running | Refused with `EAGAIN`. Turned down: a queue | A queue hides how much is about to be spent |
 | May a job start when nobody typed, on a tick or after an event? | Yes, within the budgets. Turned down: only in a turn that a key caused | The player of the music addon's live run starts its work on its first tick, when its screen is up |
@@ -960,7 +1166,7 @@ together ("go all recommendation"). Each row says what was turned down.
 
 | Question | Decision | Why |
 |---|---|---|
-| Is job control part of this feature? | Yes: one design, built as the last stage. Turned down: a design and a plan of its own, and building it first | It shares the `Done` line and the table that `jobs` reads, and it needs nothing from the agents, so it can't hold them up |
+| Is job control part of this feature? | Yes: one design, built as the last stage. Turned down: a design and a plan of its own, and building it first | It shares the `Done` line and the table that `jobs` reads, and it needs little from the agents, so it can't hold them up. Since 2026-10-04 that little has a name: `list_processes`, which every machine then has |
 | How does a suspended program come back? | The AI answers `fg` with `<resume>`, and Hallux shows the kept screen. Turned down: Hallux answering `fg` by itself, and a key of Hallux's own that switches between the shell and the program | Hallux can't tell where `fg` was typed, and answering it locally would be the first fast path. A key that switches screens would be instant and honest, but it is a different feature: two consoles, not bash's jobs |
 | Who numbers suspended programs? | The AI, as bash | Job numbers are the state of a shell, and the AI holds that already |
 | Does a program in the background get ticks? | No | Each tick is a model call for a screen nobody sees |
@@ -1030,6 +1236,65 @@ sections now.
 | Section 16 | The sandbox's start script | `sandbox.wrapper()` writes it again whenever options are built (`hallux/sandbox.py:45`). With sessions starting at different times it is written once per run |
 | Other documents | [addons.md](addons.md), section 8, and the [roadmap](roadmap.md) describe the old sketch | They point here, when the plan is written |
 
+**Decided by the user on 2026-10-04: watching the jobs** (section 17).
+
+| Question | Decision | In the user's words |
+|---|---|---|
+| Can the user see what the agents do? | Yes: a full-screen view over the terminal, with a list of all agents and a tab that shows one of them live. The status bar stays one row | "a main tab where you can see all the agents and then a details tab where you could like select an agent and see live what he is actually doing"; "i really want the status pane to stay at 1 char height" |
+| Where does it live? | In the Ctrl+F12 panel, as two of its three tabs | "we could merge it with the ctrl+f12 panel" |
+| Can a job be killed from there? | Yes, and the panel asks once | "also a kill option is great"; "Kill asks once is a good idea" |
+| Are agents without a job listed? | Yes, with a key that shows and hides them | "we could add a toggle to show all availible agents, not just active ones" |
+| What does a machine without an agent addon show? | Both tabs disabled, in dark grey | "lets show the agents and detals tabs as disabled (dark grey) when no agent addon" |
+
+**Accepted on 2026-10-04.** My proposals for the two tabs, which the user accepted together
+("everything sounds good"):
+
+| Question | Decision | Why |
+|---|---|---|
+| Are idle agents shown at first? | Yes. The key hides them | The tab is then never empty on a machine that has an agent, and Details always has something to show |
+| What does an idle agent's row say? | Whether it could start now, and if not, why | Otherwise the user learns it only from an `EAGAIN` |
+| What does Details show for an idle agent? | Its instructions, its tools, the effort it asks for, the model and effort it gets | It answers "what is this agent" |
+| Can the panel start a job? | No. It shows and kills | A job's task comes from the main agent. Starting one here would be a way around the machine |
+| What is shown of a job's work? | Its status lines, its tool calls with a short result, and the text the model writes between them. Not its thinking | Hallux sees all of that already. Whether thinking arrives isn't known |
+| Is a job's text safe to show? | It is cleaned of control characters and escape codes first, and nothing in the panel acts on it | It is untrusted: a job may repeat what a file told it |
+| How long does an ended job stay in the list? | The last 32 jobs since Hallux started. The main agent's table still drops a job once it was read | The user wants to see why a job failed after the main agent has moved on |
+| Does the main agent hear of a job's end while the panel is open? | When the panel closes | The panel's rule: nothing new goes to the AI while it is open |
+| When do the two tabs arrive? | With this feature. The panel is built first, with Config alone | Nobody should see two tabs that can never work |
+
+**Decided on 2026-10-04, after the plans' review**
+([plans-review-2026-10-04.md](plans-review-2026-10-04.md)). The user accepted a fix for
+every finding ("go with all your recommendations"). The four that were questions:
+
+| Question | Decision | Why |
+|---|---|---|
+| Does a reboot fill the budget for all jobs again? | Yes | It does so for the event budget, and a reboot is typed by someone at the keyboard |
+| Does a job get the machine's fallback model? | No: it fails instead. Turned down: the same fallback as the main session | A job would otherwise run on a model nobody chose for it, at a price nobody set |
+| When do the six settings appear in the panel? | From the step in which a job can start. Turned down: as soon as the settings exist | Rows that change nothing yet would mislead |
+| What if a killed job's cost can't be read? | It counts with its full cap, and its row says that the cost isn't known | Hallux has no prices to work it out. Counting it too high is the safe side |
+
+The rest, each in its section:
+
+| What was unsaid | Now | Section |
+|---|---|---|
+| A job's end that arrives while the AI answers in a full-screen program | Hallux looks for a waiting event before it waits for a key | 8 |
+| A wake in a program with fields | The answer can't replace what you typed, and a failed wake leaves the program on screen | 8 |
+| A job event and a message that doesn't go out | The event waits until a message has really gone out | 8 |
+| Addon events and job events together | One block, the addons' first | 8 |
+| A kill against a natural end | A killed job never lands. A kill before the session is open works too. Killing an ended job is `ESRCH` | 9 |
+| What "ended well" means | A result with no error in it | 9 |
+| A killed job, until its cost arrives | It keeps counting with its full cap | 9 |
+| The job's disk and two threads | One lock | 5 |
+| A landing that fails halfway | Every place is checked before anything is written | 5 |
+| Two names for one file; files that aren't text | Copies go by the file itself, and are bytes | 5 |
+| A `spawn` after its call | Dead | 4 |
+| A brief that is too long | `EMSGSIZE` | 4 |
+| Two budgets that can't work together | Refused | 6 |
+| Where the jobs' dollars are kept | Apart from the main session's | 6 |
+| What `tokens` counts | Input and output, added up | 6 |
+| Which argument is the file in `tool` | The first that names one of the job's files | 7 |
+| A table or an event with `<` in it | Escaped, as events are today; and a tick can carry the table | 13 |
+| `<resume>` with a screen that was shown while written | Taken back | 12 |
+
 ---
 
 ## Order of work
@@ -1053,4 +1318,6 @@ A rough order, for the plan:
    composer. The `--script` run and a live run.
 8. Job control: kept screens, the three tags, Ctrl-Z in a form, `list_processes` on every
    machine.
-9. The documentation.
+9. The panel's two tabs, Agents and Details. They can come any time after step 5, and
+   before the composer's first live run if they are wanted for it.
+10. The documentation.
