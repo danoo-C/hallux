@@ -5,7 +5,7 @@ and 4
 
 **Needs:** step 2, for `config.View`. **Makes:** `hallux/panel.py`,
 `hallux/panel_tabs/__init__.py`, `hallux/panel_tabs/config.py`, `tests/test_panel.py`,
-`tests/test_panel_config.py`. **Changes:** `hallux/config.py`.
+`tests/test_panel_config.py`. **Changes:** `hallux/config.py`, `hallux/blockmode.py`.
 
 The panel as a thing that can be shown and used. It has two parts: the host, which owns the
 screen and knows nothing of settings, and the Config tab, which is a file of its own.
