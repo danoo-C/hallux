@@ -1,10 +1,14 @@
 """The machine loop, driven by a scripted keyboard and a fake model."""
 import asyncio
 import contextlib
+import logging
+import sys
 
 import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolUseBlock
 
+from hallux import config
+from hallux.addons import Events
 from hallux.config import Hardware
 from hallux.machine import SYSTEM_PROMPT, Interrupted, Key, Machine
 from hallux.protocol import Action, FieldState
@@ -617,3 +621,275 @@ def test_a_patch_reaches_the_screen(tmp_path):
     run(tmp_path, model, terminal)
     assert terminal.patches == [None, ((-3, ("[ Wrote 1 line ]",)),)]
     assert terminal.forms[1][1].fields[0].top == 3           # the editor kept its place
+
+
+# --- settings that change while the machine runs: what hallux's own panel calls -----------------
+
+HALT = screen("", prompt="", tail="<halt/>")
+KEY = {"x": Action("keys", None, events=("<text>x</text>",)),
+       "q": Action("keys", None, events=("<text>q</text>",))}
+EVENTS_USED, EVENTS_OFF = "events paused: budget used", "events are off: event_budget_usd is 0"
+TICKS_USED = "live updates paused: tick budget used"
+
+
+def notes_of(terminal):
+    return [status["note"] for status in terminal.statuses if "note" in status]
+
+
+def kinds(model):
+    return [message[1:].split(" ")[0] for message in model.sessions[0]]
+
+
+def idle(tmp_path, hardware=Hardware(), **more):
+    """A machine that isn't switched on: what the panel calls needs no boot."""
+    terminal = FakeTerminal()
+    return Machine(tmp_path, hardware, terminal, client_factory=FakeModel(), **more), terminal
+
+
+def test_a_raised_event_budget_lets_events_through_again(tmp_path):
+    hub = Events()
+
+    def raise_it():
+        hub.emit("bell", {"ring": "unheard"})                # paused: it is dropped
+        assert machine.change("event_budget_usd", "$1") is None
+        hub.emit("bell", {"ring": "heard"})
+
+    model = FakeModel([lambda: hub.listen("bell"), lambda: hub.emit("bell", {"ring": "first"})]
+                      + result(screen("boot\n"), total=0.01),
+                      result(screen("ding\n"), total=0.31),            # $0.30: the budget is used
+                      result(screen("ding again\n"), total=0.32),
+                      result(HALT, total=0.33))
+    terminal = FakeTerminal(Typing("ls", meanwhile=raise_it), "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model, events=hub)
+    asyncio.run(asyncio.wait_for(machine.run(), 20))
+    assert kinds(model) == ["boot", "events", "events", "input"]       # and no new session
+    assert '{"ring": "heard"}' in model.sessions[0][2] and "unheard" not in model.sessions[0][2]
+    assert notes_of(terminal) == [EVENTS_USED, None]
+    assert machine.hardware.event_budget_usd == 1.0 and len(model.sessions) == 1
+
+
+def test_a_lowered_event_budget_pauses_at_once(tmp_path):
+    machine, terminal = idle(tmp_path)
+    machine.events.listen("bell")
+    machine.event_spent = 0.2
+    assert machine.change("event_budget_usd", "0.1") is None
+    assert machine.events.paused and notes_of(terminal) == [EVENTS_USED]
+    assert machine.view().paused == {"event_budget_usd"}
+    machine.events.emit("bell", {"ring": 1})
+    assert machine.events.pending() == 0                     # dropped, as when it runs out
+    assert machine.change("event_budget_usd", "0") is None   # still paused, for another reason
+    assert notes_of(terminal) == [EVENTS_USED, EVENTS_OFF]
+    assert machine.change("event_budget_usd", "0.5") is None
+    assert not machine.events.paused and notes_of(terminal)[-1] is None
+    assert machine.view().paused == frozenset()
+
+
+def test_a_new_tick_budget_counts_for_the_next_screen(tmp_path):
+    model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                      [lambda: machine.change("tick_budget_usd", "0.1")]       # under the tick
+                      + result(TOP, total=0.22),
+                      [lambda: machine.change("tick_budget_usd", "$1")] + result(TOP, total=0.23),
+                      result(screen("", prompt="$ "), total=0.24), result(HALT, total=0.25))
+    terminal = FakeTerminal("top", Action("tick", None), KEY["x"], KEY["q"], "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert [form.tick for _, form in terminal.forms] == [3, 0, 3]
+    assert notes_of(terminal) == [TICKS_USED, None]
+
+
+def test_a_note_goes_only_when_its_own_reason_does(tmp_path):
+    hub = Events()
+    model = FakeModel([lambda: hub.listen("bell")] + result(screen("boot\n"), total=0.01),
+                      result(TOP, total=0.02), result(TOP, total=0.32),          # a tick for $0.30
+                      result(screen("", prompt="$ "), total=0.33), result(HALT, total=0.34))
+    terminal = FakeTerminal("top", Action("tick", None), KEY["q"], "exit")
+    hardware = Hardware(event_budget_usd=0)
+    asyncio.run(Machine(tmp_path, hardware, terminal, client_factory=model, events=hub).run())
+    assert notes_of(terminal) == [EVENTS_OFF, f"{EVENTS_OFF} · {TICKS_USED}", EVENTS_OFF]
+
+
+def test_a_new_boot_starts_without_the_last_boots_pause(tmp_path):
+    hub = Events()
+    model = FakeModel([lambda: hub.listen("bell")] + result(screen("boot 1\n")),
+                      screen("", prompt="", tail="<reboot/>"), screen("boot 2\n"), HALT)
+    terminal = FakeTerminal("reboot", "poweroff")
+    hardware = Hardware(event_budget_usd=0)
+    machine = Machine(tmp_path, hardware, terminal, client_factory=model, events=hub)
+    asyncio.run(machine.run())
+    assert notes_of(terminal) == [EVENTS_OFF, None]          # nobody listens in the second boot
+    assert machine.view().paused == frozenset()
+
+
+def test_a_new_effort_runs_from_the_next_boot(tmp_path):
+    seen = []
+
+    def set_it():
+        assert machine.change("effort", "high") is None
+        seen.append((machine.hardware.effort, machine.running.effort,
+                     machine.view().running.effort))
+
+    model = FakeModel(screen("boot 1\n"),
+                      [set_it] + result(screen("", prompt="", tail="<reboot/>")),
+                      screen("boot 2\n"), HALT)
+    terminal = FakeTerminal("reboot", "poweroff")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert seen == [("high", "low", "low")]                  # set, but this boot keeps its own
+    assert [options.effort for options in model.options] == ["low", "high"]
+    assert [status for status in terminal.statuses if "effort" in status] == [
+        {"model": "claude-opus-5-5", "effort": "low"},       # the bar shows what runs,
+        {"model": "claude-opus-5-5", "effort": "high"}]      # and changes with the boot
+    assert machine.running == machine.hardware
+
+
+def test_the_bar_shows_no_effort_on_a_model_without_efforts(tmp_path):
+    terminal = FakeTerminal()
+    run(tmp_path, FakeModel(HALT), terminal, Hardware(model="claude-haiku-4-5", effort="high"))
+    assert terminal.statuses[0] == {"model": "claude-haiku-4-5", "effort": None}
+
+
+def test_a_wrong_value_changes_nothing(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="hallux")
+    machine, terminal = idle(tmp_path)
+    assert machine.change("tick_budget_usd", "-1") == "must be a number, 0 or more"
+    assert machine.change("max_budget_usd", "0") == "must be a positive number"
+    assert machine.change("effort", "turbo") == (
+        "must be one of low, medium, high, xhigh, max, not 'turbo'")
+    assert machine.change("status_bar", "off") == "is set when Hallux starts: edit config.toml"
+    assert machine.hardware == Hardware() and machine.unsaved == {}
+    assert "config" not in caplog.text and terminal.statuses == []
+
+
+def test_the_same_value_is_no_change(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="hallux")
+    machine, _ = idle(tmp_path, Hardware(model="claude-sonnet-5-5"), from_flags=["model"])
+    assert machine.change("model", " claude-sonnet-5-5 ") is None      # Enter on a row as it was
+    assert machine.change("tick_budget_usd", "$0.25") is None
+    assert machine.change("max_budget_usd", "") is None
+    assert machine.unsaved == {} and machine.from_flags == {"model"}   # still the flag's
+    assert machine.view().unsaved == frozenset() and "config" not in caplog.text
+
+
+def test_a_change_is_unsaved_and_logged_and_no_longer_the_flags(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="hallux")
+    machine, _ = idle(tmp_path, Hardware(model="claude-sonnet-5-5", effort="high"),
+                      from_flags=["model", "effort"])
+    assert machine.view().from_flags == {"model", "effort"}
+    assert machine.change("model", "claude-haiku-4-5") is None
+    assert machine.change("tick_budget_usd", "1.25") is None
+    assert machine.hardware == Hardware("claude-haiku-4-5", "high", tick_budget_usd=1.25)
+    assert machine.unsaved == {"model": "claude-haiku-4-5", "tick_budget_usd": 1.25}
+    assert machine.from_flags == {"effort"}
+    assert "config: model claude-sonnet-5-5 -> claude-haiku-4-5" in caplog.text
+    assert "config: tick_budget_usd 0.25 -> 1.25" in caplog.text
+
+
+def test_save_writes_what_was_changed_and_nothing_else(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="hallux")
+    machine, _ = idle(tmp_path, Hardware(model="claude-sonnet-5-5"), from_flags=["model"])
+    machine.change("tick_budget_usd", "1.25")
+    machine.change("effort", "high")
+    assert machine.save() is None
+    written = (tmp_path / ".hallux" / "config.toml").read_text()
+    assert written == 'tick_budget_usd = 1.25\neffort = "high"\n'      # not the flag's model
+    assert machine.unsaved == {} and "config saved: tick_budget_usd, effort" in caplog.text
+    assert config.load(tmp_path, model="claude-sonnet-5-5") == machine.hardware
+    assert machine.save() is None and caplog.text.count("config saved") == 1
+
+
+def test_save_keeps_the_changes_when_it_cant_write(tmp_path):
+    machine, _ = idle(tmp_path)
+    (tmp_path / ".hallux").mkdir(exist_ok=True)
+    (tmp_path / ".hallux" / "config.toml").write_text('effort = "turbo"\n')    # broken by now
+    machine.change("tick_budget_usd", "1.25")
+    assert machine.save() == ("config.toml: effort must be one of low, medium, high, xhigh, max, "
+                              "not 'turbo'. Nothing saved.")
+    assert machine.unsaved == {"tick_budget_usd": 1.25}
+    (tmp_path / ".hallux" / "config.toml").write_text('effort = "max"\n')      # mended
+    assert machine.save() is None and machine.unsaved == {}
+    assert config.load(tmp_path) == Hardware(effort="max", tick_budget_usd=1.25)
+
+
+def test_the_view_is_what_the_panel_shows(tmp_path):
+    hardware = Hardware(max_budget_usd=2.0)
+    machine, _ = idle(tmp_path, hardware, from_flags=["effort"])
+    assert machine.view() == config.View(
+        hardware=hardware, running=hardware, spent_boot=0.0, spent_ticks=None, spent_events=0.0,
+        paused=frozenset(), from_flags=frozenset({"effort"}), unsaved=frozenset(),
+        path=tmp_path.resolve() / ".hallux" / "config.toml")
+    machine.change("fallback_model", "claude-haiku-4-5")
+    view = machine.view()
+    assert view.hardware.fallback_model == "claude-haiku-4-5" and view.running == hardware
+    assert view.unsaved == {"fallback_model"}
+
+
+def test_refill_starts_every_budget_anew(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="hallux")
+    hub = Events()
+    seen = {}
+
+    def refill():
+        seen["before"], seen["total"] = machine.view(), machine.spent
+        seen["said"] = machine.refill()
+        seen["after"], seen["total after"] = machine.view(), machine.spent
+        hub.emit("bell", {"ring": "after"})
+
+    model = FakeModel([lambda: hub.listen("bell"), lambda: hub.emit("bell", {"ring": "first"})]
+                      + result(screen("boot\n"), total=0.01),
+                      result(screen("ding\n"), total=0.31),            # the event: $0.30, used up
+                      result(TOP, total=0.32),                         # Ctrl-L brings a program
+                      result(TOP, total=0.62),                         # a tick: $0.30, used up
+                      [refill] + result(TOP, total=0.63),
+                      result(screen("", prompt="$ "), total=0.64),
+                      result(screen("ding again\n"), total=0.65),
+                      result(HALT, total=0.66))
+    terminal = FakeTerminal(Key("C-l", ""), Action("tick", None), KEY["x"], KEY["q"], "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model, events=hub)
+    asyncio.run(asyncio.wait_for(machine.run(), 20))
+
+    before, after = seen["before"], seen["after"]
+    assert before.paused == {"event_budget_usd", "tick_budget_usd"}
+    assert (before.spent_events, before.spent_ticks) == pytest.approx((0.30, 0.30))
+    assert seen["said"] == "budgets refilled"
+    assert after.paused == frozenset() and (after.spent_events, after.spent_ticks) == (0.0, 0.0)
+    assert after.spent_boot == before.spent_boot == pytest.approx(0.62)
+    assert seen["total after"] == seen["total"] == pytest.approx(0.62)     # the bar's total stays
+    assert after.unsaved == frozenset()                                    # a refill is no setting
+    assert "budgets refilled: events $0.30, ticks $0.30" in caplog.text
+
+    assert kinds(model) == ["boot", "events", "key", "tick", "keys", "keys", "events", "input"]
+    assert '{"ring": "after"}' in model.sessions[0][6]                     # events arrive again
+    assert [form.tick for _, form in terminal.forms] == [3, 0, 3]          # the next screen ticks
+    assert notes_of(terminal) == [EVENTS_USED, f"{EVENTS_USED} · {TICKS_USED}", TICKS_USED,
+                                  None]
+
+
+def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monkeypatch):
+    from hallux import app, machine, terminal
+    given = {}
+
+    class Recorded:
+        def __init__(self, root, hardware, terminal, **more):
+            given.update(more, hardware=hardware)
+
+        async def run(self):
+            pass
+
+    class Tty:
+        isatty, write, flush = (lambda self: True), (lambda self, text: None), (lambda self: None)
+
+    (tmp_path / ".hallux").mkdir()
+    (tmp_path / ".hallux" / "config.toml").write_text('addons = []\neffort = "max"\n')
+    monkeypatch.setattr(machine, "Machine", Recorded)
+    monkeypatch.setattr(terminal, "Terminal", lambda bar, **more: None)
+    monkeypatch.setattr(sys, "stdin", Tty())
+    monkeypatch.setattr(sys, "stdout", Tty())
+    monkeypatch.setattr(sys, "argv", ["hallux", str(tmp_path), "--model", "claude-sonnet-5-5"])
+    try:
+        app.main()
+    finally:
+        for handler in list(app.log.handlers):               # main() logs into the world's folder
+            app.log.removeHandler(handler)
+            handler.close()
+    assert given["from_flags"] == {"model"}                  # the effort is the file's
+    assert given["hardware"] == Hardware("claude-sonnet-5-5", "max", addons=())

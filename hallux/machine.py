@@ -16,13 +16,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
-from typing import AsyncContextManager, Callable, Protocol, Sequence
+from typing import AsyncContextManager, Callable, Iterable, Protocol, Sequence
 
 from claude_agent_sdk import (
     AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent, ToolUseBlock,
 )
 
-from hallux import sandbox
+from hallux import config, sandbox
 from hallux.addons import Addon, Events, stop_all
 from hallux.config import Hardware
 from hallux.disk import Disk
@@ -100,9 +100,14 @@ class Terminal(Protocol):
 class Machine:
     def __init__(self, root: Path, hardware: Hardware, terminal: Terminal,
                  client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient,
-                 addons: Sequence[Addon] = (), events: Events | None = None):
+                 addons: Sequence[Addon] = (), events: Events | None = None,
+                 from_flags: Iterable[str] = ()):
         self.disk = Disk(root)
-        self.hardware = hardware
+        self.hardware = hardware                 # the settings as they are now
+        self.running = hardware                  # the settings this boot's session started with
+        self.unsaved: dict[str, object] = {}     # changed in this run and not saved yet
+        self.from_flags = set(from_flags)        # the settings a flag set for this run
+        self.notes: dict[str, str] = {}          # what the bar's note says, by reason
         self.terminal = terminal
         self.client_factory = client_factory
         self.addons = tuple(addons)              # the real hardware attached to this machine
@@ -119,6 +124,58 @@ class Machine:
         self.tick_spent = 0.0                    # raw mode: dollars spent on ticks this run
         self.last_turn_cost = 0.0
         self.stream: ScreenStream | None = None  # what the last answer showed while written
+
+    # ---------------------------------------------------------------- for hallux's own panel
+
+    def view(self) -> config.View:
+        """What the panel shows: the settings, and how far the budgets are."""
+        paused = {"event_budget_usd": self.events.paused,
+                  "tick_budget_usd": "tick_budget_usd" in self.notes}
+        return config.View(
+            hardware=self.hardware, running=self.running, spent_boot=self.session_spent,
+            spent_ticks=self.tick_spent if self.in_form else None, spent_events=self.event_spent,
+            paused=frozenset(name for name, used_up in paused.items() if used_up),
+            from_flags=frozenset(self.from_flags), unsaved=frozenset(self.unsaved),
+            path=self.disk.root / config.CONFIG_FILE)
+
+    def change(self, name: str, text: str) -> str | None:
+        """A new value for a setting, as it was typed in the panel. Returns why it wasn't
+        taken, or None."""
+        try:
+            value = config.typed(name, text)
+        except ValueError as e:
+            return str(e)
+        old = getattr(self.hardware, name)
+        if value == old:                         # Enter on a row that was left as it was
+            return None
+        self.hardware = dataclasses.replace(self.hardware, **{name: value})
+        self.unsaved[name] = value
+        self.from_flags.discard(name)            # the flag's value is gone for this run
+        log.info("config: %s %s -> %s", name, old, value)
+        self.settle()
+        return None
+
+    def save(self) -> str | None:
+        """Write what was changed in this run into config.toml. Returns why it couldn't, or
+        None."""
+        try:
+            config.save(self.disk.root, self.unsaved)
+        except ValueError as e:
+            return str(e)
+        if self.unsaved:
+            log.info("config saved: %s", ", ".join(self.unsaved))
+        self.unsaved = {}
+        return None
+
+    def refill(self) -> str:
+        """Start the counting of every budget anew, at the limits as they are. What was really
+        spent stays on the bar. Returns a line for the panel."""
+        log.info("budgets refilled: events $%.2f, ticks $%.2f", self.event_spent, self.tick_spent)
+        self.event_spent = self.tick_spent = 0.0
+        self.settle()
+        return "budgets refilled"
+
+    # ---------------------------------------------------------------- the machine itself
 
     def options(self) -> ClaudeAgentOptions:
         server, allowed = build_server(self.disk, fields=self.terminal, addons=self.addons,
@@ -158,6 +215,9 @@ class Machine:
         self.disk.cwd = "/"
         self.session_spent = 0.0
         self.forget_events()
+        self.note("event_budget_usd", None)      # a new boot: nothing is heard, nothing paused
+        self.running = self.hardware             # the bar shows what runs, not what is set
+        self.terminal.set_status(model=self.running.model, effort=self.running.model_effort)
         async with self.client_factory(options=self.options()) as client:   # empty RAM
             try:
                 body, first = self.boot_report()
@@ -246,29 +306,54 @@ class Machine:
     def check_events(self) -> None:
         """What the hub had to drop goes onto the bar. And events are model calls that nobody
         typed for: once they have used up their budget, they stop until a line is typed."""
-        notes = self.events.take_notes()
+        self.notify(self.events.take_notes())
         budget = self.hardware.event_budget_usd
         if self.events.listening() and not self.events.paused and self.event_spent >= budget:
             self.events.pause()
-            notes.append("events paused: budget used" if budget
-                         else "events are off: event_budget_usd is 0")
-            log.warning("%s ($%.2f of $%.2f)", notes[-1], self.event_spent, budget)
-        self.notify(notes)
+            log.warning("%s ($%.2f of $%.2f)", self.events_note(), self.event_spent, budget)
+            self.notify([self.events_note()], "event_budget_usd")
+
+    def events_note(self) -> str:
+        """Why the events are paused, for the bar."""
+        return ("events paused: budget used" if self.hardware.event_budget_usd
+                else "events are off: event_budget_usd is 0")
 
     def refill_event_budget(self) -> None:
         """The user typed a line: somebody is at the keyboard, so events may spend again."""
         self.event_spent = 0.0
-        if self.events.paused and self.hardware.event_budget_usd:
-            self.events.pause(False)
-            self.terminal.set_status(note=None)
+        self.settle()
 
-    def notify(self, notes: list[str]) -> None:
+    def settle(self) -> None:
+        """Put the machine in line with its settings: lift a pause whose budget allows it
+        again, and pause what is over its budget."""
+        hw = self.hardware
+        if self.events.paused and self.event_spent < hw.event_budget_usd:
+            self.events.pause(False)
+            self.note("event_budget_usd", None)
+        elif self.events.paused:
+            self.note("event_budget_usd", self.events_note())    # "used" may now be "off"
+        if self.tick_spent < hw.tick_budget_usd:
+            self.note("tick_budget_usd", None)   # the program ticks again with its next screen
+        self.check_events()
+
+    def notify(self, notes: list[str], reason: str = "reports") -> None:
         """Something the user should know, on the status bar. Without one, it's printed."""
         if notes:
-            self.terminal.set_status(note=" · ".join(notes))
+            self.note(reason, " · ".join(notes))
             if not self.terminal.status_bar:
                 for note in notes:
                     print(f"hallux: {note}", file=sys.stderr)
+
+    def note(self, reason: str, text: str | None) -> None:
+        """Put a note on the status bar for one reason, or take that reason's note away. The
+        bar has one slot for notes: it shows all there are, and a note goes with its reason."""
+        if self.notes.get(reason) == text:
+            return
+        if text is None:
+            del self.notes[reason]
+        else:
+            self.notes[reason] = text
+        self.terminal.set_status(note=" · ".join(self.notes.values()) or None)
 
     def forget_events(self) -> None:
         """A boot starts or ends: the AI listens to no addon, and no event waits for it."""
@@ -322,7 +407,7 @@ class Machine:
         form = self.load_files(form, to_load)
         if form.tick and self.tick_spent >= self.hardware.tick_budget_usd:
             form = dataclasses.replace(form, tick=0)             # live updates stop here
-            self.terminal.set_status(note="live updates paused: tick budget used")
+            self.note("tick_budget_usd", "live updates paused: tick budget used")
         self.fields = {field.id: field for field in form.fields}
         self.in_form = True
         await self.terminal.show_form(reply.screen, form, reply.patch)
@@ -424,8 +509,7 @@ class Machine:
                 self.terminal.set_status(error=f"couldn't write {write.path}")
 
     async def leave_block_mode(self) -> None:
-        if self.in_form and self.tick_spent:
-            self.terminal.set_status(note=None)
+        self.note("tick_budget_usd", None)
         self.fields, self.in_form, self.tick_spent = {}, False, 0.0
         await self.terminal.end_form()
 

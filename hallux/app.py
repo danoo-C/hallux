@@ -72,8 +72,10 @@ def main() -> None:
         _complain(notes)
     terminal = Terminal(bar, before_power_cut=lambda: addons.stop_all(
         attached, addons.HARD_EXIT_SECONDS))
+    from_flags = {name for name in ("model", "effort") if getattr(flags, name) is not None}
     try:
-        asyncio.run(Machine(root, hardware, terminal, addons=attached, events=events).run())
+        asyncio.run(Machine(root, hardware, terminal, addons=attached, events=events,
+                            from_flags=from_flags).run())
     except Exception as e:                      # the SDK or the CLI failed: "hardware" error
         log.exception("crash")
         sys.exit(f"hallux: {e}")

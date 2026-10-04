@@ -118,6 +118,8 @@ class ScriptTerminal:
             self.records[-1].seconds += time.monotonic() - started
 
     def set_status(self, **changes: object) -> None:
+        if not self.records:                            # the bar is set as a boot starts,
+            return                                      # before there is anything to record
         record = self.records[-1]
         if "activity" in changes and "tools" in changes:
             record.tools.append(str(changes["activity"]))

@@ -49,6 +49,20 @@ class Hardware:
         return None if "haiku" in self.model else self.effort
 
 
+@dataclass(frozen=True)
+class View:
+    """What the panel shows of a running machine: its settings, and how far its budgets are."""
+    hardware: Hardware                        # the settings as they are now
+    running: Hardware                         # what this boot's session started with
+    spent_boot: float                         # dollars this boot has spent
+    spent_ticks: float | None                 # by the program on screen, on ticks; None: no program
+    spent_events: float                       # on events, since a line was typed
+    paused: frozenset[str]                    # the budgets that are used up right now, by setting
+    from_flags: frozenset[str]                # the settings a flag set for this run
+    unsaved: frozenset[str]                   # the settings changed in this run and not saved yet
+    path: Path                                # where config.toml is
+
+
 def load(root: Path, **flags: object) -> Hardware:
     """Read the hardware for the machine in `root`. Raises ValueError with a readable message."""
     hardware = Hardware()
