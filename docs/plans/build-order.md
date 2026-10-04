@@ -5,8 +5,8 @@ order the steps of the two plans are built, what has to happen before some of th
 a step is worked. It holds no status: each plan's README has a table for that, and those
 two tables are the only place that says what is built.
 
-**Where things stand, on 2026-10-05:** both features are designed, planned and reviewed.
-Nothing is built. No code has been written for either.
+**Where things stand:** both features are designed, planned and reviewed. Building began on
+2026-10-05 with the panel's step 1. The two tables say how far it is.
 
 | | The config panel | Addon agents |
 |---|---|---|
@@ -38,7 +38,8 @@ These are the user's rules for this project. They hold for every step.
   README holds the decisions the steps share.
 - **Commit only when asked.** The user pushes and opens pull requests.
 - **Ask which branch to build on.** The designs and plans are on `multi-agent`. Earlier
-  features each had a branch of their own.
+  features each had a branch of their own. The panel is built on `config-panel`, a branch
+  off `multi-agent`; for addon agents, ask again.
 - **A step is done** when its tests pass with all the old ones, its "Done when" holds, its
   status in the README's table says so, and what was decided while building is written into
   the step's file under "As built".

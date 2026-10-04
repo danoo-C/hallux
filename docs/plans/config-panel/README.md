@@ -1,6 +1,7 @@
 # Plan: the config panel
 
-**Status:** written on 2026-10-04. Nothing is built. The design it follows is
+**Status:** written on 2026-10-04. What is built is in the table under
+[The steps](#the-steps). The design it follows is
 [config-panel.md](../../config-panel.md), in which no question is open. The decisions this
 plan takes on its own are in a table below. They are my proposals, and the user hasn't
 confirmed them yet. One check still has to happen before part of the build; it is under
@@ -191,7 +192,7 @@ Each step can be merged by itself. A step needs the ones named beside it.
 
 | Step | File | Needs | Status |
 |---|---|---|---|
-| 1. Checking and saving a setting | [01-saving.md](01-saving.md) | | Not built |
+| 1. Checking and saving a setting | [01-saving.md](01-saving.md) | | Built on 2026-10-05 |
 | 2. A setting changes in a running machine | [02-changes.md](02-changes.md) | 1 | Not built |
 | 3. The budget per boot | [03-budget.md](03-budget.md) | 2 | Not built |
 | 4. Switching the model | [04-model.md](04-model.md) | 2 | Not built |

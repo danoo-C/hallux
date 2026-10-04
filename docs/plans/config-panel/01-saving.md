@@ -114,3 +114,35 @@ In `tests/test_config.py`:
 
 `save` changes one line of the README's example file, the comments are all still there, and
 `load` reads the new value.
+
+## As built
+
+Built on 2026-10-05, on the branch `config-panel`. 97 new tests, 935 in all. Nothing here
+needs a terminal or a model, so nothing is left to try by hand. Decided while building:
+
+- **`load` now refuses `nan` in the file,** with the words it has for a wrong number. Before,
+  `tick_budget_usd = nan` was taken, and was a budget that never ran out. `inf` in the file
+  is taken as before: it says "no limit" and does that. `typed` makes neither. A row whose
+  value is `inf` can't be entered again as it stands; step 5 will meet that.
+- **A changed line keeps its own start:** the indent and the spaces around `=` stay as they
+  were written, so `tick_budget_usd=0.25` becomes `tick_budget_usd=1.25`. The plan said
+  "replaced by `name = value`". A new line is written that way.
+- **The spaces in front of a comment stay** with the comment.
+- **Each change is checked by itself,** not all of them once at the end. So the message
+  names the setting that can't be changed.
+- **With nothing to change, nothing is written:** no file is made for a `None` that has no
+  line, and the file's time doesn't move.
+- **A line is found by the setting's name at its start,** after spaces or tabs, with `=`
+  behind it. A name in quotes (`"model" = …`) isn't found, the new line would set it twice,
+  and the safety check refuses.
+- **`save` writes names and numbers only,** as the table says. On or off, a list, a name
+  with a line break in it, and a setting that doesn't exist all end as
+  `can't change … safely`.
+- **The file beside it** is `.hallux/config.tmp`.
+- **A typed number** may be `5.`, `.5` or `$ 2`. A comma is no point: `1,25` is refused.
+- **`check` of a name that is no setting raises `KeyError`.** A test holds `WHEN` to the
+  settings `Hardware` has, so a new setting without an entry fails loudly.
+- **What `load` says changed in two corners.** A file with several wrong settings names the
+  first in the order of `Hardware`, so `max_budget_usd` now comes before the on/off
+  settings; one wrong setting reads as before. And a file that isn't UTF-8 now gets the
+  file's path in front, like every other error.

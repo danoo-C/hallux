@@ -1,3 +1,7 @@
+import re
+from dataclasses import fields
+from pathlib import Path
+
 import pytest
 
 from hallux import config
@@ -7,6 +11,17 @@ from hallux.config import Hardware
 def write_config(root, text):
     (root / ".hallux").mkdir(exist_ok=True)
     (root / ".hallux" / "config.toml").write_text(text)
+
+
+def saved(root):
+    """The config file as it is on the disk, with its own line endings."""
+    return (root / ".hallux" / "config.toml").read_bytes().decode("utf-8")
+
+
+def readme_example():
+    """The config.toml that the README shows."""
+    readme = (Path(__file__).resolve().parent.parent / "README.MD").read_text(encoding="utf-8")
+    return readme.split("## Configuration")[1].split("```toml\n")[1].split("```")[0]
 
 
 def test_defaults(tmp_path):
@@ -66,3 +81,246 @@ def test_bad_config_is_a_readable_error(tmp_path, text, message):
     write_config(tmp_path, text)
     with pytest.raises(ValueError, match=message):
         config.load(tmp_path)
+
+
+def test_a_wrong_file_is_named_with_its_setting(tmp_path):
+    write_config(tmp_path, 'effort = "turbo"\n')
+    with pytest.raises(ValueError) as e:
+        config.load(tmp_path)
+    assert str(e.value) == (f"{tmp_path / '.hallux' / 'config.toml'}: effort must be one of "
+                            f"low, medium, high, xhigh, max, not 'turbo'")
+
+
+# --- one setting by itself: check, typed, and when a change takes effect -------------------------
+
+@pytest.mark.parametrize("name, value", [
+    ("model", "claude-sonnet-5-5"),
+    ("effort", "max"), ("effort", None),
+    ("fallback_model", "claude-haiku-4-5"), ("fallback_model", None),
+    ("max_budget_usd", 2.5), ("max_budget_usd", 3), ("max_budget_usd", None),
+    ("status_bar", False), ("keep_transcripts", True), ("os_sandbox", True),
+    ("tick_budget_usd", 0), ("tick_budget_usd", 1.25),
+    ("event_budget_usd", 0.0), ("event_budget_usd", 2),
+    ("tick_budget_usd", float("inf")),             # no limit, for who writes it into the file
+    ("addons", None), ("addons", ()), ("addons", ("window", "sound_card")),
+])
+def test_check_takes_a_good_value(name, value):
+    assert config.check(name, value) is None
+
+
+@pytest.mark.parametrize("name, value, words", [
+    ("model", "", "must be a model name like claude-opus-5-5"),
+    ("model", 5, "must be a model name like claude-opus-5-5"),
+    ("effort", "turbo", "must be one of low, medium, high, xhigh, max, not 'turbo'"),
+    ("fallback_model", 5, "must be a model name"),
+    ("max_budget_usd", 0, "must be a positive number"),
+    ("max_budget_usd", -1, "must be a positive number"),
+    ("max_budget_usd", True, "must be a positive number"),
+    ("max_budget_usd", "2", "must be a positive number"),
+    ("status_bar", "yes", "must be true or false"),
+    ("keep_transcripts", "no", "must be true or false"),
+    ("os_sandbox", 1, "must be true or false"),
+    ("tick_budget_usd", -1, "must be a number, 0 or more"),
+    ("tick_budget_usd", True, "must be a number, 0 or more"),
+    ("tick_budget_usd", None, "must be a number, 0 or more"),
+    ("event_budget_usd", -0.5, "must be a number, 0 or more"),
+    ("event_budget_usd", "a lot", "must be a number, 0 or more"),
+    ("event_budget_usd", float("nan"), "must be a number, 0 or more"),
+    ("max_budget_usd", float("nan"), "must be a positive number"),
+    ("addons", "window", 'must be a list of addon names, like ["window"]'),
+    ("addons", ("window", 3), 'must be a list of addon names, like ["window"]'),
+    ("addons", ("Window",), 'must be a list of addon names, like ["window"]'),
+])
+def test_check_says_why_a_value_is_wrong(name, value, words):
+    assert config.check(name, value) == words
+
+
+def test_check_knows_every_setting_and_no_other():
+    for f in fields(Hardware):
+        assert config.check(f.name, f.default) is None
+    with pytest.raises(KeyError):
+        config.check("modle", "claude-opus-5-5")
+
+
+def test_every_setting_says_when_a_change_takes_effect():
+    assert set(config.WHEN) == {f.name for f in fields(Hardware)}
+    assert set(config.WHEN.values()) == {"now", "reboot", "start"}
+    assert config.WHEN["tick_budget_usd"] == config.WHEN["event_budget_usd"] == "now"
+
+
+@pytest.mark.parametrize("name, text, value", [
+    ("tick_budget_usd", "1.25", 1.25),
+    ("tick_budget_usd", "$1.25", 1.25),
+    ("tick_budget_usd", " $ 2 ", 2.0),
+    ("event_budget_usd", "0", 0.0),
+    ("event_budget_usd", ".5", 0.5),
+    ("event_budget_usd", "3.", 3.0),
+    ("max_budget_usd", "2", 2.0),
+    ("max_budget_usd", "", None),                  # empty: no cap
+    ("max_budget_usd", "  ", None),
+    ("model", "  claude-sonnet-5-5 ", "claude-sonnet-5-5"),
+    ("fallback_model", "claude-haiku-4-5", "claude-haiku-4-5"),
+    ("fallback_model", "", None),                  # empty: none
+    ("effort", "xhigh", "xhigh"),
+])
+def test_typed_makes_a_value(name, text, value):
+    made = config.typed(name, text)
+    assert made == value and type(made) is type(value)
+
+
+@pytest.mark.parametrize("name, text, words", [
+    ("tick_budget_usd", "", "must be a number, 0 or more"),
+    ("tick_budget_usd", "-1", "must be a number, 0 or more"),
+    ("tick_budget_usd", "nan", "must be a number, 0 or more"),
+    ("tick_budget_usd", "inf", "must be a number, 0 or more"),
+    ("tick_budget_usd", "1e9", "must be a number, 0 or more"),
+    ("tick_budget_usd", "abc", "must be a number, 0 or more"),
+    ("tick_budget_usd", "9" * 400, "must be a number, 0 or more"),
+    ("event_budget_usd", "1" * 13, "must be a number, 0 or more"),     # twelve digits at most
+    ("event_budget_usd", "1.2.3", "must be a number, 0 or more"),
+    ("event_budget_usd", "1,25", "must be a number, 0 or more"),
+    ("event_budget_usd", "$", "must be a number, 0 or more"),
+    ("max_budget_usd", "0", "must be a positive number"),
+    ("max_budget_usd", "-1", "must be a positive number"),
+    ("max_budget_usd", "nan", "must be a positive number"),
+    ("max_budget_usd", "9" * 400, "must be a positive number"),
+    ("effort", "turbo", "must be one of low, medium, high, xhigh, max, not 'turbo'"),
+    ("effort", "", "must be one of low, medium, high, xhigh, max, not ''"),
+    ("model", "", "must be a model name like claude-opus-5-5"),
+    ("model", "   ", "must be a model name like claude-opus-5-5"),
+    ("status_bar", "off", "is set when Hallux starts: edit config.toml"),
+    ("addons", "window", "is set when Hallux starts: edit config.toml"),
+    ("keep_transcripts", "on", "is set when Hallux starts: edit config.toml"),
+    ("os_sandbox", "on", "is set when Hallux starts: edit config.toml"),
+])
+def test_typed_refuses_with_the_reason(name, text, words):
+    with pytest.raises(ValueError) as e:
+        config.typed(name, text)
+    assert str(e.value) == words
+
+
+# --- save: config.toml changed line by line ---------------------------------------------------
+
+def test_save_changes_one_line_of_the_readme_example(tmp_path):
+    example = readme_example()
+    write_config(tmp_path, example)
+    config.save(tmp_path, {"tick_budget_usd": 1.25})
+    changed = example.replace("tick_budget_usd = 0.25  ", "tick_budget_usd = 1.25  ")
+    assert changed != example
+    assert saved(tmp_path) == changed                 # every other line, and every comment
+    assert config.load(tmp_path).tick_budget_usd == 1.25
+
+    config.save(tmp_path, {"effort": "high", "max_budget_usd": 3.0})
+    lines = saved(tmp_path).splitlines()
+    assert 'effort = "high"                   # low, medium, high, xhigh, max' in lines
+    assert "max_budget_usd = 3.0             # stop a boot after spending this much" in lines
+    assert len(lines) == len(example.splitlines())
+    assert config.load(tmp_path) == Hardware(
+        "claude-opus-5-5", "high", "claude-haiku-4-5", 3.0, tick_budget_usd=1.25,
+        addons=("window",))
+
+
+def test_save_keeps_what_follows_the_value(tmp_path):
+    write_config(tmp_path, 'model = "a#b"   # the "model", so far\n'
+                           "fallback_model = 'c#d'# none\n"
+                           "  tick_budget_usd=0.25\n"
+                           "event_budget_usd =   2   \n")
+    config.save(tmp_path, {"model": "claude-sonnet-5-5", "fallback_model": "claude-haiku-4-5",
+                           "tick_budget_usd": 1.0, "event_budget_usd": 0.5})
+    assert saved(tmp_path) == ('model = "claude-sonnet-5-5"   # the "model", so far\n'
+                               'fallback_model = "claude-haiku-4-5"# none\n'
+                               "  tick_budget_usd=1.0\n"
+                               "event_budget_usd =   0.5   \n")
+
+
+def test_save_adds_a_line(tmp_path):
+    config.save(tmp_path, {"effort": "high"})                  # no file, and no folder for it
+    assert saved(tmp_path) == 'effort = "high"\n'              # and no setting that wasn't changed
+    write_config(tmp_path, "# mine\nstatus_bar = false")       # no line break at its end
+    config.save(tmp_path, {"max_budget_usd": 2.0, "model": 'a"b\\c'})
+    assert saved(tmp_path) == ('# mine\nstatus_bar = false\nmax_budget_usd = 2.0\n'
+                               'model = "a\\"b\\\\c"\n')
+    assert config.load(tmp_path) == Hardware(model='a"b\\c', max_budget_usd=2.0, status_bar=False)
+
+
+def test_save_takes_a_line_out(tmp_path):
+    write_config(tmp_path, 'model = "m"\n\nmax_budget_usd = 2.0   # the cap\neffort = "low"\n')
+    config.save(tmp_path, {"max_budget_usd": None})
+    assert saved(tmp_path) == 'model = "m"\n\neffort = "low"\n'
+    config.save(tmp_path, {"fallback_model": None})            # it has no line: nothing to do
+    assert saved(tmp_path) == 'model = "m"\n\neffort = "low"\n'
+
+
+def test_save_with_nothing_to_change_writes_no_file(tmp_path):
+    config.save(tmp_path, {"fallback_model": None})
+    config.save(tmp_path, {})
+    assert not (tmp_path / ".hallux").exists()
+
+
+def test_save_leaves_every_other_line_as_it_is(tmp_path):
+    text = ('\n# My machine.\n\n   # an indented comment\n'
+            'addons = [\n  "window",   # the first\n]\n'
+            '\ttick_budget_usd = 0.25\t# tabs\n\n\n')
+    write_config(tmp_path, text)
+    config.save(tmp_path, {"tick_budget_usd": 0.5})
+    assert saved(tmp_path) == text.replace("0.25", "0.5")
+    assert config.load(tmp_path).addons == ("window",)
+
+
+def test_save_keeps_windows_line_endings(tmp_path):
+    (tmp_path / ".hallux").mkdir()
+    (tmp_path / ".hallux" / "config.toml").write_bytes(
+        b'# mine\r\nmodel = "m"   # which\r\neffort = "low"\r\nstatus_bar = false')
+    config.save(tmp_path, {"model": "n", "tick_budget_usd": 1.0, "effort": None})
+    assert (tmp_path / ".hallux" / "config.toml").read_bytes() == (
+        b'# mine\r\nmodel = "n"   # which\r\nstatus_bar = false\r\ntick_budget_usd = 1.0\r\n')
+
+
+@pytest.mark.parametrize("text, message", [
+    ('effort = "turbo"\n',                                         # wrong by now
+     r"config\.toml: effort must be one of low, medium, high, xhigh, max, not 'turbo'\. "
+     r"Nothing saved\."),
+    ('modle = "m"\n', r"config\.toml: unknown setting modle \(known: .*\)\. Nothing saved\."),
+    ('[budgets]\ntick = 1\n',                                      # a table
+     r"config\.toml: unknown setting budgets \(known: .*\)\. Nothing saved\."),
+    ('effort = "low\n', r"config\.toml: .*line 1.*\. Nothing saved\."),              # broken TOML
+    ('model = "a"\nmodel = "b"\n', r"config\.toml: .*line 2.*\. Nothing saved\."),   # there twice
+    ('model = """\nclaude-opus-5-5"""\n',                          # a value over several lines
+     r"config\.toml: can't change model safely\. Edit the file\. Nothing saved\."),
+    ('fallback_model = """\nmodel = "inside a string"\n"""\n',     # a line that looks like it
+     r"config\.toml: can't change model safely\. Edit the file\. Nothing saved\."),
+    ('"model" = "m"\n',                                            # a name this doesn't find
+     r"config\.toml: can't change model safely\. Edit the file\. Nothing saved\."),
+])
+def test_save_writes_nothing_when_it_cannot(tmp_path, text, message):
+    write_config(tmp_path, text)
+    with pytest.raises(ValueError) as e:
+        config.save(tmp_path, {"tick_budget_usd": 1.0, "model": "claude-sonnet-5-5"})
+    assert re.fullmatch(message, str(e.value), re.DOTALL)
+    assert saved(tmp_path) == text
+    assert [f.name for f in (tmp_path / ".hallux").iterdir()] == ["config.toml"]
+
+
+def test_save_refuses_a_value_the_file_cannot_hold(tmp_path):
+    write_config(tmp_path, 'effort = "low"\n')
+    for changes in ({"effort": "turbo"}, {"status_bar": False}, {"modle": "m"}):
+        with pytest.raises(ValueError, match="can't change .* safely"):
+            config.save(tmp_path, changes)
+    assert saved(tmp_path) == 'effort = "low"\n'
+
+
+def test_save_says_when_the_file_cannot_be_written(tmp_path):
+    (tmp_path / ".hallux").write_text("in the way")           # a file where the folder would be
+    with pytest.raises(ValueError) as e:
+        config.save(tmp_path, {"effort": "high"})
+    assert re.fullmatch(r"config\.toml: [A-Z][^.:\[\]]+\. Nothing saved\.", str(e.value))
+    assert "safely" not in str(e.value)
+
+
+def test_load_reads_what_save_wrote(tmp_path):
+    typed = {"model": "claude-sonnet-5-5", "effort": "max", "fallback_model": "claude-haiku-4-5",
+             "max_budget_usd": "$2", "tick_budget_usd": "0.00001", "event_budget_usd": "0"}
+    config.save(tmp_path, {name: config.typed(name, text) for name, text in typed.items()})
+    assert config.load(tmp_path) == Hardware(
+        "claude-sonnet-5-5", "max", "claude-haiku-4-5", 2.0,
+        tick_budget_usd=0.00001, event_budget_usd=0.0)
