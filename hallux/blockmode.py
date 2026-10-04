@@ -208,6 +208,7 @@ class BlockMode:
         self.areas: dict[str, TextArea] = {}
         self.kinds: dict[str, tuple] = {}             # what each area was built for
         self.seen: dict[str, str | None] = {}          # the text the AI has seen, per field
+        self.seen_before: dict[str, str | None] | None = None   # ... before the action on its way
         self.baseline: dict[str, str] = {}             # the text when loaded, set or saved
         self.container = Window()
         self.background: Window | None = None          # the screen behind the fields
@@ -232,6 +233,7 @@ class BlockMode:
         With a patch, only those rows of the screen on display change."""
         form = replace(form, fields=tuple(f.with_defaults() for f in form.fields))
         self.form = form
+        self.seen_before = None                         # the AI answered: it has seen the action
         self._build_areas(form)
         self.container = self._layout(screen, form, patch)
         self.bindings = self._key_bindings(form)
@@ -254,12 +256,16 @@ class BlockMode:
         self.app.layout.focus(focus)
         self.waiting = False
         await self._drawn()
-        if form.raw and self.held:                      # raw mode: what was typed meanwhile
+        self._take_held_keys()
+
+    def _take_held_keys(self) -> None:
+        """The form takes keys again, and first what was typed while it waited."""
+        if self.form.raw and self.held:                 # raw mode: what was typed meanwhile
             held, self.held = self.held, []             # goes to the AI as one batch
             self._send_events(held)
         else:
             self._release_keys()
-            self.app.key_processor.process_keys()       # type-ahead goes into the new form
+            self.app.key_processor.process_keys()       # type-ahead goes into the form
 
     async def _drawn(self) -> None:
         """Wait until the new screen is on display: clicks only reach what has been drawn."""
@@ -294,6 +300,19 @@ class BlockMode:
         self.running.result()                          # re-raises whatever killed the app
         raise EOFError("block mode ended")
 
+    def keep_form(self, tick: float | None = None) -> None:
+        """The action that came back never reached the AI: the form stays as it is and takes
+        keys again. What it reported of the fields counts as not seen, so the next action
+        reports it once more. With a tick, that is the form's tick from now on."""
+        if self.app is None or self.form is None:
+            return
+        if self.seen_before is not None:
+            self.seen, self.seen_before = self.seen_before, None
+        if tick is not None:
+            self.form = replace(self.form, tick=tick)
+        self.waiting = False
+        self._take_held_keys()
+
     async def end(self) -> None:
         """Leave block mode: the shell screen comes back."""
         if self.app is None:
@@ -309,6 +328,7 @@ class BlockMode:
             pass
         self.app = self.running = self.form = None
         self.areas, self.kinds, self.seen, self.baseline = {}, {}, {}, {}
+        self.seen_before = None
         self.composed, self.footer_rows, self.field_tops = None, 0, {}
         self.waiting = False
 
@@ -523,6 +543,7 @@ class BlockMode:
         if self.waiting or self.form is None:
             return
         self.waiting = True
+        self.seen_before = dict(self.seen)
         states = []
         for f in self.form.fields:
             doc = self.areas[f.id].buffer.document

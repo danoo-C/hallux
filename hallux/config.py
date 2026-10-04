@@ -18,8 +18,8 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 CONFIG_FILE = Path(".hallux") / "config.toml"
 
 WHEN = {                                      # when a change of each setting takes effect
-    "tick_budget_usd": "now", "event_budget_usd": "now",
-    "max_budget_usd": "reboot", "model": "reboot", "effort": "reboot", "fallback_model": "reboot",
+    "tick_budget_usd": "now", "event_budget_usd": "now", "max_budget_usd": "now",
+    "model": "reboot", "effort": "reboot", "fallback_model": "reboot",
     "status_bar": "start", "addons": "start", "keep_transcripts": "start", "os_sandbox": "start",
 }
 # A typed number: digits with at most one point, and at most twelve digits in front of it.
@@ -55,6 +55,7 @@ class View:
     hardware: Hardware                        # the settings as they are now
     running: Hardware                         # what this boot's session started with
     spent_boot: float                         # dollars this boot has spent
+    spent_since_refill: float                 # what counts for its cap; the same without a refill
     spent_ticks: float | None                 # by the program on screen, on ticks; None: no program
     spent_events: float                       # on events, since a line was typed
     paused: frozenset[str]                    # the budgets that are used up right now, by setting

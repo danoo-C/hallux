@@ -73,6 +73,7 @@ class Terminal:
         self.bar = bar                                   # None: no status bar
         self.status_bar = bar is not None
         self.streams = True                              # show answers while they're written
+        self.attended = True                             # somebody is at the keyboard
         self.real_tty = input is None and output is None and sys.stdin.isatty()
         self.input = input or create_input()
         self.output = output or create_output()          # the whole screen (block mode)
@@ -262,6 +263,9 @@ class Terminal:
 
     async def next_action(self) -> Action:
         return await self.block.next_action()
+
+    def keep_form(self, tick: float | None = None) -> None:
+        self.block.keep_form(tick)
 
     async def end_form(self) -> None:
         if self.block.active:

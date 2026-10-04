@@ -401,3 +401,41 @@ def test_an_addons_event_interrupts_the_real_prompt(tmp_path):
     boot, events, typed = model.sessions[0]
     assert events.startswith("<events ") and '<event addon="bell">{"ring": 1}</event>' in events
     assert typed.endswith(">echo hello</input>")                       # nothing typed was lost
+
+
+def test_a_program_goes_on_when_its_action_isnt_sent(tmp_path):
+    """The real terminal, block mode and the machine: over the boot's cap an action stays
+    here, typing goes on, and once the cap is raised the next action brings all of it."""
+    from test_machine import FakeModel, result, screen
+
+    from hallux.config import Hardware
+    from hallux.machine import Machine
+
+    (tmp_path / "notes.txt").write_text("hi\n")
+    model = FakeModel(
+        result(screen(""), total=0.004),
+        result('<screen>\n  GNU nano 7.2   notes.txt\n</screen><prompt></prompt>'
+               '<form keys="C-o C-x" keymap="nano"><editor id="text" top="2" file="notes.txt"/>'
+               '</form>', total=0.02),                                  # over one cent
+        result(screen("", prompt="$ "), total=0.03),
+        result(screen("logout\n", prompt="", tail="<halt/>"), total=0.04))
+
+    async def script(terminal, type_keys):
+        machine = Machine(tmp_path, Hardware(max_budget_usd=0.01), terminal, client_factory=model)
+        running = asyncio.ensure_future(machine.run())
+        type_keys("nano notes.txt\r" "x\x0f" "y")      # ^O is held back; "y" is typed after it
+        await asyncio.sleep(0.5)
+        held = len(model.sessions[0]), terminal.block.field_text("text"), dict(machine.notes)
+        assert machine.change("max_budget_usd", "1") is None
+        type_keys("z\x18")                             # ^X: this one goes
+        await asyncio.sleep(0.5)
+        type_keys("\x04")
+        await running
+        return held
+
+    held = with_terminal(script, bar=StatusBar("claude-opus-5-5", "low"))
+    assert held == (2, "xyhi\n", {"max_budget_usd": "budget used: $0.01 per boot"})
+    boot, nano, ctrl_x, ctrl_d = model.sessions[0]     # ^O never reached the AI
+    assert ctrl_x.startswith('<action key="C-x"') and ">xyzhi\n</field>" in ctrl_x
+    assert 'unchanged="yes"' not in ctrl_x             # the text in full: the AI hasn't seen it
+

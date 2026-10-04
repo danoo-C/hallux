@@ -112,9 +112,16 @@ class FakeTerminal:
     def set_status(self, **changes):
         self.statuses.append(changes)
 
+    def next_key(self):
+        """The next scripted key. What is callable among the keys happens on the way, while
+        the terminal waits: a change in hallux's own panel, say."""
+        while callable(self.keys[0]) and not isinstance(self.keys[0], type):
+            self.keys.pop(0)()
+        return self.keys.pop(0)
+
     async def read_line(self, prompt, default=""):
         self.prompts.append((prompt, default))
-        key = self.keys.pop(0)
+        key = self.next_key()
         if isinstance(key, type) and issubclass(key, BaseException):
             raise key
         if isinstance(key, Typing):
@@ -164,10 +171,15 @@ class FakeTerminal:
         self.texts = {f.id: f.text for f in form.fields if f.text is not None} | (self.texts or {})
 
     async def next_action(self):
-        key = self.keys.pop(0)
+        key = self.next_key()
         if isinstance(key, type) and issubclass(key, BaseException):
             raise key
         return key
+
+    kept = None                              # the ticks keep_form was called with
+
+    def keep_form(self, tick=None):
+        self.kept = (self.kept or []) + [tick]
 
     async def end_form(self):
         if self.forms and self.ended < len(self.forms):
@@ -814,8 +826,9 @@ def test_the_view_is_what_the_panel_shows(tmp_path):
     hardware = Hardware(max_budget_usd=2.0)
     machine, _ = idle(tmp_path, hardware, from_flags=["effort"])
     assert machine.view() == config.View(
-        hardware=hardware, running=hardware, spent_boot=0.0, spent_ticks=None, spent_events=0.0,
-        paused=frozenset(), from_flags=frozenset({"effort"}), unsaved=frozenset(),
+        hardware=hardware, running=hardware, spent_boot=0.0, spent_since_refill=0.0,
+        spent_ticks=None, spent_events=0.0, paused=frozenset(),
+        from_flags=frozenset({"effort"}), unsaved=frozenset(),
         path=tmp_path.resolve() / ".hallux" / "config.toml")
     machine.change("fallback_model", "claude-haiku-4-5")
     view = machine.view()
@@ -863,6 +876,194 @@ def test_refill_starts_every_budget_anew(tmp_path, caplog):
     assert notes_of(terminal) == [EVENTS_USED, f"{EVENTS_USED} · {TICKS_USED}", TICKS_USED,
                                   None]
 
+
+
+# --- the budget per boot: hallux checks it itself, before a message goes to the AI -------------
+
+P = "user@hallux:~$ "
+CENT_USED = "budget used: $0.01 per boot"
+A_CENT = Hardware(max_budget_usd=0.01)
+
+
+def test_the_session_gets_no_cap(tmp_path):
+    model = FakeModel(HALT)
+    run(tmp_path, model, FakeTerminal(), Hardware(max_budget_usd=2.0))
+    assert model.options[0].max_budget_usd is None
+
+
+@pytest.mark.parametrize("cap", [None, 1.0])
+def test_without_a_cap_or_under_it_nothing_is_held_back(tmp_path, cap):
+    model = FakeModel(result(screen("boot\n"), total=0.5), result(screen("one\n"), total=0.9),
+                      result(HALT, total=0.95))
+    terminal = FakeTerminal("echo one", "exit")
+    machine = run(tmp_path, model, terminal, Hardware(max_budget_usd=cap))
+    assert kinds(model) == ["boot", "input", "input"] and notes_of(terminal) == []
+    assert terminal.prompts == [(P, ""), (P, "")] and terminal.screen == "boot\none\n"
+    assert machine.view().paused == frozenset()
+
+
+def test_over_its_cap_a_line_waits_until_the_cap_is_raised(tmp_path):
+    model = FakeModel(result(screen("boot\n"), total=0.004),
+                      result(screen("one\n"), total=0.012),              # over one cent
+                      result(screen("two\n"), total=0.02), result(HALT, total=0.03))
+    terminal = FakeTerminal("echo one", "echo two",                      # the second is held back
+                            lambda: machine.change("max_budget_usd", "$1"),
+                            "echo two", "exit")
+    machine = Machine(tmp_path, A_CENT, terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert kinds(model) == ["boot", "input", "input", "input"]           # "echo two" went once
+    assert [">echo two</input>" in message for message in model.sessions[0]] == [0, 0, 1, 0]
+    assert terminal.prompts == [(P, ""), (P, ""), (P, "echo two"), (P, "")]   # the line is back
+    assert notes_of(terminal) == [CENT_USED, None]
+    assert terminal.screen == "boot\none\ntwo\n"
+
+
+def test_over_its_cap_keys_arent_sent_and_ctrl_d_halts(tmp_path, caplog):
+    from hallux.addons import Addon
+    caplog.set_level(logging.INFO, logger="hallux")
+    stopped = []
+    lamp = Addon("lamp", "A lamp.", "It has no functions.", {}, stop=lambda: stopped.append(1))
+    model = FakeModel(result(screen("boot\n"), total=0.02))              # the boot is over the cap
+    terminal = FakeTerminal(Key("Tab", "ec", 2), Key("C-c", "ec", 2, keep_line=False), EOFError)
+    machine = Machine(tmp_path, A_CENT, terminal, client_factory=model, addons=[lamp])
+    asyncio.run(machine.run())                                           # Ctrl-D: it halts
+    assert kinds(model) == ["boot"]                                      # nothing was sent
+    assert terminal.prompts == [(P, ""), (P, "ec"), (P, "")]             # Tab keeps the line
+    assert stopped == [1] and "halt: Ctrl-D, and the budget is used" in caplog.text
+    assert notes_of(terminal) == [CENT_USED]                             # said once
+
+
+def test_over_its_cap_a_password_is_neither_sent_nor_checked(tmp_path):
+    model = FakeModel(result(ask("New password: ", new=True), total=0.02))
+    terminal = FakeTerminal("hunter2", EOFError)
+    machine = Machine(tmp_path, A_CENT, terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert kinds(model) == ["boot"]
+    assert terminal.secret_prompts == ["New password: "] * 2             # it is asked again,
+    assert terminal.prompts == [("New password: ", "")] * 2              # empty
+    assert machine.passwords.pending is None                             # the store is as it was
+    assert not (tmp_path / ".hallux" / "passwords.json").exists()
+
+
+def test_a_message_that_is_under_way_is_finished_over_the_cap(tmp_path):
+    model = FakeModel(result(screen("boot\n"), total=0.004),
+                      result(screen("half an answer"), total=0.02),      # cut off, and over
+                      result(screen("^C\n"), total=0.03))
+    terminal = FakeTerminal("sleep 100", EOFError, ctrl_c_while_busy=[False, True])
+    run(tmp_path, model, terminal, A_CENT)
+    assert kinds(model) == ["boot", "input", "key"]                      # Ctrl-C's own message
+    assert 'name="C-c" interrupted="yes"' in model.sessions[0][2]
+
+    model = FakeModel(result(screen("boot\n"), total=0.004), result(NANO, total=0.02),
+                      result(screen("", prompt="$ "), total=0.03))
+    terminal = FakeTerminal("nano hello.txt", EOFError, EOFError)        # the full-screen app dies
+    run(tmp_path, model, terminal, A_CENT)
+    assert kinds(model) == ["boot", "input", "key"] and terminal.kept is None
+
+
+def test_events_wait_for_the_cap_too(tmp_path):
+    hub = Events()
+
+    def raise_it():
+        hub.emit("bell", {"ring": "unheard"})                # over the cap: it is dropped
+        assert machine.change("max_budget_usd", "1") is None
+        hub.emit("bell", {"ring": "heard"})
+
+    model = FakeModel([lambda: hub.listen("bell")] + result(screen("boot\n"), total=0.02),
+                      result(screen("ding\n"), total=0.03), result(HALT, total=0.04))
+    terminal = FakeTerminal(Typing("ls", meanwhile=raise_it), "exit")
+    machine = Machine(tmp_path, A_CENT, terminal, client_factory=model, events=hub)
+    asyncio.run(asyncio.wait_for(machine.run(), 20))
+    assert kinds(model) == ["boot", "events", "input"]
+    assert '{"ring": "heard"}' in model.sessions[0][1] and "unheard" not in model.sessions[0][1]
+    assert notes_of(terminal) == [CENT_USED, None]
+
+
+def test_over_its_cap_a_program_stays_and_its_action_isnt_sent(tmp_path):
+    model = FakeModel(result(screen("boot\n"), total=0.004), result(NANO, total=0.02),
+                      result(screen("", prompt="$ "), total=0.03), result(HALT, total=0.04))
+    terminal = FakeTerminal("nano hello.txt", Action("C-o", "text", ()),         # held back
+                            lambda: machine.change("max_budget_usd", ""),        # no cap any more
+                            Action("C-x", "text", ()), "exit")
+    machine = Machine(tmp_path, A_CENT, terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert kinds(model) == ["boot", "input", "action", "input"]
+    assert model.sessions[0][2].startswith('<action key="C-x"')         # C-o never went
+    assert terminal.kept == [0] and len(terminal.forms) == 1            # nothing was shown again
+    assert notes_of(terminal) == [CENT_USED, None]
+
+
+def test_over_its_cap_a_program_doesnt_tick(tmp_path):
+    model = FakeModel(result(screen("boot\n"), total=0.004), result(TOP, total=0.006),
+                      result(TOP, total=0.02),                           # the tick: over the cap
+                      result(screen("", prompt="$ "), total=0.03), result(HALT, total=0.04))
+    terminal = FakeTerminal("top", Action("tick", None), Action("tick", None), KEY["x"],
+                            lambda: machine.change("max_budget_usd", "1"), KEY["q"], "exit")
+    machine = Machine(tmp_path, A_CENT, terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert kinds(model) == ["boot", "input", "tick", "keys", "input"]   # one tick, and then q
+    assert model.sessions[0][3].endswith("<text>q</text></keys>")
+    assert [form.tick for _, form in terminal.forms] == [3, 0]          # it came up without ticks
+    assert terminal.kept == [0, 0] and notes_of(terminal) == [CENT_USED, None]
+
+
+def test_raising_the_cap_takes_only_its_own_note_away(tmp_path):
+    hub = Events()
+    model = FakeModel([lambda: hub.listen("bell")] + result(screen("boot\n"), total=0.02),
+                      result(HALT, total=0.03))
+    terminal = FakeTerminal(lambda: machine.change("max_budget_usd", ""), "exit")
+    hardware = Hardware(max_budget_usd=0.01, event_budget_usd=0)
+    machine = Machine(tmp_path, hardware, terminal, client_factory=model, events=hub)
+    asyncio.run(machine.run())
+    assert notes_of(terminal) == [EVENTS_OFF, f"{EVENTS_OFF} · {CENT_USED}", EVENTS_OFF]
+    assert kinds(model) == ["boot", "input"]
+
+
+def test_a_refill_lets_the_boot_spend_its_cap_once_more(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="hallux")
+    seen = {}
+
+    def refill():
+        seen["before"] = machine.view()
+        machine.refill()
+        seen["after"] = machine.view()
+
+    model = FakeModel(result(screen("boot\n"), total=0.04), result(screen("a\n"), total=0.12),
+                      result(screen("b\n"), total=0.15), result(screen("c\n"), total=0.23))
+    terminal = FakeTerminal("a", "b", refill, "b", "c", "d", EOFError)
+    machine = Machine(tmp_path, Hardware(max_budget_usd=0.10), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    used = "budget used: $0.10 per boot"
+    assert kinds(model) == ["boot", "input", "input", "input"]          # a, b and c; d never
+    assert terminal.prompts == [(P, ""), (P, ""), (P, "b"), (P, ""), (P, ""), (P, "d")]
+    assert notes_of(terminal) == [used, None, used]                     # $0.11 more: used again
+    before, after = seen["before"], seen["after"]
+    assert before.paused == {"max_budget_usd"} and after.paused == frozenset()
+    assert (before.spent_boot, before.spent_since_refill) == pytest.approx((0.12, 0.12))
+    assert (after.spent_boot, after.spent_since_refill) == pytest.approx((0.12, 0.0))
+    costs = [status["cost"] for status in terminal.statuses if "cost" in status]
+    assert costs == pytest.approx([0.04, 0.12, 0.15, 0.23])             # each answer's own cost
+    assert "budgets refilled: events $0.00, ticks $0.00, boot $0.12" in caplog.text
+
+
+def test_a_reboot_starts_the_count_at_zero(tmp_path):
+    reboot = screen("", prompt="", tail="<reboot/>")
+    model = FakeModel(result(screen("boot 1\n"), total=0.04), result(reboot, total=0.12),
+                      result(screen("boot 2\n"), total=0.04), result(screen("ok\n"), total=0.05),
+                      result(HALT, total=0.06))
+    terminal = FakeTerminal("reboot", "ls", "exit")
+    machine = run(tmp_path, model, terminal, Hardware(max_budget_usd=0.10))
+    assert [len(session) for session in model.sessions] == [2, 3] and notes_of(terminal) == []
+    assert machine.spent == pytest.approx(0.18)
+
+    model = FakeModel(result(screen("boot 1\n"), total=0.04), result(reboot, total=0.08),
+                      result(screen("boot 2\n"), total=0.12))            # over, counted from zero
+    terminal = FakeTerminal(lambda: machine.refill(), "reboot", EOFError)
+    machine = Machine(tmp_path, Hardware(max_budget_usd=0.10), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert [len(session) for session in model.sessions] == [2, 1]
+    assert notes_of(terminal) == ["budget used: $0.10 per boot"]
+    assert machine.view().spent_since_refill == machine.view().spent_boot == pytest.approx(0.12)
 
 def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monkeypatch):
     from hallux import app, machine, terminal

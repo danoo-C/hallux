@@ -194,7 +194,7 @@ Each step can be merged by itself. A step needs the ones named beside it.
 |---|---|---|---|
 | 1. Checking and saving a setting | [01-saving.md](01-saving.md) | | Built on 2026-10-05 |
 | 2. A setting changes in a running machine | [02-changes.md](02-changes.md) | 1 | Built on 2026-10-05 |
-| 3. The budget per boot | [03-budget.md](03-budget.md) | 2 | Not built |
+| 3. The budget per boot | [03-budget.md](03-budget.md) | 2 | Built on 2026-10-05 |
 | 4. Switching the model | [04-model.md](04-model.md) | 2 | Not built |
 | 5. The panel by itself | [05-panel.md](05-panel.md) | 2 | Not built |
 | 6. The panel at the shell | [06-shell.md](06-shell.md) | 5 | Not built |

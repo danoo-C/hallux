@@ -49,6 +49,8 @@ class ScriptTerminal:
 
     status_bar = False
     streams = False                                     # a transcript gains nothing from it
+    attended = False                                    # nobody can raise a budget: the machine
+                                                        # halts where it would hold a line back
 
     def __init__(self, lines: list[str], echo: Callable[[str], None] = lambda text: None,
                  cols: int = 100, rows: int = 30) -> None:
@@ -143,6 +145,9 @@ class ScriptTerminal:
             self._new_record(line)
             return Action(key=line[8:].strip(), focus=None)
         raise EOFError("the script has no action for this screen")
+
+    def keep_form(self, tick: float | None = None) -> None:
+        pass
 
     async def end_form(self) -> None:
         pass

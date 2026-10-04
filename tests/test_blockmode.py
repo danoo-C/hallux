@@ -388,3 +388,75 @@ def test_a_patch_before_any_screen_starts_from_blank_rows():
 
     composed = session(script)
     assert composed[0] == "score: 0" and set(composed[1:]) == {""}
+
+
+def test_an_action_that_isnt_sent_leaves_the_form_to_type_in():
+    async def script(block, keys):
+        await block.show("", Form((EDITOR,), keys=("C-o", "C-x")))
+        keys("a" + CTRL["O"] + "b")                    # "b" is typed while the action is away
+        first = await next_action(block)
+        await asyncio.sleep(0.2)
+        block.keep_form()                              # the AI never got it: on with the form
+        keys("c" + CTRL["X"])
+        return first, await next_action(block)
+
+    first, second = session(script)
+    assert first.key == "C-o" and first.fields[0].text == "a" + EDITOR.text
+    assert second.key == "C-x" and second.fields[0].text == "abc" + EDITOR.text
+
+
+def test_an_action_that_isnt_sent_reports_its_fields_again():
+    async def script(block, keys):
+        await block.show("", Form((Field("editor", "text", text="seen\n"),), keys=("C-o", "C-x")))
+        keys("a" + CTRL["O"])
+        first = await next_action(block)
+        block.keep_form()
+        keys(CTRL["O"])                                # the same text, and the AI hasn't seen it
+        second = await next_action(block)
+        await block.show("", Form((Field("editor", "text"),), keys=("C-o", "C-x")))   # now it has
+        keys(CTRL["X"])
+        return first, second, await next_action(block)
+
+    first, second, third = session(script)
+    assert first.fields[0].text == second.fields[0].text == third.fields[0].text == "aseen\n"
+    assert first.fields[0].changed and second.fields[0].changed       # in full, once more
+    assert not third.fields[0].changed                                # an answer came: it is seen
+
+
+def test_keep_form_can_stop_a_programs_ticks():
+    async def script(block, keys):
+        await block.show("top - 01:02:03\n", Form((), raw=True, tick=0.2))
+        tick = await next_action(block)                # nothing was pressed: a tick
+        keys("jk")                                     # pressed while the tick is away
+        await asyncio.sleep(0.1)
+        block.keep_form(tick=0)                        # the tick isn't sent, and no other comes
+        batch = await next_action(block)               # what was pressed is an action, at once
+        block.keep_form(tick=0)                        # and that one isn't sent either
+        waiting = asyncio.ensure_future(block.next_action())
+        await asyncio.sleep(0.6)
+        still_waiting = not waiting.done()
+        keys("q")
+        return tick.key, batch.events, still_waiting, (await asyncio.wait_for(waiting, 5)).events
+
+    assert session(script) == ("tick", ("<text>jk</text>",), True, ("<text>q</text>",))
+
+
+def test_a_tick_that_isnt_sent_takes_nothing_back():
+    """What an earlier action reported is with the AI, whatever happens to a later tick."""
+    def menu(text):
+        return Form((Field("pager", "list", text=text),), raw=True, tick=0.2)
+
+    async def script(block, keys):
+        await block.show("", menu("one\n"))
+        keys("j")
+        first = await next_action(block)               # this one goes to the AI,
+        await block.show("", menu("two\n"))            # which answers with a new list
+        tick = await next_action(block)
+        block.keep_form(tick=0)                        # the tick stays here
+        keys("k")
+        return first, tick.key, await next_action(block)
+
+    first, tick, second = session(script)
+    assert tick == "tick" and second.events == ("<text>k</text>",)
+    assert second.fields[0].text == "two\n" and not second.fields[0].changed   # the AI wrote it
+
