@@ -31,8 +31,9 @@ reason when it can't.
 | `tick_budget_usd`, `event_budget_usd` | A number. A `$` in front is fine | A float |
 | Every other setting | | Refused: `is set when Hallux starts: edit config.toml` |
 
-- A number is digits with at most one point. Anything else is refused with the words of
-  `check`, so `nan`, `inf` and `1e9` never get in.
+- A number is digits with at most one point, and at most twelve digits in front of it.
+  Anything else is refused with the words of `check`, so `nan`, `inf`, `1e9` and a number
+  so long that it becomes infinite never get in.
 - The value then goes through `check`.
 
 **`WHEN`** says when a change of each setting takes effect: `"now"`, `"reboot"` or
@@ -52,7 +53,9 @@ The table is true at every step: it says what the code does then.
 `changes` maps a setting's name to its new value; `None` takes the setting out of the file.
 It raises `ValueError` with a message for the panel when it can't.
 
-1. Read the file. No file is an empty one.
+1. Read the file as it is, with its line endings. No file is an empty one. `load` reads
+   with every kind of line ending turned into one (`hallux/config.py:43`); `save` must not,
+   or a file that was edited on Windows comes back changed in every line.
 2. Check it as `load` does: valid TOML, no unknown setting, every value right. If it has an
    error by now, stop.
 3. For each change, in the lines of the file:
@@ -83,8 +86,9 @@ comparison in 4 catches a line this gets wrong.
 | The new text isn't the old settings plus the changes | `config.toml: can't change tick_budget_usd safely. Edit the file. Nothing saved.` |
 | The file can't be written | `config.toml: ` and the system's reason, then `Nothing saved.` |
 
-The second case covers a value that spans several lines, a setting that is in the file
-twice, and a table header.
+The second case is a value that spans several lines. A setting that is in the file twice is
+an error in TOML, and a table is an unknown setting for `load`: both stop at the first
+case.
 
 ## Tests
 
@@ -93,13 +97,14 @@ In `tests/test_config.py`:
 - `check` for each setting: a good value, and each wrong one with its words;
 - `load` says what it said before for every wrong file in the list that exists;
 - `typed`: `1.25`, `$1.25`, `0`, an empty budget per boot, an empty tick budget (refused),
-  `-1`, `nan`, `1e9`, `abc`, an effort that doesn't exist, an empty model, a setting that
-  only changes at the start;
+  `-1`, `nan`, `1e9`, `abc`, a number of 400 digits, an effort that doesn't exist, an empty
+  model, a setting that only changes at the start;
 - `save` replaces a line and keeps the comment at its end, also when the old value is a
   string with a `#` in it;
 - `save` adds a line to a file that doesn't end in a line break, and to no file at all;
 - `save` with `None` takes the line out, and does nothing when there is none;
 - every other line is the same afterwards, byte for byte, comments and empty lines included;
+- a file with Windows line endings keeps them in every line, and the new line has them too;
 - a setting that isn't in `changes` is never written, even when it differs from the default;
 - a file that is broken by now, a value over several lines, a setting that is there twice:
   nothing is written, the file is as it was, and the message names the reason;

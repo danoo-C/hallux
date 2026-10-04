@@ -12,11 +12,13 @@ can't replace.
 
 ## Build
 
-**The idle hint** names the key: `config: ctrl+f12 · power off: ctrl+shift+del · ctrl+c ×3`.
+**The idle hint** names the key: `power off: ctrl+shift+del · config: ctrl+f12 · ctrl+c ×3`.
 
+- **The power-off keys come first.** The hint is there so that nobody gets stuck, and since
+  step 3 the way out of a boot that has used its budget is a key.
 - **On a narrow window the hint loses parts from the end,** whole ones: first the triple
-  Ctrl-C, then the power key. Today a hint that is too long is cut in the middle of a word.
-  At 80 columns the whole hint doesn't fit beside the model and the cost.
+  Ctrl-C, then the panel's key. Today a hint that is too long is cut in the middle of a
+  word. At 80 columns, beside a long model name and cost, only the first part fits.
 - **The note of a used-up budget per boot** (step 3) gets the key:
   `budget used: $2.00 per boot · raise it: ctrl+f12`.
 
@@ -25,6 +27,9 @@ can't replace.
 | File | What changes |
 |---|---|
 | `README.MD`, "Keys" | A row for Ctrl+F12 |
+| `README.MD`, "Project layout" | `panel.py` and `panel_tabs/` |
+| `docs/light-and-keys.md`, the key rule | Ctrl+F12 is Hallux's own, beside the hard exit |
+| `docs/concept.md`, "Changing the hardware" | It says "edit the config, then `reboot`". That was never so: the file is read once, when Hallux starts (`hallux/app.py:53`). It says what is true now: the panel, or a new start |
 | `README.MD`, "Configuration" | The panel; a table of what changes at once, at the next reboot and at the start; that Save keeps the file's comments |
 | `README.MD`, "Cost and speed" | A budget can be raised while the machine runs |
 | `docs/concept.md`, principle 1 | It names two things on the screen that aren't the AI's. The panel is a third |
@@ -35,9 +40,11 @@ can't replace.
 
 ## Tests
 
-In `tests/test_statusbar.py`:
+In `tests/test_statusbar.py`. Two tests there pin today's hint
+(`tests/test_statusbar.py:16,96`) and change with it.
 
 - the idle hint on a wide bar is the whole hint;
+- on an 80-column bar with a long model name and cost, the power-off keys are there;
 - on a bar too narrow for it, parts go from the end, and no part is cut in the middle;
 - the hardware on the right is still there at every width.
 
@@ -54,7 +61,8 @@ By the user, in a real terminal. Each line is something the tests can't show.
 4. **The tick budget.** In a player whose updates are paused: raise the budget in the panel.
    The player moves again.
 5. **The budget per boot.** Set it low, use it up, raise it. The held line goes through. How
-   far did the last answer go over the cap?
+   far did the last answer go over the cap? Then use it up again and press Refill budgets:
+   the line goes through, the row shows both numbers, and the bar's total hasn't dropped.
 6. **The model.** Switch it. The bar shows the new model with the next answer. What did that
    answer cost, beside the ones before it?
 7. **The effort.** Change it, type `reboot`. The bar shows it after the reboot, not before.

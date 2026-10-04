@@ -43,8 +43,14 @@ The numbers and the outcome go into "As built" at the end of this file.
   never touched.
 - **The bar changes when the switch has happened,** not when you set the name. `running`
   gets the new model then, and the log a line: `model: claude-opus-5-5 -> claude-sonnet-5-5`.
-- **If the switch fails,** the bar shows the error as it shows a model that failed, the
-  message is sent on the old model, and the name stays waiting for the next message.
+- **If the switch fails,** the message is sent on the old model, and the name stays waiting
+  for the next message. The bar says so with a note, `model not switched: …`, which goes
+  when a switch works. It can't be the bar's error: the terminal wipes the error when an
+  answer starts (`hallux/terminal.py:213`), and that is a moment later.
+- **The Effort row on a model without efforts.** Haiku gets none (`hallux/config.py:34`).
+  `running` then has no effort, and the row says `running now: none`.
+- **The Haiku outcome needs a note on the Model row,** which lives in step 5's file. Steps 4
+  and 5 can come in either order: whichever is built second adds the note.
 - **A boot starts on the model in the settings,** as today. Nothing waits then.
 - **`config.WHEN`** has `model` under `now`.
 - **The fallback model** isn't touched by this: it changes at the next boot.
@@ -60,8 +66,8 @@ called with:
   new model;
 - the line after that doesn't switch again;
 - a change back to the running model before any message: no switch at all;
-- a switch that raises: the error is on the bar, the message went out, and the next message
-  tries again;
+- a switch that raises: the note is on the bar and still there after the answer, the message
+  went out, and the next message tries again; when that works, the note is gone;
 - after a reboot the session starts on the new model, and nothing waits.
 
 ## Done when
