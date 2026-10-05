@@ -81,6 +81,16 @@ next, in detail, is in [next-steps.md](next-steps.md).
     mixer; `play`, `stop`, looping and the `finished` event;
   - a manual of under 8000 characters that the AI writes its scores from: in the live run
     seven new songs each played on the first try.
+- [x] **10. The settings panel:** Ctrl+F12 opens hallux's own panel over the shell or a
+  full-screen program. The design is in [config-panel.md](config-panel.md), the eight steps in
+  [plans/config-panel/](plans/config-panel/README.md).
+  - a host with a tab row and one tab, Config; a tab is a file of its own
+    (`hallux/panel.py`, `hallux/panel_tabs/`);
+  - the budgets and the model change while the machine runs, the effort at the next reboot;
+  - Save changes `config.toml` line by line and keeps its comments;
+  - `max_budget_usd` is hallux's own check now: a boot over it holds its messages back, and
+    Refill budgets or a higher number lets them through;
+  - the shell's screen and a program's screen come back as they were.
 - [ ] **Later:**
   - events inside full-screen programs, and a script line that fakes an event;
   - worker agents that an addon brings;

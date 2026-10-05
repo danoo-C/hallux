@@ -74,7 +74,7 @@ The bar is one row, always at the bottom, and always visible:
 | Part | Idle | Busy |
 |---|---|---|
 | **Light** | `•` gray | braille spinner `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, 80 ms per frame, fading green `#5fd787` ↔ yellow `#d7d75f` |
-| **Activity** | a dim hint: `ctrl+shift+del: power off` | what the AI is doing right now (see the table below) |
+| **Activity** | a dim hint with hallux's own keys: `power off: ctrl+shift+del · config: ctrl+f12 · ctrl+c ×3`. A narrow window drops whole parts from its end | what the AI is doing right now (see the table below) |
 | **Right side** | model · effort · session cost · last response time | model · effort · session cost · a running timer |
 
 What the activity text says. hallux knows all of this from the SDK's message stream, because
@@ -215,7 +215,7 @@ So yes, the AI already sees Ctrl-C. At the prompt it arrives as a signal, and in
 |---|---|---|
 | **The keyboard side** (local and instant) | Printable characters, Backspace, Delete, ←/→, Home/End, ↑/↓ recall of lines you typed, Ctrl-A/E/K/U/W | Editing a line is the terminal's job, just like the kernel's line editing on real Linux |
 | **The machine** (sent to the AI) | Ctrl-C, Ctrl-D, Ctrl-L, Ctrl-Z, Ctrl-R, Tab, Alt+anything, F-keys, and anything else your terminal reports | The AI decides what they mean, the way bash (or nano) would |
-| **hallux** (never reaches the AI) | The hard exit | A way out that always works |
+| **hallux** (never reaches the AI) | The hard exit, and Ctrl+F12, which opens hallux's own settings panel ([config-panel.md](config-panel.md)) | A way out that always works, and the machine's settings, which the machine can't see |
 
 - Every key for the machine arrives the same way: `<key name="C-r">what you had typed</key>`.
   That replaces today's special `<signal>` and `<eof>` messages. Names use `C-`, `M-` (Alt) and

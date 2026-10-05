@@ -132,3 +132,35 @@ In `tests/test_script.py`:
 
 A test raises the event budget of a machine whose events are paused, and the next event
 reaches the AI, without a restart.
+
+## As built
+
+Built on 2026-10-05, on the branch `config-panel`. 16 new tests, 951 in all; every old test
+passes as it was. No panel exists yet, so nothing here can be tried by hand: only the tests
+call the four functions. Decided while building:
+
+- **The reasons of the notes** are `event_budget_usd`, `tick_budget_usd` and `reports`. A
+  budget's note is kept under the budget's own name. `reports` is what the addons report: a
+  dropped event, a `stop()` that failed. `Machine.note(reason, text)` is the one place that
+  writes a note to the bar, and it writes only when something changed.
+- **A report stays until a newer report takes its place.** Before, clearing a budget's note
+  wiped a report as well. Nothing else takes a report away, as before in a run where no
+  budget ran out.
+- **The note that `app.py` puts on the bar at the start,** for a skipped addon, isn't one of
+  the machine's. The machine's first note replaces it, as before.
+- **The events' note goes when a boot starts.** Before, it stayed on the bar over a reboot,
+  though nothing was paused any more.
+- **Events are paused and their budget is set to 0:** the note changes to
+  `events are off: event_budget_usd is 0`. `settle()` keeps the words true.
+- **`View.running` is a whole `Hardware`:** the settings the boot's session started with.
+  The panel reads its `model` and its `model_effort`, which is `None` on Haiku.
+- **`View.paused`, `from_flags` and `unsaved` are sets of setting names.** For the events,
+  `paused` asks the hub itself; for the ticks, whether their note is up.
+- **`unsaved` holds each name with its value,** and goes to `config.save` as it is.
+- **`save()` with nothing changed** still reads the file, so a broken file is reported. The
+  log gets no line then.
+- **A refill takes the tick note away at once.** Until step 7 the program on screen ticks
+  again only with its next screen, as the table above says.
+- **The log writes an empty value as `None`:** `config: max_budget_usd None -> 2.0`.
+- **`app.py` passes `model` and `effort`,** each when its flag was given. A scripted run
+  passes nothing: it has no panel.

@@ -133,3 +133,52 @@ In `tests/test_blockmode.py`, with the real block mode on a pipe:
 
 A test machine with a cap of one cent holds the second line back, the cap is raised with
 `change`, and the same line goes through. And Ctrl-D halts a machine that is over its cap.
+
+## As built
+
+Built on 2026-10-05, on the branch `config-panel`. 20 new tests, 971 in all; every old test
+passes as it was. Decided while building:
+
+- **`hold()` is the one question asked before a message goes out.** When the boot is over
+  its cap it says yes, puts the note up once and pauses the events.
+- **The note comes up as soon as the boot is over its cap,** before a line is typed: the
+  loop asks `hold()` each time it comes round, and so does `block_mode` when a program's
+  screen arrives. You see that the budget is used before you type into it.
+- **A program whose screen arrives over the cap comes up without ticks.** A tick couldn't be
+  sent. The tick budget's own note isn't put up for that: the cap's note says why.
+- **Any Ctrl-D halts a boot that is over its cap.** The real terminal sends the key only on
+  an empty line, and a closed keyboard counts as Ctrl-D, as before.
+- **A line that is held back changes nothing else:** the event budget isn't filled again,
+  and a password that is half set stays half set. Nobody's line reached the AI.
+- **A terminal says whether somebody is at its keyboard:** `attended`. The scripted
+  terminal says no. The machine reads it with yes as the default, as it reads `streams`.
+- **A scripted run halts before it reads its next line.** In a full-screen program it halts
+  after the program's screen is in the transcript, and before the next `@action` is taken.
+- **The machine remembers `refilled_at`:** what the boot had spent at the last refill. The
+  view has `spent_since_refill` beside `spent_boot`.
+- **`check_events` goes by the note, not by the hub's switch,** to know that the event
+  budget's pause was said. The hub can now be paused for the cap alone.
+- **In the view, `paused` has `max_budget_usd`** while the boot is over its cap, also before
+  a message was held back.
+- **`keep_form` takes the held keys the way a new screen does.** In a form with fields they
+  are typed into it. In a raw program they are an action at once, which the machine holds
+  back like the one before. `show` and `keep_form` share that part.
+- **Block mode keeps `seen_before`:** what the AI had seen before the action that is on its
+  way. `keep_form` puts it back, and a new screen forgets it, so a tick that is held back
+  takes nothing back.
+- **The log:** `budget used: $0.01 per boot ($0.02 spent)`, once, and the refill's line
+  ends with `, boot $0.12`.
+- **Without a bar the note is printed in a full-screen program too,** as the other notes
+  are. It lands on the program's screen.
+- **One test more than the list,** in `tests/test_terminal.py`: the real terminal, block
+  mode and the machine together. Over the cap an action stays, typing goes on, and after
+  the cap is raised the next action brings the whole text.
+- **The tests' fake terminal** calls what is callable among its keys, so a test can change a
+  setting between two keys, as the panel will.
+
+**Not tried on a real terminal:** how a held line looks at the prompt. The README's
+section on configuration still says the old words for `max_budget_usd`; step 8 has the
+documentation.
+
+**Until step 6 nothing in a real run can raise the cap.** A boot that is over it can be left
+with Ctrl-D at the shell, and with the hard exit in a full-screen program.

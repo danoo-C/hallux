@@ -1,8 +1,10 @@
 """The machine: one Claude agent session per boot, wired to a terminal.
 
 The terminal side only reads keys and writes the AI's text. It never draws a character
-of the machine's screen itself; see docs/concept.md, "The terminal". Its one exception is
-hallux's own status bar on the bottom row, which the AI is never told about.
+of the machine's screen itself; see docs/concept.md, "The terminal". It has two things of
+its own, which the AI is never told about: hallux's status bar on the bottom row, and
+hallux's panel (hallux.panel), which Ctrl+F12 puts over the screen for as long as it is
+open. The machine provides what the panel shows and does: view, change, save and refill.
 """
 from __future__ import annotations
 
@@ -16,13 +18,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
-from typing import AsyncContextManager, Callable, Protocol, Sequence
+from typing import AsyncContextManager, Callable, Iterable, Protocol, Sequence
 
 from claude_agent_sdk import (
     AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent, ToolUseBlock,
 )
 
-from hallux import sandbox
+from hallux import config, sandbox
 from hallux.addons import Addon, Events, stop_all
 from hallux.config import Hardware
 from hallux.disk import Disk
@@ -30,7 +32,7 @@ from hallux.passwords import Passwords
 from hallux.protocol import (
     Action, Field, Form, Reply, ScreenStream, Secret, envelope, json_body, parse, resolve,
 )
-from hallux.statusbar import describe
+from hallux.statusbar import PANEL_KEY, describe
 from hallux.tools import SERVER, build_addon_servers, build_server
 
 log = logging.getLogger("hallux")
@@ -56,6 +58,7 @@ class Interrupted:
 class Terminal(Protocol):
     status_bar: bool             # True: model errors go to the bar instead of stderr
     streams: bool                # True: show the AI's screen while it's being written
+    attended: bool               # False: nobody is at the keyboard, so nobody can raise a budget
 
     async def start(self) -> None: ...
 
@@ -90,6 +93,13 @@ class Terminal(Protocol):
     async def next_action(self) -> Action:
         """Wait for an action key or click. Raises EOFError if the form can't go on."""
 
+    def keep_form(self, tick: float | None = None) -> None:
+        """The action that came back isn't sent: the program stays as it is and takes keys
+        again. With a tick, that is its tick from now on."""
+
+    def set_tick(self, seconds: float) -> None:
+        """Give the program on screen this tick; its clock starts again with it."""
+
     async def end_form(self) -> None: ...
 
     def field_text(self, id: str) -> str: ...
@@ -100,9 +110,14 @@ class Terminal(Protocol):
 class Machine:
     def __init__(self, root: Path, hardware: Hardware, terminal: Terminal,
                  client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient,
-                 addons: Sequence[Addon] = (), events: Events | None = None):
+                 addons: Sequence[Addon] = (), events: Events | None = None,
+                 from_flags: Iterable[str] = ()):
         self.disk = Disk(root)
-        self.hardware = hardware
+        self.hardware = hardware                 # the settings as they are now
+        self.running = hardware                  # what this boot's session runs on: see power_on
+        self.unsaved: dict[str, object] = {}     # changed in this run and not saved yet
+        self.from_flags = set(from_flags)        # the settings a flag set for this run
+        self.notes: dict[str, str] = {}          # what the bar's note says, by reason
         self.terminal = terminal
         self.client_factory = client_factory
         self.addons = tuple(addons)              # the real hardware attached to this machine
@@ -114,11 +129,70 @@ class Machine:
         self.secret: Secret | None = None        # the prompt asks for a password
         self.spent = 0.0                         # dollars, all boots
         self.session_spent = 0.0                 # dollars, this boot (the SDK reports a total)
+        self.refilled_at = 0.0                   # of those, spent before the budgets were refilled
         self.fields: dict[str, Field] = {}       # block mode: the fields on screen now
         self.in_form = False                     # a full-screen program is on screen
         self.tick_spent = 0.0                    # raw mode: dollars spent on ticks this run
+        self.tick_asked = 0.0                    # the tick the program on screen asked for,
+        self.ticks_stopped = False               # and whether a budget has stopped its ticks
         self.last_turn_cost = 0.0
         self.stream: ScreenStream | None = None  # what the last answer showed while written
+
+    # ---------------------------------------------------------------- for hallux's own panel
+
+    def view(self) -> config.View:
+        """What the panel shows: the settings, and how far the budgets are."""
+        paused = {"max_budget_usd": self.over_budget(),
+                  "event_budget_usd": "event_budget_usd" in self.notes,
+                  "tick_budget_usd": "tick_budget_usd" in self.notes}
+        return config.View(
+            hardware=self.hardware, running=self.running, spent_boot=self.session_spent,
+            spent_since_refill=self.session_spent - self.refilled_at,
+            spent_ticks=self.tick_spent if self.in_form else None, spent_events=self.event_spent,
+            paused=frozenset(name for name, used_up in paused.items() if used_up),
+            from_flags=frozenset(self.from_flags), unsaved=frozenset(self.unsaved),
+            path=self.disk.root / config.CONFIG_FILE)
+
+    def change(self, name: str, text: str) -> str | None:
+        """A new value for a setting, as it was typed in the panel. Returns why it wasn't
+        taken, or None."""
+        try:
+            value = config.typed(name, text)
+        except ValueError as e:
+            return str(e)
+        old = getattr(self.hardware, name)
+        if value == old:                         # Enter on a row that was left as it was
+            return None
+        self.hardware = dataclasses.replace(self.hardware, **{name: value})
+        self.unsaved[name] = value
+        self.from_flags.discard(name)            # the flag's value is gone for this run
+        log.info("config: %s %s -> %s", name, old, value)
+        self.settle()
+        return None
+
+    def save(self) -> str | None:
+        """Write what was changed in this run into config.toml. Returns why it couldn't, or
+        None."""
+        try:
+            config.save(self.disk.root, self.unsaved)
+        except ValueError as e:
+            return str(e)
+        if self.unsaved:
+            log.info("config saved: %s", ", ".join(self.unsaved))
+        self.unsaved = {}
+        return None
+
+    def refill(self) -> str:
+        """Start the counting of every budget anew, at the limits as they are. What was really
+        spent stays on the bar. Returns a line for the panel."""
+        log.info("budgets refilled: events $%.2f, ticks $%.2f, boot $%.2f", self.event_spent,
+                 self.tick_spent, self.session_spent - self.refilled_at)
+        self.event_spent = self.tick_spent = 0.0
+        self.refilled_at = self.session_spent    # the boot's cap counts from here
+        self.settle()
+        return "budgets refilled"
+
+    # ---------------------------------------------------------------- the machine itself
 
     def options(self) -> ClaudeAgentOptions:
         server, allowed = build_server(self.disk, fields=self.terminal, addons=self.addons,
@@ -129,8 +203,7 @@ class Machine:
             system_prompt=SYSTEM_PROMPT,
             model=hw.model,
             effort=hw.model_effort,
-            fallback_model=hw.fallback_model,
-            max_budget_usd=hw.max_budget_usd,
+            fallback_model=hw.fallback_model,     # no max_budget_usd: hallux checks that itself
             mcp_servers={SERVER: server} | addon_servers,
             strict_mcp_config=True,             # no MCP servers from your own Claude config
             tools=[],                           # no built-in Bash/Read/Write/... at all
@@ -156,8 +229,14 @@ class Machine:
     async def power_on(self) -> bool:
         """One boot-to-shutdown lifetime. Returns True if the machine wants to reboot."""
         self.disk.cwd = "/"
-        self.session_spent = 0.0
+        self.session_spent = self.refilled_at = 0.0
         self.forget_events()
+        for reason in ("event_budget_usd", "max_budget_usd", "model"):
+            self.note(reason, None)              # a new boot: nothing spent, heard or waiting
+        # What runs, which the bar shows: the settings the session starts with, and of the
+        # effort what it really gets. A model that is switched to later keeps that effort.
+        self.running = dataclasses.replace(self.hardware, effort=self.hardware.model_effort)
+        self.terminal.set_status(model=self.running.model, effort=self.running.model_effort)
         async with self.client_factory(options=self.options()) as client:   # empty RAM
             try:
                 body, first = self.boot_report()
@@ -170,6 +249,9 @@ class Machine:
                         continue
                     secret = self.secret
                     self.check_events()
+                    if self.hold() and not getattr(self.terminal, "attended", True):
+                        log.info("halt: the budget is used, and a script can't raise it")
+                        return False
                     events = [] if secret else self.events.take()   # none at a password prompt
                     try:
                         if events:
@@ -186,6 +268,15 @@ class Machine:
                         reply = await self.send_events(client, events)
                     elif isinstance(line, Interrupted):
                         restore = line.line      # an event ended the read: it's sent next
+                        continue
+                    elif self.hold():            # the boot's budget is used: nothing is sent
+                        if isinstance(line, Key) and line.name == "C-d":
+                            log.info("halt: Ctrl-D, and the budget is used")
+                            return False         # the way out of such a boot
+                        if isinstance(line, Key):
+                            restore = line.line if line.keep_line else ""
+                        else:                    # the line comes back; a password never does
+                            restore = "" if secret else line
                         continue
                     elif isinstance(line, Key):
                         self.passwords.cancel()
@@ -246,29 +337,84 @@ class Machine:
     def check_events(self) -> None:
         """What the hub had to drop goes onto the bar. And events are model calls that nobody
         typed for: once they have used up their budget, they stop until a line is typed."""
-        notes = self.events.take_notes()
+        self.notify(self.events.take_notes())
         budget = self.hardware.event_budget_usd
-        if self.events.listening() and not self.events.paused and self.event_spent >= budget:
+        if (self.events.listening() and self.event_spent >= budget
+                and "event_budget_usd" not in self.notes):
             self.events.pause()
-            notes.append("events paused: budget used" if budget
-                         else "events are off: event_budget_usd is 0")
-            log.warning("%s ($%.2f of $%.2f)", notes[-1], self.event_spent, budget)
-        self.notify(notes)
+            log.warning("%s ($%.2f of $%.2f)", self.events_note(), self.event_spent, budget)
+            self.notify([self.events_note()], "event_budget_usd")
+
+    def events_note(self) -> str:
+        """Why the events are paused, for the bar."""
+        return ("events paused: budget used" if self.hardware.event_budget_usd
+                else "events are off: event_budget_usd is 0")
 
     def refill_event_budget(self) -> None:
         """The user typed a line: somebody is at the keyboard, so events may spend again."""
         self.event_spent = 0.0
-        if self.events.paused and self.hardware.event_budget_usd:
-            self.events.pause(False)
-            self.terminal.set_status(note=None)
+        self.settle()
 
-    def notify(self, notes: list[str]) -> None:
+    def settle(self) -> None:
+        """Put the machine in line with its settings: lift a pause whose budget allows it
+        again, and pause what is over its budget."""
+        hw = self.hardware
+        over, events_used = self.over_budget(), self.event_spent >= hw.event_budget_usd
+        if not over:
+            self.note("max_budget_usd", None)
+        if not events_used:
+            self.note("event_budget_usd", None)
+        elif "event_budget_usd" in self.notes:
+            self.note("event_budget_usd", self.events_note())    # "used" may now be "off"
+        if self.events.paused and not over and not events_used:
+            self.events.pause(False)
+        if hw.model == self.running.model:
+            self.note("model", None)             # no model waits to be switched to
+        if self.tick_spent < hw.tick_budget_usd:
+            self.note("tick_budget_usd", None)
+            if self.ticks_stopped and not over:  # both budgets allow it: the program on screen
+                self.ticks_stopped = False       # ticks again, as it asked to
+                self.terminal.set_tick(self.tick_asked)
+        self.check_events()
+
+    def over_budget(self) -> bool:
+        """The boot has a cap, and has spent it since it started or since the last refill."""
+        cap = self.hardware.max_budget_usd
+        return cap is not None and self.session_spent - self.refilled_at >= cap
+
+    def hold(self) -> bool:
+        """Asked before a message goes to the AI: True when it has to stay here, because the
+        boot has used its budget. The bar says so, and events stop: nothing could go out for
+        them, and each would only end the prompt."""
+        if not self.over_budget():
+            return False
+        note = f"budget used: ${self.hardware.max_budget_usd:.2f} per boot"
+        if getattr(self.terminal, "attended", True):             # somebody can raise it
+            note += f" · raise it: {PANEL_KEY}"
+        if self.notes.get("max_budget_usd") != note:             # said once
+            log.warning("%s ($%.2f spent)", note, self.session_spent - self.refilled_at)
+            self.notify([note], "max_budget_usd")
+        self.events.pause()
+        return True
+
+    def notify(self, notes: list[str], reason: str = "reports") -> None:
         """Something the user should know, on the status bar. Without one, it's printed."""
         if notes:
-            self.terminal.set_status(note=" · ".join(notes))
+            self.note(reason, " · ".join(notes))
             if not self.terminal.status_bar:
                 for note in notes:
                     print(f"hallux: {note}", file=sys.stderr)
+
+    def note(self, reason: str, text: str | None) -> None:
+        """Put a note on the status bar for one reason, or take that reason's note away. The
+        bar has one slot for notes: it shows all there are, and a note goes with its reason."""
+        if self.notes.get(reason) == text:
+            return
+        if text is None:
+            del self.notes[reason]
+        else:
+            self.notes[reason] = text
+        self.terminal.set_status(note=" · ".join(self.notes.values()) or None)
 
     def forget_events(self) -> None:
         """A boot starts or ends: the AI listens to no addon, and no event waits for it."""
@@ -320,18 +466,33 @@ class Machine:
         """Show the AI's form, let the user work in it, send back the action they end with."""
         form, to_load = resolve(reply.form, self.fields)
         form = self.load_files(form, to_load)
+        held = self.hold()
+        self.tick_asked = form.tick
         if form.tick and self.tick_spent >= self.hardware.tick_budget_usd:
             form = dataclasses.replace(form, tick=0)             # live updates stop here
-            self.terminal.set_status(note="live updates paused: tick budget used")
+            self.note("tick_budget_usd", "live updates paused: tick budget used")
+        elif held:
+            form = dataclasses.replace(form, tick=0)             # a tick couldn't be sent
+        self.ticks_stopped = bool(self.tick_asked) and not form.tick
         self.fields = {field.id: field for field in form.fields}
         self.in_form = True
         await self.terminal.show_form(reply.screen, form, reply.patch)
-        try:
-            action = await self.terminal.next_action()
-        except EOFError:                          # the full-screen app died: back to the shell
-            log.error("block mode ended unexpectedly")
-            await self.leave_block_mode()
-            return await self.send(client, "key", "", name="C-c")
+        while True:
+            if held and not getattr(self.terminal, "attended", True):
+                log.info("halt: the budget is used, and a script can't raise it")
+                await self.leave_block_mode()
+                return Reply(screen="", prompt=None, halt=True)
+            try:
+                action = await self.terminal.next_action()
+            except EOFError:                      # the full-screen app died: back to the shell
+                log.error("block mode ended unexpectedly")
+                await self.leave_block_mode()
+                return await self.send(client, "key", "", name="C-c")
+            held = self.hold()
+            if not held:
+                break
+            self.terminal.keep_form(tick=0)       # not sent: the program stays, without ticks
+            self.ticks_stopped = bool(self.tick_asked)
         if action.key == "tick":                  # raw mode: time passed, nothing was pressed
             reply = await self.send(client, "tick", activity="updating…")
             self.tick_spent += self.last_turn_cost
@@ -424,9 +585,9 @@ class Machine:
                 self.terminal.set_status(error=f"couldn't write {write.path}")
 
     async def leave_block_mode(self) -> None:
-        if self.in_form and self.tick_spent:
-            self.terminal.set_status(note=None)
+        self.note("tick_budget_usd", None)
         self.fields, self.in_form, self.tick_spent = {}, False, 0.0
+        self.tick_asked, self.ticks_stopped = 0.0, False
         await self.terminal.end_form()
 
     def envelope(self, tag: str, body: str = "", **attrs: object) -> str:
@@ -454,6 +615,7 @@ class Machine:
                                 and not self.in_form else None)    # never under a form
         try:
             async with self.terminal.busy(interrupt, activity):
+                await self.switch_model(client)
                 await client.query(message)
                 async for msg in client.receive_response():
                     if isinstance(msg, StreamEvent):
@@ -469,15 +631,17 @@ class Machine:
                                                          tools=tools)
                     elif isinstance(msg, ResultMessage):
                         result = msg
+                        # Counted here, inside the answer: its end may wait for the panel,
+                        # and the panel shows what was spent.
+                        session_total = result.total_cost_usd or self.session_spent
+                        self.last_turn_cost = session_total - self.session_spent
+                        self.session_spent = session_total
+                        self.spent += self.last_turn_cost
+                        self.terminal.set_status(cost=self.spent,
+                                                 seconds=result.duration_ms / 1000)
         finally:
             with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
                 loop.remove_signal_handler(signal.SIGINT)
-        if result is not None:
-            session_total = result.total_cost_usd or self.session_spent
-            turn_cost = self.last_turn_cost = session_total - self.session_spent
-            self.session_spent = session_total
-            self.spent += turn_cost
-            self.terminal.set_status(cost=self.spent, seconds=result.duration_ms / 1000)
         self.show_listening()                    # the AI may just have called addon_listen
         self.check_events()
         if result is None or (result.is_error and not interrupted):
@@ -485,8 +649,29 @@ class Machine:
             return None, interrupted
         log.info("<< %s", result.result)
         log.info("   %s, %d turns, %.1fs, $%.4f (this boot $%.4f)", result.subtype,
-                 result.num_turns, result.duration_ms / 1000, turn_cost, self.session_spent)
+                 result.num_turns, result.duration_ms / 1000, self.last_turn_cost,
+                 self.session_spent)
         return result.result or "", interrupted
+
+    async def switch_model(self, client: ClaudeSDKClient) -> None:
+        """A model that was set in the panel runs from the next answer: the session is
+        switched just before a message goes out, never while an answer is written. A switch
+        that fails leaves the session as it is, and is tried again with the next message."""
+        old, new = self.running.model, self.hardware.model
+        if new == old:
+            return
+        try:
+            await client.set_model(new)
+        except Exception as e:                   # the SDK's own: "Model 'x' not found"
+            note = f"model not switched: {e}"
+            if self.notes.get("model") != note:  # said once
+                log.warning("%s (it stays %s)", note, old)
+                self.notify([note], "model")
+            return
+        self.running = dataclasses.replace(self.running, model=new)
+        log.info("model: %s -> %s", old, new)
+        self.note("model", None)
+        self.terminal.set_status(model=new, effort=self.running.model_effort)
 
     def show_while_written(self, stream: ScreenStream, event: dict) -> None:
         """Streaming: print the screen as the AI writes it."""

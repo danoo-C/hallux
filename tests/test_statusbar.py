@@ -11,10 +11,29 @@ def text(bar, width, now=1.0):
     return line
 
 
-def test_idle_shows_the_way_out_and_the_hardware():
+def test_idle_shows_hallux_own_keys_and_the_hardware():
     line = text(StatusBar("claude-opus-5-5", "low"), 100)
-    assert line.startswith(" • power off: ctrl+shift+del · ctrl+c ×3")
+    assert line.startswith(" • power off: ctrl+shift+del · config: ctrl+f12 · ctrl+c ×3  ")
     assert line.endswith("opus 5.5 · low · $0.00 ")
+
+
+def test_a_narrow_bar_loses_whole_parts_of_the_hint_from_its_end():
+    """The way out is the last to go, and no part is cut in the middle while another could
+    go instead. The hardware on the right is there at every width."""
+    bar = StatusBar("claude-haiku-4-5-20251001", "medium")
+    bar.update(cost=123.45, seconds=12.3)
+    hardware = "haiku 4.5 · medium · $123.45 · 12.3s "
+    whole = " • power off: ctrl+shift+del · config: ctrl+f12 · ctrl+c ×3"
+    shown = {width: text(bar, width) for width in (110, 95, 80, 66, 60)}
+    assert all(line.endswith(hardware) for line in shown.values())
+    assert shown[110].startswith(whole + "  ")                         # all three
+    assert shown[95].startswith(" • power off: ctrl+shift+del · config: ctrl+f12  ")
+    assert "ctrl+c" not in shown[95]                                   # the triple Ctrl-C went
+    assert shown[80].startswith(" • power off: ctrl+shift+del  ")      # then the panel's key
+    assert "config" not in shown[80] and "…" not in shown[80]
+    assert shown[66].startswith(" • power off: ctrl+shift+del ") and "…" not in shown[66]
+    assert shown[60].startswith(" • power off: ctrl+s") and "… haiku" in shown[60]   # only then
+    assert statusbar.idle_hint(0) == "power off: ctrl+shift+del"
 
 
 def test_busy_spins_and_says_what_the_ai_does():
@@ -93,4 +112,4 @@ def test_the_idle_bar_says_when_the_machine_listens():
     bar.update(note=None, busy=True, started=0.0)
     assert "thinking…" in text(bar, 100, now=1.0)
     bar.update(busy=False, listening="")
-    assert text(bar, 100).startswith(" • power off: ctrl+shift+del")
+    assert text(bar, 100).startswith(" • power off: ctrl+shift+del · config: ctrl+f12")

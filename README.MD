@@ -62,6 +62,9 @@ user@hallux:~$ cowsay moo
   - mouse clicks in full-screen programs.
 - **A status bar:** a bottom row owned by Hallux shows what the AI is doing, the model, the cost
   so far and how long the last answer took. The AI can never draw on it.
+- **A settings panel:** Ctrl+F12 opens Hallux's own panel over whatever is on screen. Budgets
+  and the model change while the machine runs, and Save writes them to the machine's
+  `config.toml`. The AI never learns of it.
 - **Addons:** real hardware for the machine, one Python file each. The example opens a real
   window on your desktop that the machine can read and paint.
 - **Safe by construction:**
@@ -142,6 +145,7 @@ same machine back.
 |---|---|
 | Typing, arrows, Backspace, Home/End, ↑/↓ | Line editing, handled instantly by the terminal |
 | Ctrl-C, Ctrl-D, Ctrl-Z, Ctrl-L, Ctrl-R, Tab, F1–F12, … | Sent to the machine, which reacts like bash or the running program would |
+| **Ctrl+F12** | Opens Hallux's own settings panel, over the shell or a full-screen program. Esc or Ctrl+F12 closes it. The key never reaches the machine |
 | **Ctrl+Shift+Del**, or **Ctrl-C three times within a second** | Hard power-off: Hallux quits immediately, whatever the AI is doing |
 
 ### The `hallux` command
@@ -289,15 +293,15 @@ The design is in [docs/addons.md](docs/addons.md) and [docs/addon-events.md](doc
 
 ## Configuration
 
-Each machine reads optional settings from `<world>/.hallux/config.toml`. Command-line flags
-override them. The machine itself can't see or change this file.
+Each machine reads optional settings from `<world>/.hallux/config.toml` when Hallux starts.
+Command-line flags override them. The machine itself can't see or change this file.
 
 ```toml
 # Every setting is optional. Defaults: Opus 5.5 at low effort, no budget cap, status bar on.
 model = "claude-opus-5-5"        # which Claude model runs the machine
 effort = "low"                   # low, medium, high, xhigh, max
 fallback_model = "claude-haiku-4-5"
-max_budget_usd = 2.0             # stop a boot after spending this much
+max_budget_usd = 2.0             # a boot holds its messages back after spending this much
 status_bar = true                # the bottom status row
 tick_budget_usd = 0.25           # live updates in raw mode, per program run
 event_budget_usd = 0.25          # addon events, since the last line you typed
@@ -306,13 +310,34 @@ keep_transcripts = false         # let Claude Code also keep its own session tra
 os_sandbox = false               # run Claude Code under bubblewrap
 ```
 
+**Ctrl+F12 opens the settings panel:** at the shell, while the AI answers, and over a
+full-screen program. It shows every setting, with what was spent beside each budget, and
+changes the machine while it runs.
+
+| Setting | A change takes effect |
+|---|---|
+| `model`, `max_budget_usd`, `tick_budget_usd`, `event_budget_usd` | At once. A new model answers the next line |
+| `effort`, `fallback_model` | At the machine's next `reboot` |
+| `status_bar`, `addons`, `keep_transcripts`, `os_sandbox` | When Hallux starts: edit `config.toml` |
+
+- **A change lasts for this run. Save writes it into `config.toml`:** only the lines you
+  changed. Your comments and every other line stay as they are.
+- **Refill budgets** starts the counting of every budget anew, without raising a limit. A
+  program whose live updates were paused moves again.
+- **A boot that has used up `max_budget_usd` sends nothing more to the AI.** The line you
+  typed comes back at the prompt, and the bar says `budget used`. Raise the budget or refill
+  it in the panel, or press Ctrl-D to power off.
+- **The first answer after a model switch costs more, once:** the new model reads the whole
+  conversation of the boot at the full price.
+
 ## Cost and speed
 
 **Every command is a call to a Claude model.** It usually takes a few seconds, and it costs
 tokens. The status bar shows the running cost of the session, and the per-answer cost is in
 the machine's log. A few ways to keep it in check:
 - **Choose a faster model,** such as Sonnet or Haiku, or a lower effort.
-- **Set `max_budget_usd`** to cap what a boot can spend.
+- **Set `max_budget_usd`** to cap what a boot can spend. The cap, and the budgets for live
+  updates and addon events, can be raised in the settings panel while the machine runs.
 - **Rely on partial redraws:** full-screen programs only resend the rows that change.
 - **Give a machine only the addons it uses.** Each addon adds its tools to every request,
   and every event it reports to a listening machine is a call of its own.
@@ -351,6 +376,8 @@ hallux/
   terminal.py        real terminal I/O, keys, hard exit, status bar pinning
   blockmode.py       full-screen programs: block mode and raw mode
   statusbar.py       the bottom status row
+  panel.py           Hallux's own settings panel (Ctrl+F12): the host with its tab row
+  panel_tabs/        the panel's tabs, one file each: config.py
   disk.py, tools.py  the path jail and the agent's tools
   addons.py          loading addons, calling their functions, their events
   passwords.py       password prompts: checked locally, never sent to the AI
@@ -380,6 +407,7 @@ and persistence, is checked with `--check reboot` and `--script`.
 - [docs/roadmap.md](docs/roadmap.md): what's built and what's planned
 - [docs/next-steps.md](docs/next-steps.md): the upcoming features, in detail
 - [docs/light-and-keys.md](docs/light-and-keys.md): the status bar, the hard exit and the key rule
+- [docs/config-panel.md](docs/config-panel.md): the settings panel
 - [docs/addons.md](docs/addons.md): addons, and [docs/addon-events.md](docs/addon-events.md):
   their events
 

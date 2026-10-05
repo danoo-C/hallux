@@ -401,3 +401,371 @@ def test_an_addons_event_interrupts_the_real_prompt(tmp_path):
     boot, events, typed = model.sessions[0]
     assert events.startswith("<events ") and '<event addon="bell">{"ring": 1}</event>' in events
     assert typed.endswith(">echo hello</input>")                       # nothing typed was lost
+
+
+def test_a_program_goes_on_when_its_action_isnt_sent(tmp_path):
+    """The real terminal, block mode and the machine: over the boot's cap an action stays
+    here, typing goes on, and once the cap is raised the next action brings all of it."""
+    from test_machine import FakeModel, result, screen
+
+    from hallux.config import Hardware
+    from hallux.machine import Machine
+
+    (tmp_path / "notes.txt").write_text("hi\n")
+    model = FakeModel(
+        result(screen(""), total=0.004),
+        result('<screen>\n  GNU nano 7.2   notes.txt\n</screen><prompt></prompt>'
+               '<form keys="C-o C-x" keymap="nano"><editor id="text" top="2" file="notes.txt"/>'
+               '</form>', total=0.02),                                  # over one cent
+        result(screen("", prompt="$ "), total=0.03),
+        result(screen("logout\n", prompt="", tail="<halt/>"), total=0.04))
+
+    async def script(terminal, type_keys):
+        machine = Machine(tmp_path, Hardware(max_budget_usd=0.01), terminal, client_factory=model)
+        running = asyncio.ensure_future(machine.run())
+        type_keys("nano notes.txt\r" "x\x0f" "y")      # ^O is held back; "y" is typed after it
+        await asyncio.sleep(0.5)
+        held = len(model.sessions[0]), terminal.block.field_text("text"), dict(machine.notes)
+        assert machine.change("max_budget_usd", "1") is None
+        type_keys("z\x18")                             # ^X: this one goes
+        await asyncio.sleep(0.5)
+        type_keys("\x04")
+        await running
+        return held
+
+    held = with_terminal(script, bar=StatusBar("claude-opus-5-5", "low"))
+    assert held == (2, "xyhi\n",
+                    {"max_budget_usd": "budget used: $0.01 per boot · raise it: ctrl+f12"})
+    boot, nano, ctrl_x, ctrl_d = model.sessions[0]     # ^O never reached the AI
+    assert ctrl_x.startswith('<action key="C-x"') and ">xyzhi\n</field>" in ctrl_x
+    assert 'unchanged="yes"' not in ctrl_x             # the text in full: the AI hasn't seen it
+
+
+# --- hallux's own panel at the shell: Ctrl+F12 at a prompt and while the AI works -------------
+
+def with_panel(script, cuts=None, bar=None):
+    """Run `script(terminal, type_keys, panel, written)` against a terminal on a pipe that
+    was handed a real panel with one stand-in tab. `written` is all the terminal writes."""
+    from test_panel import StandIn
+
+    from hallux.panel import Panel
+    cuts = [] if cuts is None else cuts
+
+    async def main():
+        with create_pipe_input() as pipe:
+            terminal = Terminal(bar, input=pipe, output=DummyOutput(),
+                                power_cut=lambda: cuts.append("cut"))
+            written = []
+            terminal._write = written.append
+            panel = Panel([StandIn("Config")], bar=bar, power_cut=terminal.power_cut,
+                          ctrl_c=terminal.count_ctrl_c)
+            panel.tab.typing = True                      # the tab notes every key it gets
+            terminal.set_panel(panel)
+            return await script(terminal, pipe.send_text, panel, written)
+    return asyncio.run(asyncio.wait_for(main(), 15))
+
+
+ESC, CTRL_F12 = "\x1b", "\x1b[24;5~"
+
+
+def test_ctrl_f12_at_the_prompt_and_the_line_is_back():
+    async def script(terminal, type_keys, panel, written):
+        type_keys("ls -l" + CTRL_F12 + ESC + "a\r")      # all of it typed in one go
+        return await terminal.read_line("$ "), panel.tab.shows, panel.is_open
+
+    assert with_panel(script) == ("ls -la", 1, False)    # the panel was shown once
+
+
+def test_keys_typed_in_the_panel_stay_there():
+    async def script(terminal, type_keys, panel, written):
+        reading = asyncio.ensure_future(terminal.read_line("$ "))
+        type_keys("ec" + CTRL_F12)
+        await asyncio.sleep(0.3)
+        type_keys("xyz")
+        await asyncio.sleep(0.2)
+        type_keys(ESC)
+        await asyncio.sleep(0.3)
+        type_keys("ho\r")
+        return await asyncio.wait_for(reading, 5), panel.tab.got
+
+    assert with_panel(script) == ("echo", ["x", "y", "z"])
+
+
+def test_ctrl_f12_at_a_password_prompt_carries_nothing_over():
+    async def script(terminal, type_keys, panel, written):
+        type_keys("abc" + CTRL_F12 + ESC + "hunter2\r")
+        first = await terminal.read_secret("Password: ")
+        type_keys("again\r")
+        second = await terminal.read_secret("Password: ")
+        return first, second, panel.tab.shows, terminal.secrets.app.erase_when_done
+
+    # only the password; and the prompt after it isn't erased when it is answered
+    assert with_panel(script) == ("hunter2", "again", 1, False)
+
+
+def test_a_terminal_without_a_panel_ignores_the_key():
+    async def script(terminal, type_keys):
+        type_keys("ls" + CTRL_F12 + " -l\r")
+        at_the_prompt = await terminal.read_line("$ ")
+        async with terminal.busy(lambda: None):
+            type_keys(CTRL_F12 + "pwd\r")
+            await asyncio.sleep(0.2)
+        return at_the_prompt, await terminal.read_line("$ "), terminal.visit
+
+    assert with_terminal(script) == ("ls -l", "pwd", None)
+
+
+def test_what_the_ai_writes_while_the_panel_is_open_is_printed_after():
+    async def script(terminal, type_keys, panel, written):
+        async with terminal.busy(lambda: None):
+            terminal.write("one\n")
+            type_keys(CTRL_F12)
+            await asyncio.sleep(0.3)
+            terminal.write("two\n")
+            terminal.write("three\n")
+            during = panel.is_open, list(written)
+            type_keys(ESC)
+            await asyncio.sleep(0.3)
+            after = panel.is_open, list(written)
+            terminal.write("four\n")
+        return during, after, written
+
+    during, after, written = with_panel(script)
+    assert during == (True, ["one\n"])                   # kept, not printed
+    assert after == (False, ["one\n", "two\n", "three\n"])   # in the order it was written
+    assert written == ["one\n", "two\n", "three\n", "four\n"]
+
+
+def test_a_visit_leaves_the_screen_as_it_would_have_been():
+    def run(visit):
+        async def script(terminal, type_keys, panel, written):
+            async with terminal.busy(lambda: None):
+                terminal.write("total 8\n")
+                if visit:
+                    type_keys(CTRL_F12)
+                    await asyncio.sleep(0.3)
+                terminal.write("fib.py\n")
+                terminal.write("notes.md\n")
+                if visit:
+                    type_keys(ESC)
+                    await asyncio.sleep(0.3)
+                terminal.write("$ ")
+            return "".join(written), panel.tab.shows
+        return with_panel(script)
+
+    (with_visit, shown), (without, not_shown) = run(True), run(False)
+    assert with_visit == without == "total 8\nfib.py\nnotes.md\n$ "
+    assert (shown, not_shown) == (1, 0)
+
+
+def test_a_visit_takes_the_bar_off_the_screen_and_puts_it_back():
+    from prompt_toolkit.data_structures import Size
+    bar = StatusBar("claude-opus-5-5", "low")
+
+    async def script(terminal, type_keys, panel, written):
+        terminal.pinned = terminal.output.get_size()     # as on a real terminal: 40 rows
+        async with terminal.busy(lambda: None):
+            type_keys(CTRL_F12)
+            await asyncio.sleep(0.3)
+            region_off = written[-1]                     # the last thing before the panel
+            del written[:]
+            terminal.write("kept\n")
+            terminal.set_status(cost=0.5)                # a change of the bar: the panel's row
+            terminal.pinned = Size(rows=30, columns=80)  # the window grows meanwhile, to 40 rows:
+            terminal._check_size()                       # a resize calls this
+            await asyncio.sleep(0.2)                     # and the bar's light goes on turning
+            during = list(written) + [terminal._bar_codes()] * bool(terminal._bar_codes())
+            type_keys(ESC)
+            await asyncio.sleep(0.3)
+            return region_off, during, list(written)
+
+    region_off, during, after = with_panel(script, bar=bar)
+    assert region_off == "\x1b7\x1b[r\x1b8"              # the whole screen is the panel's
+    assert during == []                                  # no text, no bar, nothing for the resize
+    old_row, pinned = "\x1b7\x1b[30;1H\x1b[0m\x1b[2K\x1b8", "\x1b7\x1b[1;39r\x1b[40;1H"
+    text = after.index("kept\n")
+    assert after[0] == old_row and text >= 2             # afterwards: the bar's old row is wiped
+    assert "$0.50" in after[1]                           # and it is pinned for the new size,
+    assert all(draw.startswith(pinned) for draw in after[1:text] + after[text + 1:])  # first
+
+
+def test_after_a_visit_the_bar_is_pinned_before_the_kept_text_is_printed():
+    """Printed while the region is off, the text scrolls the whole screen: the bar's row goes
+    up with it, and the cursor ends on the row the bar is drawn on next."""
+    bar = StatusBar("claude-opus-5-5", "low")
+    pin = "\x1b7\x1b[1;39r\x1b[40;1H"                    # the region, then the bar's row
+
+    async def script(terminal, type_keys, panel, written):
+        terminal.pinned = terminal.output.get_size()     # as on a real terminal: 40 rows
+        async with terminal.busy(lambda: None):
+            type_keys(CTRL_F12)
+            await asyncio.sleep(0.3)
+            del written[:]
+            terminal.write("one\n")
+            terminal.write("two\n")
+            type_keys(ESC)
+            await asyncio.sleep(0.3)
+            return list(written)
+
+    after = with_panel(script, bar=bar)
+    assert after[0].startswith(pin)                      # first the region,
+    assert after[1] == "one\n" and after[2].startswith(pin)     # then the text, as write() does
+    assert after[3] == "two\n" and all(draw.startswith(pin) for draw in after[4:])
+
+
+def test_keys_typed_for_the_shell_dont_reach_the_panel():
+    """Two answers back to back: `ls` is typed during the first, the panel is opened during
+    the second. Every app takes the stored keys when it starts; the panel must not."""
+    async def script(terminal, type_keys, panel, written):
+        async with terminal.busy(lambda: None):
+            type_keys("ls\r")
+            await asyncio.sleep(0.2)
+        async with terminal.busy(lambda: None):
+            type_keys(CTRL_F12)
+            await asyncio.sleep(0.3)
+            got = panel.is_open, list(panel.tab.got)
+            type_keys(ESC)
+            await asyncio.sleep(0.3)
+        return got, await terminal.read_line("$ ")
+
+    assert with_panel(script) == ((True, []), "ls")
+
+
+def test_the_end_of_an_answer_waits_for_the_visit():
+    async def script(terminal, type_keys, panel, written):
+        ended = []
+
+        async def answer():
+            async with terminal.busy(lambda: None):
+                type_keys(CTRL_F12)
+                await asyncio.sleep(0.3)                 # the answer ends, the panel is open
+            ended.append("the answer is over")
+
+        answering = asyncio.ensure_future(answer())
+        await asyncio.sleep(0.8)
+        waiting = panel.is_open, list(ended)
+        type_keys(ESC + "pwd\r")                         # closed, and typed on at once
+        await asyncio.wait_for(answering, 5)
+        return waiting, ended, terminal.visit, await terminal.read_line("$ ")
+
+    waiting, ended, visit, line = with_panel(script)
+    assert waiting == (True, [])                         # busy() hasn't ended
+    assert ended == ["the answer is over"] and visit is None
+    assert line == "pwd"                                 # every key behind Esc is the prompt's
+
+
+def test_ctrl_c_in_the_panel_only_counts_and_after_it_interrupts_again():
+    async def script(terminal, type_keys, panel, written):
+        interrupts = []
+        async with terminal.busy(lambda: interrupts.append("stop")):
+            type_keys(CTRL_F12)
+            await asyncio.sleep(0.3)
+            type_keys("\x03")
+            await asyncio.sleep(0.2)
+            in_the_panel = list(interrupts), len(terminal.ctrl_c_times)
+            type_keys(ESC)
+            await asyncio.sleep(0.3)
+            type_keys("\x03")
+            await asyncio.sleep(0.2)
+        return in_the_panel, interrupts
+
+    assert with_panel(script) == (([], 1), ["stop"])
+
+
+def test_an_event_waits_for_the_panel_over_the_prompt():
+    async def script(terminal, type_keys, panel, written):
+        nothing_read = terminal.interrupt_prompt()
+        reading = asyncio.ensure_future(terminal.read_line("$ "))
+        type_keys("ls -l" + CTRL_F12)
+        await asyncio.sleep(0.3)
+        said = terminal.interrupt_prompt()               # an addon has an event
+        await asyncio.sleep(0.3)
+        waiting = panel.is_open, reading.done()
+        type_keys(ESC)
+        line = await asyncio.wait_for(reading, 5)
+        return nothing_read, said, waiting, line, terminal.interrupt_prompt()
+
+    nothing_read, said, waiting, line, afterwards = with_panel(script)
+    assert (nothing_read, said, afterwards) == (False, True, False)
+    assert waiting == (True, False)                      # nothing happens until it is closed
+    assert line == Interrupted("ls -l", 5)               # then the read ends as an event ends it
+
+
+def test_the_hard_exit_works_inside_the_panel():
+    async def script(terminal, type_keys, panel, written):
+        reading = asyncio.ensure_future(terminal.read_line("$ "))
+        type_keys(CTRL_F12)
+        await asyncio.sleep(0.3)
+        type_keys(CTRL_SHIFT_DEL)
+        await asyncio.sleep(0.2)
+        type_keys(ESC + "\r")
+        await asyncio.wait_for(reading, 5)
+
+    cuts = []
+    with_panel(script, cuts=cuts)
+    assert cuts == ["cut"]
+
+
+def test_the_panel_changes_a_setting_of_the_machine_at_its_prompt(tmp_path):
+    """The whole of it on a pipe: a machine at its prompt, Ctrl+F12, the Effort row set to the
+    next value, Save, Esc, and the line that was being typed goes to the AI."""
+    from test_machine import FakeModel, screen
+
+    from hallux.config import Hardware, load
+    from hallux.machine import Machine
+    from hallux.panel import Panel
+    from hallux.panel_tabs.config import ConfigTab, stops
+
+    model = FakeModel(screen("boot\n", prompt="$ "), screen("ok\n", prompt="$ "),
+                      screen("", prompt="", tail="<halt/>"))
+    down = "\x1b[B"
+
+    async def script(terminal, type_keys):
+        machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+        tab = ConfigTab(machine.view, machine.change, machine.save, machine.refill)
+        terminal.set_panel(Panel([tab], power_cut=terminal.power_cut,
+                                 ctrl_c=terminal.count_ctrl_c))
+        running = asyncio.ensure_future(machine.run())
+        type_keys("echo o" + CTRL_F12)
+        await asyncio.sleep(0.5)
+        to_effort, to_save = stops().index("effort"), stops().index("Save")
+        type_keys(down * to_effort + "\r" + down + "\r")         # the next of the five
+        type_keys(down * (to_save - to_effort) + "\r")           # Save
+        await asyncio.sleep(0.3)
+        type_keys(ESC)
+        await asyncio.sleep(0.3)
+        type_keys("k\r" "\x04")
+        await asyncio.wait_for(running, 10)
+        return machine
+
+    machine = with_terminal(script)
+    assert machine.hardware.effort == "medium" and machine.unsaved == {}
+    assert load(tmp_path).effort == "medium"                     # saved
+    assert model.sessions[0][1].endswith(">echo ok</input>")     # the line was kept
+
+
+def test_in_a_program_the_end_of_an_answer_waits_for_the_panel():
+    from hallux.protocol import Form
+
+    async def script(terminal, type_keys, panel, written):
+        await terminal.show_form("top - 01:02:03\n", Form((), raw=True))
+        ended = []
+
+        async def answer():
+            async with terminal.busy(lambda: None):
+                type_keys(CTRL_F12)
+                await asyncio.sleep(0.3)                 # the answer ends, the panel is open
+            ended.append("the answer is over")
+
+        answering = asyncio.ensure_future(answer())
+        await asyncio.sleep(0.8)
+        waiting = terminal.block.layered, panel.is_open, list(ended)
+        type_keys(ESC)
+        await asyncio.wait_for(answering, 5)
+        closed = terminal.block.layered, panel.is_open, terminal.visit
+        await terminal.end_form()
+        return waiting, closed, ended
+
+    waiting, closed, ended = with_panel(script)
+    assert waiting == (True, True, [])                   # a layer, and busy() hasn't ended
+    assert closed == (False, False, None) and ended == ["the answer is over"]

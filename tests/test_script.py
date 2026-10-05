@@ -120,3 +120,37 @@ def test_the_reboot_check_fails_if_the_machine_never_rebooted(tmp_path):
 
 def test_a_script_cant_be_interrupted():
     assert ScriptTerminal(["ls"]).interrupt_prompt() is False                 # a script gets no events
+
+
+def test_a_status_before_there_is_a_record_is_dropped():
+    terminal = ScriptTerminal(["ls"])
+    terminal.set_status(model="claude-opus-5-5", effort="low")       # the bar, as a boot starts
+    assert terminal.records == []
+
+
+def test_a_scripted_run_halts_at_its_cap(tmp_path, capsys):
+    model = FakeModel(result(screen("boot\n", prompt="$ "), total=0.004),
+                      result(screen("one\n", prompt="$ "), total=0.02))    # over one cent
+    echoed = []
+    terminal = ScriptTerminal(["echo one", "echo two", "echo three"], echo=echoed.append)
+    hardware = Hardware(max_budget_usd=0.01)
+    asyncio.run(Machine(tmp_path, hardware, terminal, client_factory=model).run())
+    assert [r.typed for r in terminal.records] == ["(boot)", "echo one"]
+    assert terminal.lines == ["echo two", "echo three"]                  # never typed,
+    assert "".join(echoed) == "boot\n$ echo one\none\n"                  # and none glued on
+    assert len(model.sessions[0]) == 2
+    # once, and without the panel's key: a script has no keyboard to press it on
+    assert capsys.readouterr().err.count("hallux: budget used: $0.01 per boot\n") == 1
+
+
+def test_a_scripted_run_halts_at_its_cap_in_a_full_screen_program(tmp_path, capsys):
+    nano = ('<screen>\n  GNU nano 7.2\n</screen><prompt></prompt>'
+            '<form keys="C-x"><editor id="text" top="2"/></form>')
+    model = FakeModel(result(screen("boot\n", prompt="$ "), total=0.004), result(nano, total=0.02))
+    terminal = ScriptTerminal(["nano", "@action C-x", "ls"])
+    hardware = Hardware(max_budget_usd=0.01)
+    asyncio.run(Machine(tmp_path, hardware, terminal, client_factory=model).run())
+    assert [r.typed for r in terminal.records] == ["(boot)", "nano"]
+    assert "GNU nano 7.2" in terminal.records[1].output                  # its screen is recorded
+    assert terminal.lines == ["@action C-x", "ls"] and len(model.sessions[0]) == 2
+    assert capsys.readouterr().err.count("budget used") == 1

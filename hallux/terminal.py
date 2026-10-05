@@ -19,8 +19,9 @@ import signal
 import sys
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator, Callable, NoReturn
+from typing import TYPE_CHECKING, AsyncIterator, Callable, NoReturn
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import get_app
@@ -29,7 +30,7 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.history import DummyHistory, InMemoryHistory
 from prompt_toolkit.input import create_input
-from prompt_toolkit.input.typeahead import store_typeahead
+from prompt_toolkit.input.typeahead import get_typeahead, store_typeahead
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout.processors import Processor, Transformation, TransformationInput
@@ -38,10 +39,13 @@ from prompt_toolkit.output.vt100 import Vt100_Output
 from prompt_toolkit.utils import get_cwidth
 
 from hallux import statusbar
-from hallux.blockmode import POWER_CUT_KEY, BlockMode
+from hallux.blockmode import OPEN_KEY, POWER_CUT_KEY, BlockMode
 from hallux.machine import Interrupted, Key
 from hallux.protocol import Action, Form, plain
 from hallux.statusbar import StatusBar
+
+if TYPE_CHECKING:
+    from hallux.panel import Panel
 
 log = logging.getLogger("hallux")
 
@@ -66,6 +70,13 @@ def zero_width(prompt: str) -> str:
     return NON_SGR_ESCAPE.sub(lambda m: f"\x01{m[0]}\x02", prompt)
 
 
+@dataclass(frozen=True)
+class _ToPanel:
+    """What a prompt returns when Ctrl+F12 ended it: the line as it was typed so far."""
+    line: str
+    cursor: int = 0
+
+
 class Terminal:
     def __init__(self, bar: StatusBar | None = None, input=None, output=None,
                  power_cut: Callable[[], None] | None = None,
@@ -73,6 +84,7 @@ class Terminal:
         self.bar = bar                                   # None: no status bar
         self.status_bar = bar is not None
         self.streams = True                              # show answers while they're written
+        self.attended = True                             # somebody is at the keyboard
         self.real_tty = input is None and output is None and sys.stdin.isatty()
         self.input = input or create_input()
         self.output = output or create_output()          # the whole screen (block mode)
@@ -83,6 +95,11 @@ class Terminal:
         self.interrupt: Callable[[], None] | None = None     # stops the AI's current turn
         self.pinned: Size | None = None                  # the screen size the bar is pinned for
         self.raw = contextlib.ExitStack()                # raw mode for the whole session
+        self.panel: Panel | None = None                  # hallux's own panel, once handed over
+        self.visit: asyncio.Task | None = None           # a visit that began while the AI works
+        self.kept: list[str] | None = None               # during a visit: what was written
+        self.over_prompt = False                         # the visit began at the shell prompt,
+        self.event_waits = False                         # and an event asked the prompt to end
 
         prompt_output = self._prompt_output()
         self.session: PromptSession = PromptSession(
@@ -122,15 +139,30 @@ class Terminal:
     # ---------------------------------------------------------------- the shell prompt
 
     async def read_line(self, prompt: str, default: str = "") -> str | Key | Interrupted:
-        self.session.app.erase_when_done = False
-        return await self.session.prompt_async(ANSI(zero_width(prompt)), default=default)
+        while True:
+            self.session.app.erase_when_done = False
+            line = await self.session.prompt_async(ANSI(zero_width(prompt)), default=default)
+            if not isinstance(line, _ToPanel):
+                return line
+            self.over_prompt, self.event_waits = True, False
+            try:
+                await self._visit_from_prompt()
+            finally:
+                self.over_prompt = False
+            if self.event_waits:                         # the read ends as the event would have
+                return Interrupted(line.line, line.cursor)   # ended it, with what was typed
+            default = line.line                          # read on from there
 
     def interrupt_prompt(self) -> bool:
         """End the shell prompt from outside, the way a key like Tab ends it from inside:
         read_line returns what was typed so far. Keys that arrive after it wait for the
         next prompt. False, and nothing happens, when no shell prompt is being read: while
         the AI answers, at a password prompt, in a full-screen program. Call it from the
-        event loop."""
+        event loop. While the panel is open over the prompt the answer is yes, and the read
+        ends when the panel closes."""
+        if self.over_prompt:
+            self.event_waits = True
+            return True
         app = self.session.app
         if not app.is_running or app.future is None or app.future.done():
             return False
@@ -141,9 +173,17 @@ class Terminal:
 
     async def read_secret(self, prompt: str) -> str | Key:
         """Read a password, the way a tty with echo off does (sudo, passwd, ssh)."""
-        return await self.secrets.prompt_async(ANSI(zero_width(prompt)))
+        while True:
+            self.secrets.app.erase_when_done = False     # Ctrl+F12 before it erased the prompt
+            line = await self.secrets.prompt_async(ANSI(zero_width(prompt)))
+            if not isinstance(line, _ToPanel):
+                return line
+            await self._visit_from_prompt()              # and nothing typed is carried over
 
     def write(self, text: str) -> None:
+        if self.kept is not None:                        # the panel covers the screen: it is
+            self.kept.append(text)                       # printed when the visit is over
+            return
         self._write(text)                                # already made safe by decode()
         self._draw_bar()                                 # `clear` erases it; bring it back
 
@@ -172,7 +212,20 @@ class Terminal:
         for key, name in IN_PLACE.items():
             keys.add(*key, eager=True)((lambda event: None) if secret else self._in_place(name))
         keys.add(POWER_CUT_KEY, eager=True)(lambda event: self.power_cut())
+        keys.add(OPEN_KEY, eager=True)(self._to_panel(secret))
         return keys
+
+    def _to_panel(self, secret: bool) -> Callable:
+        """Ctrl+F12 at a prompt ends it the way Tab does, and the panel is visited. Without a
+        panel the key does nothing."""
+        def handle(event) -> None:
+            if self.panel is None:
+                return
+            buf = event.app.current_buffer
+            line, cursor = ("", 0) if secret else (buf.text, buf.cursor_position)
+            event.app.erase_when_done = True             # the prompt is drawn again afterwards
+            event.app.exit(result=_ToPanel(line, cursor))
+        return handle
 
     def _line_ending(self, name: str, echo: str, secret: bool = False) -> Callable:
         def handle(event) -> None:
@@ -218,24 +271,40 @@ class Terminal:
         with contextlib.ExitStack() as watching:
             if not self.block.active:                    # block mode reads its own keys
                 def read() -> None:
-                    for press in self.input.read_keys():
+                    presses = self.input.read_keys()
+                    for at, press in enumerate(presses):
                         if press.key == POWER_CUT_KEY:
                             self.power_cut()
+                        elif press.key == OPEN_KEY and self.panel and self.visit is None:
+                            self.visit = asyncio.ensure_future(visit(presses[at + 1:]))
+                            break                        # the keys after it are the panel's
                         elif press.key == Keys.ControlC:
                             self.count_ctrl_c()
                             interrupt()
                         elif press.key != Keys.CPRResponse:
                             typed.append(press)          # type-ahead for the next prompt
+
+                async def visit(keys: list) -> None:
+                    try:
+                        typed.extend(await self.visit_panel(keys))
+                    finally:
+                        self.visit = None
                 watching.enter_context(self.input.attach(read))
             try:
                 yield
             finally:
                 animation.cancel()
+                if self.bar:                             # the bar stops when the answer ends,
+                    self.bar.update(busy=False)          # not when the panel closes
+                    self._refresh()
+                # The answer isn't over until a visit to the panel is: the panel's app has
+                # the keyboard, and it has to give it back to the reader above before that
+                # reader lets go. All that follows an answer waits here with it.
+                if self.visit is not None:
+                    await self.visit
+                await self.block.panel_gone()            # over a program the panel is a layer
                 self.interrupt = None
                 store_typeahead(self.input, typed)
-                if self.bar:
-                    self.bar.update(busy=False)
-                    self._refresh()
 
     def set_status(self, **changes: object) -> None:
         if self.bar:
@@ -250,8 +319,46 @@ class Terminal:
     def _refresh(self) -> None:
         if self.block.active:
             self.block.invalidate()
+        elif self.kept is not None:                      # the bar is the panel's last row now
+            self.panel.invalidate()
         else:
             self._draw_bar()
+
+    # ---------------------------------------------------------------- hallux's own panel
+
+    def set_panel(self, panel: Panel) -> None:
+        """Hand the panel over. From now on Ctrl+F12 opens it: at a prompt, while the AI
+        works, and over a full-screen program. A terminal that has none ignores the key."""
+        self.panel = self.block.panel = panel
+
+    async def _visit_from_prompt(self) -> None:
+        """The visit after Ctrl+F12 ended a prompt. What was typed behind Ctrl+F12 is the
+        panel's, and what was typed behind the key that closed it is for the prompt."""
+        store_typeahead(self.input, await self.visit_panel(get_typeahead(self.input)))
+
+    async def visit_panel(self, keys: list) -> list:
+        """One visit to the panel, with `keys` typed into it first. It is over when this
+        returns: the panel's app is gone, the shell's screen and the bar are back, and what
+        was written meanwhile is printed. Returns the keys typed after the one that closed
+        the panel."""
+        # A prompt_toolkit app feeds itself the keys that are stored for the next prompt when
+        # it starts. Those were typed for the shell, so they are taken out for the visit.
+        earlier = get_typeahead(self.input)
+        store_typeahead(self.input, keys)
+        if self.pinned:                                  # the panel has the whole screen,
+            self._write("\x1b7\x1b[r\x1b8")              # as a full-screen program has
+        self.kept = []                                   # from here on write() doesn't print
+        try:
+            await self.panel.run(self.input, self.output)    # on the alternate screen
+        finally:
+            kept, self.kept = self.kept, None
+            after = get_typeahead(self.input)
+            store_typeahead(self.input, earlier)
+            self._check_size()                           # the window may have another size now
+            self._draw_bar()                             # pins the region again, before any text:
+            for text in kept:                            # unpinned, the text would scroll the
+                self.write(text)                         # bar's row away and end up on it
+        return after
 
     # ---------------------------------------------------------------- block mode
 
@@ -262,6 +369,12 @@ class Terminal:
 
     async def next_action(self) -> Action:
         return await self.block.next_action()
+
+    def keep_form(self, tick: float | None = None) -> None:
+        self.block.keep_form(tick)
+
+    def set_tick(self, seconds: float) -> None:
+        self.block.set_tick(seconds)
 
     async def end_form(self) -> None:
         if self.block.active:
@@ -318,14 +431,14 @@ class Terminal:
             self._write(codes)
 
     def _bar_codes(self) -> str:
-        if not self.pinned or self.block.active:
+        if not self.pinned or self.block.active or self.kept is not None:
             return ""
         size = self.output.get_size()
         return statusbar.draw(self.bar, size.rows, size.columns)
 
     def _check_size(self) -> None:
         """After a resize: move the bar to the new bottom row and re-pin the region."""
-        if not self.pinned or self.block.active:
+        if not self.pinned or self.block.active or self.kept is not None:
             return
         size = self.output.get_size()
         if size != self.pinned:

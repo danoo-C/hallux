@@ -12,11 +12,15 @@
 
 1. **Every character on the machine's screen comes from the AI.** There are no shortcuts and
    no local fast paths. The Python program is a dumb terminal: it only passes keys and clicks
-   in and text out. There are two exceptions:
+   in and text out. There are three exceptions:
    - the characters you type, which your terminal echoes like any real terminal does;
    - hallux's **status bar** on the bottom row, which is the front panel of the case and not
      part of the machine's screen. The AI never draws there. See
-     [light-and-keys.md](light-and-keys.md).
+     [light-and-keys.md](light-and-keys.md);
+   - hallux's **settings panel**, which Ctrl+F12 puts over the screen for as long as it is
+     open. It is the settings window of the virtual machine, not a program inside it: the AI
+     never learns of it, and when it closes the machine's screen is as the AI made it. See
+     [config-panel.md](config-panel.md).
 2. **The disk is real.** Whatever a command does to files, like `echo hi > a.txt`, `rm`, or a
    Python script that writes `out.txt`, really happens in the root folder.
 3. **Everything else is imagined, and consistent.** The OS, kernel, CPU, network, processes,
@@ -663,7 +667,7 @@ layers win:
    model = "claude-sonnet-5-5"
    effort = "low"
    fallback_model = "claude-haiku-4-5"   # used if the main model is unavailable
-max_budget_usd = 1.00                 # optional: the machine stops after spending this per boot
+max_budget_usd = 1.00                 # optional: a boot holds its messages back after this
    ```
 3. **Command-line flags**, for a one-off run:
    ```bash
@@ -671,12 +675,26 @@ max_budget_usd = 1.00                 # optional: the machine stops after spendi
    python hallux.py ~/hallux-world --model claude-opus-5-5 --effort medium
    ```
 
-**Changing the hardware means rebooting.** Edit the config or use a flag, then `reboot` or
-restart. The *same* machine boots on a different "CPU", with its memory, files and rules
-unchanged. The memory doesn't depend on the model, so you can boot one world on Haiku today and
-on Opus tomorrow. The SDK *could* switch the model inside a running session
-(`client.set_model()`), but that would need a tty-level command, which would break "every
-character comes from the AI". So hardware changes happen between boots, like with a real VM.
+**Changing the hardware.** The file is read once, when `hallux.py` starts, so an edit of it
+acts at the next start, not at a `reboot` of the machine. While Hallux runs, the hardware is
+changed in its **settings panel**, which Ctrl+F12 opens ([config-panel.md](config-panel.md)):
+
+- **The model and the budgets change at once.** The SDK switches the model inside the
+  running session (`client.set_model()`), and the new model answers the next line. The
+  conversation of the boot and the tools carry over.
+- **The effort and the fallback model change at the machine's next `reboot`:** a session
+  gets them when it starts.
+- **Save** writes the changes into the config, so the next start has them too.
+
+The *same* machine goes on, or boots, on a different "CPU", with its memory, files and rules
+unchanged. The memory doesn't depend on the model, so you can run one world on Haiku today
+and on Opus tomorrow.
+
+**Why this doesn't break "every character comes from the AI".** An earlier version of this
+page said a switch inside a running session would need a tty-level command, and left
+hardware changes to the time between boots. The panel is no such command. It isn't typed
+into the machine, and it isn't part of the machine's screen: like the status bar it belongs
+to the case. The AI is never told that it was opened or what was changed in it.
 
 ### Which model?
 

@@ -206,3 +206,61 @@ On a pipe: the panel opens on Config, the tick budget is changed to 1.25, Save i
 and Esc closes it. The fakes got exactly `change("tick_budget_usd", "1.25")` and one
 `save()`. And a stand-in tab, added to the list in a test, is in the tab row and can be
 chosen with its letter.
+
+## As built
+
+Built on 2026-10-05, on the branch `config-panel`, before step 4. 43 new tests, 1014 in
+all; every old test passes as it was. Decided while building:
+
+**The host**
+
+- **`Tab` is a class in `hallux/panel.py`** that says what a tab is, with an answer for
+  everything a tab may leave out. A tab is a subclass of it in `hallux/panel_tabs/`.
+- **A disabled tab's reason stays in the foot for four seconds,** or until a tab is shown
+  or the panel closes. "Until the next key" doesn't work: with the mouse on, every move of
+  the mouse arrives as a key.
+- **Esc acts at once, so Alt with a letter is Esc too.** A terminal sends Alt+U as Esc and
+  `u`. In the panel that leaves the row or closes the panel, and the `u` follows.
+- **`close()` asks the app whether it is done already,** so a second close in the moment
+  while the app ends is no error.
+- **`show()` draws again,** because a tab may call it between two keys.
+- **The foot** has the shown tab's hint, then the letters of the tabs when there is more
+  than one, then `Esc close`. While the tab is typing, the hint stands alone.
+
+**The Config tab**
+
+- **The whole tab is one text.** `draw(view, state)` returns the rows, the line of buttons
+  and the line the cursor is on. The rows are one window that scrolls with the cursor, and
+  takes only the height it needs: on a tall window the buttons follow the rows, and what is
+  left is empty above the foot.
+- **An open row is typed into with keys the tab binds itself:** typing, Backspace, Delete,
+  ← →, Home, End, Ctrl-A, Ctrl-E, Ctrl-U, Ctrl-K, and what is pasted. It is no text field
+  of prompt_toolkit. So a row is typed into the same way whatever editing keys the app
+  around the panel has; step 7 has to check what is left of its "plain typing" for these
+  rows.
+- **A row opens with its value selected.** What is typed takes its place; an arrow, Home or
+  End keeps it to change it; Backspace or Delete empties the line. The plan's own keys,
+  "Enter, a number, Enter", need that: typed onto the end, `1.25` would be `0.251.25`.
+- **The list of an open row is drawn under it,** with `›` at the entry that is in the line.
+  ↑ and ↓ put the entry before or after it into the line. A click on an entry takes it at
+  once.
+- **`none` in the Fallback model's list is the empty line.**
+- **The warning about a wrong name is on the Model row only.** What a wrong fallback name
+  does isn't known, so that row doesn't claim anything.
+- **An open row keeps its own note,** such as what was spent, unless it has a refusal or
+  the warning to show.
+- **← and → move over the buttons.** Tab and Shift+Tab go round; ↑ and ↓ stop at the ends.
+- **What a button answered stays until the cursor moves.** A refusal from Save is red.
+- **The values' column is 18 wide,** not 15 as in the sketch: a model's name fits with the
+  cursor behind it, so the notes don't jump when the Model row opens.
+- **Money** is `$0.25`, and has all its digits where two aren't enough: `$0.125`.
+- **No colour is set for a background.** The cursor's row is in reverse, the open line is
+  underlined, notes are grey, a refusal is red. It reads on a light terminal and a dark one.
+- **`config.MODELS`** holds the three names. The help of `--model` still has its own words.
+
+**`tests/panel_demo.py`** is no test. It shows the panel in a real terminal around a
+machine that is switched off, in a folder that is thrown away, and prints what Save wrote.
+It is the way to see the panel until step 6 opens it for real, and can go then.
+
+**Not tried on a real terminal by me:** the colours, the mouse, the cursor in an open row,
+and how quick Esc feels. The demo is for that.

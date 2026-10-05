@@ -112,3 +112,61 @@ The tests pass, and the user has tried it by hand:
 - in vim, in normal mode: Ctrl+F12, a new model name typed, Esc;
 - in a player whose live updates are paused: Ctrl+F12, a higher tick budget, Esc, and the
   player moves again. And once more with Refill budgets in place of the higher number.
+
+## As built
+
+Built on 2026-10-05, on the branch `config-panel`. 18 new tests, 1053 in all; every old test
+passes as it was. **The user tried it by hand on 2026-10-05:** "this is really working
+nicely".
+
+Decided while building:
+
+- **The panel tells who shows it that it was closed, at once.** `Panel.on_close` is called
+  by the very key that closes it. Block mode gives the program its keys, its focus and its
+  way of editing back right there, so a key typed directly behind the closing one is the
+  program's. A wait for the panel's own event would come one step too late for that key.
+- **`ESCAPE_SECONDS` sits beside the two key names** in `hallux/blockmode.py`, and the panel
+  takes it from there. Block mode still never imports the panel.
+- **The layer is a float over the program's rows,** above the fields, in every screen block
+  mode lays out. It is drawn only while the panel is open. The bar's row lies beside that
+  area, so it stays.
+- **The app's keys are the panel's while the layer is up,** and the program's otherwise.
+- **The editing keys are the plain ones while it is open.** The vi mode the program was in
+  isn't touched, so normal mode is normal mode again afterwards. The rows of the Config tab
+  bind their own keys (step 5), but vi's commands for single letters would still win over
+  them: that is why the switch is needed.
+- **While the AI is busy with the screen,** Ctrl+F12 acts at once, the keys typed behind it
+  in the same burst are the panel's, and no key is held while the layer is up. What was held
+  before stays held.
+- **`next_action` waits in a loop that can be started again.** One event starts it again:
+  when the panel opens, when it closes, and when `set_tick` gives a new tick. While the
+  layer is up the wait has no tick at all.
+- **`panel_gone()`** is what `busy()` waits for in a full-screen program, after the wait for
+  a visit at the shell.
+- **The app's end closes the panel** through the app's own task, so it also happens while
+  the machine is waiting for an answer and nobody asks block mode anything. `end()` closes
+  it too.
+- **Without a panel, Ctrl+F12 still never reaches the AI** in a raw-mode program.
+- **The machine keeps two things for the program on screen:** the tick it asked for, and
+  whether a budget has stopped its ticks. `settle()` gives the tick back with `set_tick`
+  when neither the tick budget nor the budget per boot is used up.
+- **A cap lowered under a ticking program** stops its ticks with the next tick, which is
+  held back, and raising it starts them again.
+
+**Checked on a pseudo-terminal, with a terminal emulator drawing the screen** (pyte, 24
+rows by 80). The real terminal with the bar, a machine, and a pretend model that knows an
+editor and a ticking program. No model call.
+
+| What was done | The screen |
+|---|---|
+| `nano`, `abc` typed, Ctrl+F12 | The panel covers the editor. The bar is on the last row, as before |
+| The tick budget changed in the panel, Esc | The editor is back: `abchi`, the cursor behind `abc` as it was |
+| One more letter, then Ctrl-X | `abcdhi`. The AI gets the action with the whole text |
+| `top`, until its ticks run out | `live updates paused: tick budget used` on the bar |
+| Ctrl+F12, Refill budgets | `(paused)` is gone from the row, and the note from the bar |
+| A second and a half under the panel | No tick: the count on top's screen doesn't move |
+| Esc | top ticks again: the next tick reaches the AI, and its screen is drawn |
+
+**Seen on the way:** at 80 columns the note of the budget per boot is cut after a refill.
+`spent since the refill: $0.00 · this boot: $0.64` is longer than what is left of the row.
+The user doesn't mind it at that width, so the words stay.

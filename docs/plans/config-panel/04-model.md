@@ -77,4 +77,71 @@ next line on another.
 
 ## As built
 
-Not built. The check hasn't run.
+Built on 2026-10-05, on the branch `config-panel`, after step 5. 6 new tests, 1020 in all.
+The outcome of the check is the first of the three: **it works,** also to and from Haiku.
+
+### The check
+
+Run on 2026-10-05 with the SDK 0.2.163 and Hallux's own options: its system prompt, its
+in-process tools, the effort `low`, no built-in tools. The machine's folder held one file.
+Three lines were typed: `cat note.txt`, then `!!`, which needs the line before it, then
+`echo done`.
+
+| A session that started on Sonnet 5.5 | Answered by | Tools | Cost |
+|---|---|---|---|
+| `cat note.txt`, before any switch | `claude-sonnet-5-5` | `stat`, `read_file` | $0.0515 |
+| Switched to Haiku 4.5. `!!` | `claude-haiku-4-5-20251001` | `read_file` | $0.0209 |
+| `echo done` | Haiku | | $0.0015 |
+| Switched back to Sonnet. `!!` | `claude-sonnet-5-5` | | $0.0064 |
+| Switched to Opus 5.5. `echo done` | `claude-opus-5-5` | | $0.1005 |
+
+| The same lines on Haiku from the start, no switch | Cost |
+|---|---|
+| `cat note.txt` | $0.0078 |
+| `!!` | $0.0015 |
+| `echo done` | $0.0015 |
+| Then switched to Sonnet. `!!` | $0.0133 |
+
+| Question | Answer |
+|---|---|
+| Does the next answer come from the new model? | Yes. `AssistantMessage.model` named it each time, and it appeared in the result's `model_usage` |
+| Do the conversation and the tools survive? | Yes. After each switch `!!` ran the line before it again, and the in-process tool was called |
+| What does the first answer after the switch cost? | On Haiku $0.0209, against $0.0015 for the same line without a switch: fourteen times as much, once. The next line was $0.0015 again. One `echo done` on Opus after a switch was $0.10. This session was three lines old; a long boot has more to read |
+| From a model with an effort to Haiku, and back? | Both work. A session that started on Haiku, with no effort, switches to Sonnet too |
+
+**Two things the plan didn't ask,** found on the way:
+
+- **A name that is no model is refused by the session.** `set_model("claude-banana-9")`
+  raises `Model 'claude-banana-9' not found`. The session stays on its model and answers
+  the next line as if nothing had happened.
+- **A session that starts on such a name fails its first message:** `There's an issue with
+  the selected model (claude-banana-9). It may not exist or you may not have access to it.`
+  For Hallux that is a boot that fails, and Hallux ends.
+
+**The check cost $0.22,** not the few cents the plan named: $0.10 of it was the one answer
+on Opus, and $0.05 the first answer on Sonnet.
+
+### Decided while building
+
+- **Nothing notes a name as waiting.** A model waits as long as the setting isn't what
+  runs: `hardware.model` against `running.model`. So a change back to the running model is
+  no switch without any code for it.
+- **`switch_model()` is called in `exchange`,** inside the busy period, just before the
+  message is sent.
+- **A switch that fails is said once,** on the bar and in the log, however often it is
+  tried again: `model not switched: Model 'claude-banana-9' not found`. The note goes when
+  a switch works, when the setting is the running model again, and when a boot starts.
+- **The Model row's warning says what the check found:** `a wrong name is refused; saved,
+  it ends Hallux at the next boot`. The plan's words, "fails the next answer", aren't what
+  happens: the next answer comes, from the old model.
+- **`running` holds the effort the session was really given.** A session that starts on
+  Haiku is given none. After a switch the bar shows that effort for a model that has
+  efforts, and nothing for Haiku. So a session that started on Haiku shows no effort on
+  Sonnet either. Which effort it then runs at isn't known; the model's own, presumably.
+- **The fake client of the tests** notes every `set_model` with how many messages had gone
+  out before it, and can refuse a name the way the SDK does.
+
+**For step 8, in the design:** `docs/config-panel.md` still says in section 5 that the
+switch was never run, and lists it under "Still to find out". The three things to carry
+over are in the tables above: it works, what the first answer costs, and what a wrong name
+does.

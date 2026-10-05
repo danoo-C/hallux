@@ -1,7 +1,11 @@
 # The config panel
 
-**Status:** designed on 2026-10-03, and every question is settled. Nothing is built; the
-plan is in [plans/config-panel](plans/config-panel/README.md). The idea is the user's: a
+**Status:** designed on 2026-10-03, and built on 2026-10-05 in the eight steps of
+[plans/config-panel](plans/config-panel/README.md). Each step's file says under "As built"
+where the code went another way than this page. The user went through the live run in
+their own terminal the same day; what it showed is in the plan's
+[step 8](plans/config-panel/08-live-run.md) and under
+[Still to find out](#still-to-find-out). The idea is the user's: a
 panel inside Hallux that changes the machine's settings while it runs, saves them, and gives
 the screen back exactly as the AI made it. The user also chose the key, how the panel
 closes, and that it takes the mouse. The rest was my proposal, and the user accepted all of
@@ -40,8 +44,11 @@ pipe, the way the tests drive it; no model call, nothing written):
 **What the user checked on 2026-10-04:** Ctrl+F12 reaches a program in their terminal. They
 ran `cat -v` and pressed it, and `^[[24;5~` appeared: the sequence prompt_toolkit maps.
 
-What I didn't check is in [Still to find out](#still-to-find-out). The one that matters
-most: switching the model of a running session needs a model call.
+**What was checked with model calls on 2026-10-05:** switching the model of a running
+session. It works, also to and from Haiku. The numbers are in the plan's
+[step 4](plans/config-panel/04-model.md).
+
+What is still open is in [Still to find out](#still-to-find-out).
 
 ## In short
 
@@ -234,12 +241,14 @@ hallux/panel_tabs/details.py  the Details tab   (with addon agents)
   picked from its five values. Enter takes the value, Esc leaves the row as it was.
 - **A wrong value isn't taken,** and the row says why, with the words `config.toml` would
   get: "must be a number, 0 or more". The checks are the ones in `hallux/config.py:58`.
-- **A model name can't be checked.** Any name is taken. A wrong one shows as "model failed"
-  on the bar with the next answer. The list holds the three names Hallux's help names, the
-  model that runs and the one in the settings.
-- **A wrong name that only acts at a boot is worse.** A boot that fails ends Hallux, and a
-  wrong name that was saved fails every start, until the file is edited or `--model` is
-  passed. The row says so.
+- **A model name can't be checked in the row.** Any name is taken. The list holds the three
+  names Hallux's help names, the model that runs and the one in the settings.
+- **A wrong name isn't switched to.** The check of 2026-10-05 showed it: the session refuses
+  a name that is no model, and goes on answering from the model it had. The bar says
+  `model not switched: Model '…' not found`, and the Model row keeps `running now:` beside
+  the name.
+- **A wrong name that is saved is worse.** A boot that starts on it fails, and that ends
+  Hallux, at every start, until the file is edited or `--model` is passed. The row says so.
 - **A row that a flag set says so:** "from --model, for this run".
 
 ---
@@ -250,7 +259,7 @@ hallux/panel_tabs/details.py  the Details tab   (with addon agents)
 |---|---|---|
 | `tick_budget_usd`, `event_budget_usd` | At once | They are Hallux's own counters, read at each use (`hallux/machine.py:250,323`) |
 | `max_budget_usd` | At once | Hallux checks it itself (section 6). Today the session gets it when it starts |
-| `model` | From the next answer | The SDK can switch a running session: `set_model()`. Not run yet |
+| `model` | From the next answer | The SDK switches a running session: `set_model()`. Run on 2026-10-05 |
 | `effort`, `fallback_model` | At the machine's next reboot | The session gets them when it starts (`hallux/machine.py:131-132`), and the SDK has no way to change them later |
 | `status_bar`, `addons`, `keep_transcripts`, `os_sandbox` | When Hallux starts | The bar and the addons are wired once, at the start (`hallux/app.py:60,68`). The other two could act at a reboot, but this version doesn't change them |
 
@@ -289,10 +298,13 @@ hallux/panel_tabs/details.py  the Details tab   (with addon agents)
   of that answer.
 - **The first answer on the new model costs more, once.** A model has its own cache, so it
   reads the whole conversation of the boot at the full price.
-- **If `set_model()` doesn't work for Hallux's session,** the model moves to the second
-  group and changes at the next reboot, like the effort.
-- **Haiku is a special case.** It gets no effort (`hallux/config.py:34`). Whether a session
-  that started with an effort can switch to Haiku isn't known yet.
+- **How much more:** in the check, the first line on Haiku after a switch cost $0.021, and
+  the same line without a switch $0.0015. One line on Opus after a switch cost $0.10. That
+  session was three lines old.
+- **Haiku is a special case.** It gets no effort (`hallux/config.py:34`). A session that
+  started with an effort switches to Haiku and back, and has its effort again afterwards. A
+  session that started on Haiku was given no effort, and the bar shows none after a switch
+  to another model either.
 
 **The effort:**
 - **The panel shows both:** the effort you set, and the one that runs now.
@@ -527,23 +539,36 @@ Every row was accepted on 2026-10-03, with the rest of the recommendations.
 
 ## Still to find out
 
-Each needs a run.
+Each needed a run, and each has had one. One part of one point is left for later: a slow
+line.
 
 - **Answered on 2026-10-04: Ctrl+F12 reaches Hallux in the user's terminal.** The user ran
   `cat -v`, pressed it, and `^[[24;5~` appeared. So the key stands. In another terminal
   program the same test applies; if a terminal keeps the chord for itself, another key takes
   its place, and nothing else in the design depends on which key it is.
-- **Whether `set_model()` switches Hallux's running session,** with its in-process tools, and
-  what the first answer after it costs.
-- **Whether a session that started with an effort can switch to Haiku,** and back.
-- **Whether the shell's screen is back exactly in a real terminal:** the scrollback, the
-  cursor, the colors, the pinned bar. Full-screen programs leave it that way today, so I
-  expect it. Also after the window was resized while the panel was open.
-- **Whether the short wait after Esc is safe on a slow line.** Over ssh the bytes of an arrow
-  key can arrive apart, and the first one alone is Esc.
-- **By how much one answer goes over the budget per boot,** now that Hallux checks between
-  answers.
-- **Whether the bar is enough** to tell you that an answer arrived while the panel was open.
+- **Answered on 2026-10-05: `set_model()` switches Hallux's running session,** with its
+  in-process tools and its conversation. The first answer after it costs more, once: see
+  section 5.
+- **Answered on 2026-10-05: a session that started with an effort switches to Haiku,** and
+  back.
+- **Answered on 2026-10-05: the shell's screen is back in a real terminal.** The user's
+  first try found a bug: what the AI had written behind the panel was printed before the
+  bar's region was pinned again, so the bar's row went up into the text. After the fix:
+  "now it works perfectly". The same over a full-screen program: "this is really working
+  nicely".
+- **Answered on 2026-10-05: a window that is resized while the panel is open** comes back
+  right in the user's terminal.
+- **Answered on 2026-10-05, for the user's own terminal: the short wait after Esc.** Esc is
+  quick there, and an arrow key never closed the panel: "yeah i tried esc and arrows".
+  **Left for later: a slow line.** Over ssh the bytes of an arrow key can arrive apart, and
+  the first one alone is Esc. The user didn't try it over ssh, expects it to work, and keeps
+  it as a test for the future. If an arrow key ever closes the panel there, the wait is one
+  number, `ESCAPE_SECONDS` in `hallux/blockmode.py`.
+- **Answered on 2026-10-05: by how much one answer goes over the budget per boot.** In the
+  live run an answer of $0.026 took a boot $0.004 over a cap of $0.16. It can't be more than
+  the cost of the answer that crosses the cap.
+- **Answered on 2026-10-05: the bar is enough** to tell you that an answer arrived while
+  the panel was open. The user: "yeah, its enoght".
 
 ---
 
