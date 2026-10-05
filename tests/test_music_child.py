@@ -239,12 +239,12 @@ def test_what_play_reports_about_a_loud_song(child):
 
 # ---------------------------------------------------------------- checking
 
-def check(text, env=(), cwd=ADDONS, message=None):
+def check(text, env=(), cwd=ADDONS, message=None, **more):
     """Start the child for a check of this score. Returns its one line as the answer it has
     to be, and the ended process: a check child ends by itself."""
     done = subprocess.run(
         [sys.executable, "-m", "music_engine", "check"], cwd=cwd, text=True, timeout=30,
-        input=json.dumps({"text": text}) if message is None else message, capture_output=True,
+        input=json.dumps({"text": text} | more) if message is None else message, capture_output=True,
         env=os.environ | {"SDL_AUDIODRIVER": "disk"} | dict(env))
     assert done.returncode == 0 and done.stdout.count("\n") == 1, (done.stdout, done.stderr)
     return json.loads(done.stdout), done
@@ -257,6 +257,15 @@ def test_a_check_answers_what_play_answers(child):
     assert check(SHORT)[0] == {"ok": True, "seconds": 0.2, "peak": 78}       # and no id
     assert check(loud)[0] == {
         "ok": True, "seconds": 0.1, "peak": 200, "turned_down_to": 49, "clipped": ["beep"]}
+
+
+def test_a_check_of_a_loop_answers_what_play_answers_for_the_loop(child):
+    once, loop = rendered(RINGS).report(), rendered(RINGS, loop=True).report()
+    assert once != loop                                              # the tails are mixed in
+    assert check(RINGS)[0] == check(RINGS, loop=False)[0] == {"ok": True} | once
+    assert check(RINGS, loop=True)[0] == {"ok": True} | loop
+    assert check(RINGS, loop=True)[0] == child.ask(cmd="play", text=RINGS, loop=True)
+    child.ask(cmd="stop")
 
 
 def test_a_check_of_a_score_with_mistakes_has_every_problem(child):
@@ -292,8 +301,10 @@ def test_a_check_child_never_loads_pygame(tmp_path):
 
 
 def test_a_check_of_what_is_no_message_is_an_answer():
-    for message in ("", "not a message", "[1, 2]", '{"text": 5}', '{"score": "BPM = 120"}'):
-        assert check("", message=message)[0] == {"error": "addon bug: check takes a text"}
+    for message in ("", "not a message", "[1, 2]", '{"text": 5}', '{"score": "BPM = 120"}',
+                    '{"text": "BPM = 120", "loop": "yes"}'):
+        assert check("", message=message)[0] == {
+            "error": "addon bug: check takes a text, and true or false for loop"}
 
 
 def test_a_bug_in_a_check_is_an_answer_and_not_a_crash(tmp_path):

@@ -107,12 +107,14 @@ manual's limit. Decided while building:
 - **The manual's line** is two lines, 145 characters. The manual is 8132 characters, and
   368 are left under the new limit for step 13.
 
-**`check` returns what `play(path)` returns, and the manual says it that way.** It has no
-`loop`. For most songs that makes no difference. A loop whose tails ring past its end is
-rendered with those tails mixed into its later rounds, and `play(path, loop=true)` then
-reports one round's length and a higher peak. Tried: a note of 0.1 seconds with a ringing
-tail gives `0.2 s, peak 78` once, and `0.1 s, peak 148, turned down to 67` as a loop.
-Whether `check` should take `loop` too is open; it would be five lines.
+**`check` takes `loop`, as `play` does:** `check(path, loop)`. This file has it above as
+`check(disk, path)`. For most songs it makes no difference. A loop whose tails ring past
+its end is rendered with those tails mixed into its later rounds, and `play` then reports
+one round's length and a higher peak. Tried: a note of 0.1 seconds with a ringing tail
+gives `0.2 s, peak 78` once, and `0.1 s, peak 148, turned down to 67` as a loop. Without
+`loop`, a composer that checks a song meant to loop would see the wrong peak. It was added
+on 2026-10-05, after the step was built and committed: I recommended it, and the user
+answered "okay". Two more tests hold it, 1101 in all.
 
 **Measured on 2026-10-05,** on this computer, ten runs each, from the start of the child to
 its answer:

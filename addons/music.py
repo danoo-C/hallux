@@ -47,7 +47,7 @@ song with bytebeat instruments, at 44100 Hz and 16 bits.
   returns: the sound goes on by itself. A song that is playing is replaced. loop=true starts
   the song again when it ends, until something stops it.
 - stop() stops the sound.
-- check(path) renders the score without a sound and returns what play(path) would return, or
+- check(path, loop) renders the score without a sound and returns what play would return, or
   the same errors. A song that is playing plays on.
 - {"event": "finished"} is reported, once you listen with addon_listen, when a song that
   plays once ended by itself: not after stop() or a new play(), and never for a loop.
@@ -246,14 +246,14 @@ def stop() -> dict:
     return {"ok": True}
 
 
-def check(disk, path: str) -> dict:
-    """Render the score file at this path without a sound, and return what play(path) would
-    return for it. Nothing that is playing is touched."""
+def check(disk, path: str, loop: bool = False) -> dict:
+    """Render the score file at this path without a sound, and return what play would return
+    for it with the same loop. Nothing that is playing is touched."""
     text = _score(disk, path)
     try:                                              # a child for this one render: it never
         done = subprocess.run(                        # waits for the one that plays
-            CHILD + ["check"], cwd=FOLDER, input=json.dumps({"text": text}).encode(),
-            capture_output=True, timeout=CHECK_SECONDS, env=_environment())
+            CHILD + ["check"], cwd=FOLDER, timeout=CHECK_SECONDS, env=_environment(),
+            input=json.dumps({"text": text, "loop": loop}).encode(), capture_output=True)
     except subprocess.TimeoutExpired:                 # run() has ended the child by now
         raise MusicError("the song took too long to render") from None
     answer = None

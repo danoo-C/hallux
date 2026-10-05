@@ -225,7 +225,7 @@ def compose(spawn, request: str, folder: str, edit: list[str] = []) -> dict:
     return {"pid": spawn(request, folder, edit)}
 
 
-def check(disk, path: str) -> dict:
+def check(disk, path: str, loop: bool = False) -> dict:
     """Render the score at this path without playing it. Returns what play returns."""
 
 

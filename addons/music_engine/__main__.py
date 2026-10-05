@@ -19,7 +19,7 @@ tried by hand.
 Started with the word check, python -m music_engine check, it plays nothing. It reads one
 message, renders that score, gives the answer play would give, and ends:
 
-    {"text": "..."}
+    {"text": "...", "loop": false}
         {"ok": true, "seconds": 9.6, "peak": 98}
         {"error": "line 7: unknown name CUTOF\\nline 12: ..."}
 
@@ -139,13 +139,14 @@ def check(say) -> int:
         message = json.loads(sys.stdin.buffer.read())     # all of it: nothing follows a check
     except ValueError:
         message = None
-    text = message.get("text") if isinstance(message, dict) else None
-    if not isinstance(text, str):
-        say({"error": "addon bug: check takes a text"})
+    message = message if isinstance(message, dict) else {}
+    text, loop = message.get("text"), message.get("loop", False)
+    if not isinstance(text, str) or not isinstance(loop, bool):
+        say({"error": "addon bug: check takes a text, and true or false for loop"})
         return 0
     try:
         read = score.read(text)
-        say({"ok": True} | render.render(read, song.unfold(read)).report())
+        say({"ok": True} | render.render(read, song.unfold(read), loop).report())
     except score.ScoreError as problems:
         say({"error": str(problems)})
     except Exception as bug:                  # an answer, as from the child that plays

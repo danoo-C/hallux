@@ -75,7 +75,7 @@ def test_it_has_the_parts_of_the_plan_in_their_order(manual):
     places = [manual.index(f"\n\n{title}\n") for title in SECTIONS]
     assert places == sorted(places)
     first = manual[:places[0]]
-    for part in ("play(path, loop)", "stop()", "check(path)", '{"event": "finished"}',
+    for part in ("play(path, loop)", "stop()", "check(path, loop)", '{"event": "finished"}',
                  "addon_listen", "The addon defines no command", "nano", "the way a player would"):
         assert part in first, part
 

@@ -118,7 +118,7 @@ def test_the_file_passes_every_check_of_the_loader(addon):
     assert list(addon.functions) == ["play", "stop", "check"]
     assert addon.stop is addon.functions["stop"]          # the hook is the tool
     assert addon.has_events                               # it has connect(emit)
-    for part in ("play(path, loop)", "stop()", "check(path)", '{"event": "finished"}',
+    for part in ("play(path, loop)", "stop()", "check(path, loop)", '{"event": "finished"}',
                  "addon_listen"):
         assert part in addon.manual
 
@@ -138,9 +138,7 @@ def test_the_tools_are_play_stop_and_check_and_the_ai_never_sees_the_disk(play):
         "type": "object", "properties": {"path": {"type": "string"}, "loop": {"type": "boolean"}},
         "required": ["path"], "additionalProperties": False}
     assert play.tools["stop"].input_schema["properties"] == {}
-    assert play.tools["check"].input_schema == {
-        "type": "object", "properties": {"path": {"type": "string"}},
-        "required": ["path"], "additionalProperties": False}
+    assert play.tools["check"].input_schema == play.tools["play"].input_schema
     assert all(tool.description for tool in play.tools.values())
     for tool in ("play", "check"):
         with pytest.raises(jsonschema.ValidationError):
@@ -382,6 +380,20 @@ def test_the_loudness_report_of_a_check(play, world):
     assert play("check", path="/loud.score") == (
         {"ok": True, "seconds": 0.1, "peak": 200, "turned_down_to": 49, "clipped": ["loud"]},
         False)
+
+
+def test_check_of_a_loop_returns_what_play_returns_for_the_loop(play, world):
+    """A loop whose tails ring past its end has them mixed into its later rounds: it is one
+    round long, and louder than the song played once."""
+    (world.root / "rings.score").write_text(
+        "BPM = 300\nINSTRUMENT ring 3000:\n    sin(p) * decay(t - dur, 800) * vel >> 24\n"
+        "SONG:\n    (0, 4, A4, ring, 200)\n")
+    once = ({"ok": True, "seconds": 0.2, "peak": 78}, False)
+    as_a_loop = ({"ok": True, "seconds": 0.1, "peak": 148, "turned_down_to": 67}, False)
+    assert play("check", path="/rings.score") == play("check", path="/rings.score", loop=False) == once
+    assert play("check", path="/rings.score", loop=True) == as_a_loop
+    assert play("play", path="/rings.score") == once
+    assert play("play", path="/rings.score", loop=True) == as_a_loop
 
 
 def test_check_leaves_a_song_that_plays_alone(play, music, sound):
