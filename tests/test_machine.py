@@ -419,6 +419,23 @@ def test_the_prompt_says_where_a_change_made_with_hallux_goes():
         assert part in line
 
 
+def test_the_prompt_says_what_paused_ticks_mean():
+    raw_mode = SYSTEM_PROMPT.split("\nRAW MODE: ")[1].split("\nBOOT\n")[0]
+    paused = rule_of(raw_mode, "Ticks can stop.")
+    for part in ('every message carries ticks="paused": no <tick> comes then',
+                 "Keep tick in the form all the same: that is how they start again.",
+                 "bring the screen up to date with every key."):
+        assert part in paused
+    waiting = rule_of(raw_mode, "Don't let a program depend on a tick.")
+    assert waiting.endswith("is done on the first message that arrives, a tick or a key, and at "
+                            "once when ticks are paused.")
+    assert "just waits for a key" not in " ".join(SYSTEM_PROMPT.split())
+    carried = " ".join(SYSTEM_PROMPT.split("\nINPUT\n")[1].split())
+    assert carried.startswith("Every message carries the cwd, the local time and the terminal "
+                              'size (cols, rows), and ticks="paused" while ticks are paused '
+                              "(see RAW MODE).")
+
+
 NANO = ('<screen>\n  GNU nano 7.2   hello.txt\n</screen><prompt></prompt>'
         '<form keys="C-o C-x" focus="text" keymap="nano">'
         '<editor id="text" top="3" left="1" height="20" file="hello.txt"/></form>')
@@ -1293,6 +1310,139 @@ def test_a_program_that_asked_for_no_tick_gets_none(tmp_path):
     machine = Machine(tmp_path, A_CENT, terminal, client_factory=model)
     asyncio.run(machine.run())
     assert terminal.ticks is None
+
+
+# --- the AI is told that ticks are paused: a mark on the messages that go anyway ---------------
+
+MARK = ' ticks="paused" cwd="'               # after a message's own attributes, before the cwd
+LIBRARY = ('<form keys="Enter" focus="q15"><line id="q15" top="-2" left="13"/></form>'
+           '<screen>\n1 claws\n2 rain\n</screen><prompt></prompt>')
+
+
+def marked(model, session=0):
+    """Per message of a session: its kind where it says that ticks are paused, or None."""
+    return [message[1:].split(" ")[0] if MARK in message else None
+            for message in model.sessions[session]]
+
+
+def test_a_paused_program_is_told_with_every_message_until_it_is_left(tmp_path):
+    model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                      result(TOP, total=0.32),                           # a tick for $0.30
+                      result(TOP, total=0.33),
+                      result(screen("", prompt="$ "), total=0.34), result(HALT, total=0.35))
+    terminal = FakeTerminal("top", Action("tick", None), KEY["x"], KEY["q"], "exit")
+    run(tmp_path, model, terminal)
+    assert kinds(model) == ["boot", "input", "tick", "keys", "keys", "input"]
+    assert marked(model) == [None, None, None, "keys", "keys", None]     # and not at the shell
+    assert model.sessions[0][3].startswith('<keys ticks="paused" cwd="/" time="')
+
+
+def test_a_screen_without_a_tick_carries_the_mark_too(tmp_path):
+    """What the machine's log showed: the song that got stuck was picked in a form with a
+    field, which asks for no tick, after the ticks of that run had stopped."""
+    picked = Action("Enter", "q15", (FieldState("q15", "2", (1, 2), True, True),))
+    model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                      result(TOP, total=0.32),                           # a tick for $0.30
+                      result(LIBRARY, total=0.33),                       # a click: the library
+                      result(TOP, total=0.34),                           # song 2: it would tick
+                      result(screen("", prompt="$ "), total=0.35), result(HALT, total=0.36))
+    terminal = FakeTerminal("kittymusic", Action("tick", None), KEY["x"], picked, KEY["q"], "exit")
+    run(tmp_path, model, terminal)
+    assert marked(model) == [None, None, None, "keys", "action", "keys", None]
+    assert model.sessions[0][4].startswith('<action key="Enter" focus="q15" ticks="paused" cwd="/"')
+    assert [form.tick for _, form in terminal.forms] == [3, 0, 0, 0]     # no screen ticked again
+
+
+def test_the_mark_goes_when_the_budget_allows_ticks_again(tmp_path):
+    def play(in_the_panel):
+        model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                          result(TOP, total=0.32),                       # a tick for $0.30
+                          result(TOP, total=0.33), result(TOP, total=0.34),
+                          result(screen("", prompt="$ "), total=0.35), result(HALT, total=0.36))
+        terminal = FakeTerminal("top", Action("tick", None), KEY["x"],
+                                lambda: in_the_panel(machine), KEY["x"], KEY["q"], "exit")
+        machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+        asyncio.run(machine.run())
+        return marked(model), terminal.ticks
+
+    told = [None, None, None, "keys", None, None, None]      # only the key before the panel
+    assert play(lambda machine: machine.change("tick_budget_usd", "1")) == (told, [3])
+    assert play(lambda machine: machine.refill()) == (told, [3])
+
+
+def test_with_ticks_switched_off_every_message_says_so(tmp_path):
+    model = FakeModel(screen(""), TOP, TOP, screen("", prompt="$ "), HALT)
+    terminal = FakeTerminal("top", KEY["x"], KEY["q"], "exit")
+    run(tmp_path, model, terminal, Hardware(tick_budget_usd=0))
+    assert marked(model) == ["boot", "input", "keys", "keys", "input"]
+    assert model.sessions[0][0].startswith('<boot first="yes" ticks="paused" cwd="/"')
+    assert [form.tick for _, form in terminal.forms] == [0, 0]
+
+
+def test_a_tick_isnt_sent_once_its_budget_is_lowered_under_what_was_spent(tmp_path):
+    model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                      result(TOP, total=0.22),                           # a tick for $0.20
+                      result(TOP, total=0.23), result(TOP, total=0.24),
+                      result(screen("", prompt="$ "), total=0.25), result(HALT, total=0.26))
+    terminal = FakeTerminal("top", Action("tick", None),
+                            lambda: machine.change("tick_budget_usd", "0.1"),
+                            Action("tick", None),                        # held back: not sent
+                            KEY["x"], lambda: machine.change("tick_budget_usd", "1"),
+                            KEY["x"], KEY["q"], "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert kinds(model) == ["boot", "input", "tick", "keys", "keys", "keys", "input"]
+    assert marked(model) == [None, None, None, "keys", None, None, None]   # and never a tick
+    assert terminal.kept == [0] and notes_of(terminal) == [TICKS_USED, None]
+    assert terminal.ticks == [3]                             # raised: it ticks again
+    assert [form.tick for _, form in terminal.forms] == [3, 3, 0, 3]
+
+
+def test_a_boot_that_ends_inside_a_program_leaves_it(tmp_path):
+    seen = []
+    model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                      result(TOP, total=0.32),                           # a tick for $0.30
+                      result(TOP + "<reboot/>", total=0.33),             # it reboots, still up
+                      [lambda: seen.append((machine.in_form, dict(machine.notes)))]
+                      + result(screen("up again\n"), total=0.01), result(HALT, total=0.02))
+    terminal = FakeTerminal("top", Action("tick", None), KEY["x"], "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert marked(model) == [None, None, None, "keys"]
+    assert marked(model, session=1) == [None, None]          # the next boot starts clean:
+    assert seen == [(False, {})]                             # no form, and no note on the bar
+    assert notes_of(terminal) == [TICKS_USED, None]
+
+
+def test_the_boots_budget_needs_no_mark_but_a_used_up_tick_budget_keeps_its_own(tmp_path):
+    def play(hardware):
+        model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                          result(TOP, total=0.32),                       # a tick for $0.30
+                          result(screen("", prompt="$ "), total=0.33), result(HALT, total=0.34))
+        terminal = FakeTerminal("top", Action("tick", None), KEY["x"],   # held back by the cap
+                                lambda: machine.change("max_budget_usd", ""), KEY["q"], "exit")
+        machine = Machine(tmp_path, hardware, terminal, client_factory=model)
+        asyncio.run(machine.run())
+        assert kinds(model) == ["boot", "input", "tick", "keys", "input"]    # x never went
+        return marked(model)
+
+    cap = Hardware(max_budget_usd=0.30, tick_budget_usd=1)
+    assert play(cap) == [None, None, None, None, None]       # raised: ticks are back
+    assert play(Hardware(max_budget_usd=0.30)) == [None, None, None, "keys", None]
+
+
+def test_ctrl_c_in_a_paused_program_carries_the_mark(tmp_path):
+    model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                      result(TOP, total=0.32),                           # a tick for $0.30
+                      result(TOP, total=0.33),                           # cut off by Ctrl-C
+                      result(screen("^C\n", prompt="$ "), total=0.34), result(HALT, total=0.35))
+    terminal = FakeTerminal("top", Action("tick", None), KEY["x"], "exit",
+                            ctrl_c_while_busy=[False, False, False, True])
+    run(tmp_path, model, terminal)
+    assert kinds(model) == ["boot", "input", "tick", "keys", "key", "input"]
+    assert marked(model) == [None, None, None, "keys", "key", None]
+    assert model.sessions[0][4].startswith('<key name="C-c" interrupted="yes" ticks="paused" cwd')
+
 
 def test_an_answers_cost_is_on_the_bar_before_the_answer_ends(tmp_path):
     """The end of an answer may wait for the panel, and the panel shows what was spent."""

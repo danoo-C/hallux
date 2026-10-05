@@ -354,7 +354,13 @@ live updates, such as action games and `top`.
 - **Ticks:** `tick="3"` wakes the AI every 3 s (1–60 s) with `<tick>` while nothing is pressed,
   so `top`'s clock and numbers move. Ticks cost money, so they stop when `tick_budget_usd`
   (default $0.25 per program run) is spent. The status bar then says
-  `live updates paused: tick budget used`, and the program just waits for a key.
+  `live updates paused: tick budget used`, and every message the machine sends carries
+  `ticks="paused"` until the budget allows ticks again. That tells the AI without a message of
+  its own: the program shows that it stands still, and updates on every key. A tick that
+  arrives while the budget is used up is not sent.
+- **No program depends on a tick.** What has to wait until its screen is up, such as a song
+  that starts when the player shows, is done on the first message that arrives, and at once
+  while ticks are paused.
 - **Ctrl-C** reaches the program as a key, and still counts toward the triple-Ctrl-C hard exit.
   While the AI is answering, it interrupts the answer.
 - **The screen is padded to the full rectangle,** so a click anywhere, even on empty space,

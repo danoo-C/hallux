@@ -37,6 +37,7 @@ from hallux.tools import SERVER, build_addon_servers, build_server
 
 log = logging.getLogger("hallux")
 SYSTEM_PROMPT = (files("hallux") / "prompt.md").read_text(encoding="utf-8")
+TICKS_PAUSED = "live updates paused: tick budget used"       # the bar's note for it
 
 
 @dataclass(frozen=True)
@@ -297,8 +298,8 @@ class Machine:
                     if reply.edit is not None:   # the AI rewrote the line (Tab, Ctrl-R...)
                         restore = reply.edit
                 return reply.reboot
-            finally:                             # halt, reboot or a crash
-                await self.terminal.end_form()
+            finally:                             # halt, reboot or a crash: a program that
+                await self.leave_block_mode()    # is still on screen ends with the boot
                 self.stop_addons()
                 self.forget_events()
 
@@ -370,7 +371,7 @@ class Machine:
             self.events.pause(False)
         if hw.model == self.running.model:
             self.note("model", None)             # no model waits to be switched to
-        if self.tick_spent < hw.tick_budget_usd:
+        if not self.ticks_used_up():
             self.note("tick_budget_usd", None)
             if self.ticks_stopped and not over:  # both budgets allow it: the program on screen
                 self.ticks_stopped = False       # ticks again, as it asked to
@@ -381,6 +382,11 @@ class Machine:
         """The boot has a cap, and has spent it since it started or since the last refill."""
         cap = self.hardware.max_budget_usd
         return cap is not None and self.session_spent - self.refilled_at >= cap
+
+    def ticks_used_up(self) -> bool:
+        """The program run has spent its tick budget. No tick goes to the AI, and every other
+        message tells it so, until the budget allows ticks again or the program is left."""
+        return self.tick_spent >= self.hardware.tick_budget_usd
 
     def hold(self) -> bool:
         """Asked before a message goes to the AI: True when it has to stay here, because the
@@ -468,9 +474,9 @@ class Machine:
         form = self.load_files(form, to_load)
         held = self.hold()
         self.tick_asked = form.tick
-        if form.tick and self.tick_spent >= self.hardware.tick_budget_usd:
+        if form.tick and self.ticks_used_up():
             form = dataclasses.replace(form, tick=0)             # live updates stop here
-            self.note("tick_budget_usd", "live updates paused: tick budget used")
+            self.note("tick_budget_usd", TICKS_PAUSED)
         elif held:
             form = dataclasses.replace(form, tick=0)             # a tick couldn't be sent
         self.ticks_stopped = bool(self.tick_asked) and not form.tick
@@ -489,10 +495,13 @@ class Machine:
                 await self.leave_block_mode()
                 return await self.send(client, "key", "", name="C-c")
             held = self.hold()
-            if not held:
+            late = action.key == "tick" and self.ticks_used_up()   # its budget was lowered
+            if not held and not late:
                 break
             self.terminal.keep_form(tick=0)       # not sent: the program stays, without ticks
             self.ticks_stopped = bool(self.tick_asked)
+            if late:
+                self.note("tick_budget_usd", TICKS_PAUSED)
         if action.key == "tick":                  # raw mode: time passed, nothing was pressed
             reply = await self.send(client, "tick", activity="updating…")
             self.tick_spent += self.last_turn_cost
@@ -593,6 +602,8 @@ class Machine:
     def envelope(self, tag: str, body: str = "", **attrs: object) -> str:
         cols, rows = self.terminal.size()
         now = datetime.now().astimezone().isoformat(timespec="seconds")
+        if self.ticks_used_up():                 # no tick comes, whatever the form asks for
+            attrs["ticks"] = "paused"
         return envelope(tag, body, **attrs, cwd=self.disk.cwd, time=now, cols=cols, rows=rows)
 
     async def exchange(self, client: ClaudeSDKClient, message: str, activity: str = "thinking…",
