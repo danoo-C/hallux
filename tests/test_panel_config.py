@@ -94,20 +94,20 @@ def test_the_text_of_the_tab():
   world/.hallux/config.toml
 
   Changes now
+    Model              claude-opus-5-5
     Budget per boot    $2.00               spent in this boot: $1.42
     Tick budget        $0.25               spent by this program: $0.25 (paused)
     Event budget       $0.25               spent since you typed: $0.00
 
   Changes at the machine's next reboot
-    Model              claude-opus-5-5     
     Effort             high                running now: low
-    Fallback model     none                
+    Fallback model     none
 
   Set when Hallux starts (edit config.toml)
-    Status bar         on                  
-    Addons             music, window       
-    Transcripts        off                 
-    OS sandbox         off                 
+    Status bar         on
+    Addons             music, window
+    Transcripts        off
+    OS sandbox         off
 
     [ Refill budgets ]   [ Save ]   [ Close ]      2 changes not saved"""
 
@@ -144,11 +144,12 @@ def test_the_budget_per_boot_has_both_numbers_after_a_refill():
 
 def test_a_setting_is_drawn_in_the_group_of_its_when(monkeypatch):
     before = text(Machine()).split("\n\n")
-    assert "Changes now" in before[1] and "Effort" in before[2] and "Effort" not in before[1]
-    monkeypatch.setitem(config.WHEN, "effort", "now")
+    assert "Changes now" in before[1] and "Tick budget" in before[1]
+    assert stops()[:4] == ["model", "max_budget_usd", "tick_budget_usd", "event_budget_usd"]
+    monkeypatch.setitem(config.WHEN, "tick_budget_usd", "reboot")
     after = text(Machine()).split("\n\n")
-    assert "Effort" in after[1] and "Effort" not in after[2]
-    assert stops().index("effort") < stops().index("model")     # and the arrows follow
+    assert "Tick budget" in after[2] and "Tick budget" not in after[1]
+    assert stops()[:4] == ["model", "max_budget_usd", "event_budget_usd", "tick_budget_usd"]
 
 
 def test_change_a_number_save_and_close():
@@ -239,7 +240,7 @@ def test_a_model_is_picked_from_the_list_or_typed():
               if line.strip().startswith(("›", "claude"))]
     assert listed == ["› claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5",
                       "claude-opus-4-8"]                    # the three, and the one that runs
-    assert "a wrong name ends Hallux at the next boot" in offered
+    assert "a wrong name is refused; saved, it ends Hallux at the next boot" in offered
     assert machine.calls == [("change", "model", "claude-sonnet-5-5"),
                              ("change", "model", "banana-1"), ("change", "model", "banana21")]
     assert title == "Config"

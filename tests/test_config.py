@@ -145,7 +145,8 @@ def test_check_knows_every_setting_and_no_other():
 def test_every_setting_says_when_a_change_takes_effect():
     assert set(config.WHEN) == {f.name for f in fields(Hardware)}
     assert set(config.WHEN.values()) == {"now", "reboot", "start"}
-    assert config.WHEN["tick_budget_usd"] == config.WHEN["event_budget_usd"] == "now"
+    now = {name for name, when in config.WHEN.items() if when == "now"}
+    assert now == {"tick_budget_usd", "event_budget_usd", "max_budget_usd", "model"}
 
 
 @pytest.mark.parametrize("name, text, value", [

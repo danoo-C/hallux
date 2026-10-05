@@ -20,7 +20,7 @@ CONFIG_FILE = Path(".hallux") / "config.toml"
 
 WHEN = {                                      # when a change of each setting takes effect
     "tick_budget_usd": "now", "event_budget_usd": "now", "max_budget_usd": "now",
-    "model": "reboot", "effort": "reboot", "fallback_model": "reboot",
+    "model": "now", "effort": "reboot", "fallback_model": "reboot",
     "status_bar": "start", "addons": "start", "keep_transcripts": "start", "os_sandbox": "start",
 }
 # A typed number: digits with at most one point, and at most twelve digits in front of it.

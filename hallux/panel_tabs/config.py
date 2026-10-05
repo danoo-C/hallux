@@ -146,19 +146,21 @@ def draw(view: View, state: State) -> Drawn:
             if name != state.open:
                 style = CURRENT if name == at else ""
                 click = name if when != "start" else None
-                rows.append([("", " " * INDENT, click), (style, label + values[name], click),
-                             ("", " " * (width - len(values[name]) + 2), click),
-                             (NOTE, note(name, view), click)])
+                rows.append([("", " " * INDENT, click), (style, label + values[name], click)])
+                if beside := note(name, view):
+                    rows[-1] += [("", " " * (width - len(values[name]) + 2), click),
+                                 (NOTE, beside, click)]
                 if name == at:
                     cursor = Point(0, len(rows) - 1)
                 continue
-            beside = ((REFUSED, state.refused) if state.refused
-                      else (NOTE, _warning(name) or note(name, view)))
             line = state.typed.text
             rows.append([("", " " * INDENT, None), ("bold", label, None),
                          (SELECTED if state.selected else TYPED, line, None),
-                         (TYPED, " " * (width - len(line)), None), ("", "  ", None),
-                         (*beside, None)])
+                         (TYPED, " " * (width - len(line)), None)])
+            if state.refused:
+                rows[-1] += [("", "  ", None), (REFUSED, state.refused, None)]
+            elif beside := _warning(name) or note(name, view):
+                rows[-1] += [("", "  ", None), (NOTE, beside, None)]
             cursor = Point(column + state.typed.cursor_position, len(rows) - 1)
             for choice in choices(name, view):
                 is_it = entered(name, _meant(choice)) == state.typed.text
@@ -181,11 +183,12 @@ def draw(view: View, state: State) -> Drawn:
 
 
 def _warning(name: str) -> str:
-    """A model name can't be checked here, so its open row says what a wrong one does."""
+    """A model name can't be checked here, so its open row says what a wrong one does. The
+    session refuses to switch to it; a boot that starts on it fails, and that ends Hallux."""
     if name != "model":
         return ""
-    return ("a wrong name fails the next answer" if config.WHEN[name] == "now"
-            else "a wrong name ends Hallux at the next boot")
+    return ("a wrong name is refused; saved, it ends Hallux at the next boot"
+            if config.WHEN[name] == "now" else "a wrong name ends Hallux at the next boot")
 
 
 def _meant(choice: str) -> str | None:

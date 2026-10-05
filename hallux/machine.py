@@ -109,7 +109,7 @@ class Machine:
                  from_flags: Iterable[str] = ()):
         self.disk = Disk(root)
         self.hardware = hardware                 # the settings as they are now
-        self.running = hardware                  # the settings this boot's session started with
+        self.running = hardware                  # what this boot's session runs on: see power_on
         self.unsaved: dict[str, object] = {}     # changed in this run and not saved yet
         self.from_flags = set(from_flags)        # the settings a flag set for this run
         self.notes: dict[str, str] = {}          # what the bar's note says, by reason
@@ -224,9 +224,11 @@ class Machine:
         self.disk.cwd = "/"
         self.session_spent = self.refilled_at = 0.0
         self.forget_events()
-        for budget in ("event_budget_usd", "max_budget_usd"):
-            self.note(budget, None)              # a new boot: nothing spent, heard or paused
-        self.running = self.hardware             # the bar shows what runs, not what is set
+        for reason in ("event_budget_usd", "max_budget_usd", "model"):
+            self.note(reason, None)              # a new boot: nothing spent, heard or waiting
+        # What runs, which the bar shows: the settings the session starts with, and of the
+        # effort what it really gets. A model that is switched to later keeps that effort.
+        self.running = dataclasses.replace(self.hardware, effort=self.hardware.model_effort)
         self.terminal.set_status(model=self.running.model, effort=self.running.model_effort)
         async with self.client_factory(options=self.options()) as client:   # empty RAM
             try:
@@ -359,6 +361,8 @@ class Machine:
             self.note("event_budget_usd", self.events_note())    # "used" may now be "off"
         if self.events.paused and not over and not events_used:
             self.events.pause(False)
+        if hw.model == self.running.model:
+            self.note("model", None)             # no model waits to be switched to
         if self.tick_spent < hw.tick_budget_usd:
             self.note("tick_budget_usd", None)   # the program ticks again with its next screen
         self.check_events()
@@ -595,6 +599,7 @@ class Machine:
                                 and not self.in_form else None)    # never under a form
         try:
             async with self.terminal.busy(interrupt, activity):
+                await self.switch_model(client)
                 await client.query(message)
                 async for msg in client.receive_response():
                     if isinstance(msg, StreamEvent):
@@ -628,6 +633,26 @@ class Machine:
         log.info("   %s, %d turns, %.1fs, $%.4f (this boot $%.4f)", result.subtype,
                  result.num_turns, result.duration_ms / 1000, turn_cost, self.session_spent)
         return result.result or "", interrupted
+
+    async def switch_model(self, client: ClaudeSDKClient) -> None:
+        """A model that was set in the panel runs from the next answer: the session is
+        switched just before a message goes out, never while an answer is written. A switch
+        that fails leaves the session as it is, and is tried again with the next message."""
+        old, new = self.running.model, self.hardware.model
+        if new == old:
+            return
+        try:
+            await client.set_model(new)
+        except Exception as e:                   # the SDK's own: "Model 'x' not found"
+            note = f"model not switched: {e}"
+            if self.notes.get("model") != note:  # said once
+                log.warning("%s (it stays %s)", note, old)
+                self.notify([note], "model")
+            return
+        self.running = dataclasses.replace(self.running, model=new)
+        log.info("model: %s -> %s", old, new)
+        self.note("model", None)
+        self.terminal.set_status(model=new, effort=self.running.model_effort)
 
     def show_while_written(self, stream: ScreenStream, event: dict) -> None:
         """Streaming: print the screen as the AI writes it."""

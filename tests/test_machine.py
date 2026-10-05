@@ -42,6 +42,8 @@ class FakeModel:
         self.interrupts = 0
         self.sessions = []                   # the messages each session received
         self.options = []
+        self.switches = []                   # set_model: (the model, messages sent before it)
+        self.refuses = {}                    # a model name: why the session won't switch to it
 
     def __call__(self, options):
         self.options.append(options)
@@ -71,6 +73,11 @@ class FakeClient:
 
     async def interrupt(self):
         self.model.interrupts += 1
+
+    async def set_model(self, model):
+        self.model.switches.append((model, len(self.model.sessions[-1])))
+        if model in self.model.refuses:
+            raise Exception(self.model.refuses[model])      # the SDK raises nothing finer
 
 
 class Typing:
@@ -1064,6 +1071,115 @@ def test_a_reboot_starts_the_count_at_zero(tmp_path):
     assert [len(session) for session in model.sessions] == [2, 1]
     assert notes_of(terminal) == ["budget used: $0.10 per boot"]
     assert machine.view().spent_since_refill == machine.view().spent_boot == pytest.approx(0.12)
+
+
+# --- switching the model: from the next answer, in the session that runs ----------------------
+
+OPUS, SONNET, HAIKU = "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"
+
+
+def on_the_bar(terminal):
+    """Every model and effort the bar was given, in order."""
+    return [(status["model"], status["effort"]) for status in terminal.statuses
+            if "model" in status]
+
+
+def test_a_new_model_answers_the_next_line(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="hallux")
+    seen = []
+
+    def set_it():
+        assert machine.change("model", SONNET) is None
+        seen.append((list(model.switches), machine.running.model, on_the_bar(terminal),
+                     machine.view().running.model, machine.view().hardware.model))
+
+    model = FakeModel(screen("boot\n"), screen("one\n"), screen("two\n"), screen("three\n"), HALT)
+    terminal = FakeTerminal("one", set_it, "two", "three", "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    # set, and not switched yet: the session and the bar are on the old model
+    assert seen == [([], OPUS, [(OPUS, "low")], OPUS, SONNET)]
+    # with the next line it is switched once, before that line goes out, and never again
+    assert model.switches == [(SONNET, 2)] and len(model.sessions[0]) == 5
+    assert on_the_bar(terminal) == [(OPUS, "low"), (SONNET, "low")]
+    assert machine.running.model == SONNET and len(model.sessions) == 1     # the same session
+    assert "model: claude-opus-5-5 -> claude-sonnet-5-5" in caplog.text
+    assert notes_of(terminal) == []
+
+
+def test_a_model_changed_back_is_no_switch(tmp_path):
+    def back_and_forth():
+        machine.change("model", SONNET)
+        machine.change("model", OPUS)
+
+    model = FakeModel(screen("boot\n"), screen("one\n"), HALT)
+    terminal = FakeTerminal(back_and_forth, "one", "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert model.switches == [] and on_the_bar(terminal) == [(OPUS, "low")]
+
+
+def test_a_switch_that_fails_is_noted_and_tried_again(tmp_path, capsys, caplog):
+    refused = "model not switched: Model 'claude-banana-9' not found"
+    model = FakeModel(screen("boot\n"), screen("one\n"), screen("two\n"), screen("three\n"), HALT)
+    model.refuses["claude-banana-9"] = "Model 'claude-banana-9' not found"
+    seen = []
+    look = lambda: seen.append((dict(machine.notes), machine.running.model))     # noqa: E731
+    terminal = FakeTerminal(lambda: machine.change("model", "claude-banana-9"), "one", look,
+                            "two", lambda: machine.change("model", SONNET), "three", look, "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert kinds(model) == ["boot", "input", "input", "input", "input"]     # every line went out
+    assert terminal.screen == "boot\none\ntwo\nthree\n"
+    assert seen == [({"model": refused}, OPUS),             # after the answer: still there
+                    ({}, SONNET)]                           # a switch worked: gone at once
+    assert model.switches == [("claude-banana-9", 1), ("claude-banana-9", 2), (SONNET, 3)]
+    assert notes_of(terminal) == [refused, None]            # said once; gone when one works
+    assert on_the_bar(terminal) == [(OPUS, "low"), (SONNET, "low")]
+    assert capsys.readouterr().err.count(f"hallux: {refused}\n") == 1
+    assert caplog.text.count("model not switched") == 1
+
+
+def test_the_note_of_a_failed_switch_goes_with_its_model(tmp_path):
+    model = FakeModel(screen("boot\n"), screen("one\n"), screen("two\n"), HALT)
+    model.refuses["claude-banana-9"] = "Model 'claude-banana-9' not found"
+    terminal = FakeTerminal(lambda: machine.change("model", "claude-banana-9"), "one",
+                            lambda: machine.change("model", OPUS), "two", "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert notes_of(terminal) == ["model not switched: Model 'claude-banana-9' not found", None]
+    assert model.switches == [("claude-banana-9", 1)]       # back on the one that runs: no switch
+
+
+def test_after_a_reboot_the_new_model_runs_and_nothing_waits(tmp_path):
+    reboot = [lambda: machine.change("model", SONNET)] + result(
+        screen("", prompt="", tail="<reboot/>"))            # set while the last answer is written
+    model = FakeModel(screen("boot 1\n"), reboot, screen("boot 2\n"), screen("one\n"), HALT)
+    terminal = FakeTerminal("reboot", "one", "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert [options.model for options in model.options] == [OPUS, SONNET]
+    assert model.switches == [] and on_the_bar(terminal) == [(OPUS, "low"), (SONNET, "low")]
+
+
+def test_the_effort_on_the_bar_is_the_one_the_session_got(tmp_path):
+    """Haiku runs without an effort. A session that started with one has it again on the next
+    model; one that started on Haiku was given none, and has none after a switch either."""
+    def run_through(first, *later):
+        model = FakeModel(*[screen("ok\n")] * (len(later) + 1), HALT)
+        keys = [key for name in later for key in (lambda name=name: machine.change("model", name),
+                                                  "ls")]
+        terminal = FakeTerminal(*keys, "exit")
+        machine = Machine(tmp_path, Hardware(model=first, effort="high"), terminal,
+                          client_factory=model)
+        asyncio.run(machine.run())
+        return on_the_bar(terminal), machine.view()
+
+    bar, view = run_through(SONNET, HAIKU, OPUS)
+    assert bar == [(SONNET, "high"), (HAIKU, None), (OPUS, "high")]
+    bar, view = run_through(HAIKU, SONNET)
+    assert bar == [(HAIKU, None), (SONNET, None)]
+    assert view.hardware.effort == "high" and view.running.model_effort is None
 
 def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monkeypatch):
     from hallux import app, machine, terminal

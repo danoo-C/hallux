@@ -4,8 +4,8 @@
 [The steps](#the-steps). The design it follows is
 [config-panel.md](../../config-panel.md), in which no question is open. The decisions this
 plan takes on its own are in a table below. They are my proposals, and the user hasn't
-confirmed them yet. One check still has to happen before part of the build; it is under
-[Before the build](#before-the-build), beside the one that is done.
+confirmed them yet. The two checks that had to happen before parts of the build are both
+done; they are under [Before the build](#before-the-build).
 
 **Reviewed on 2026-10-04:** [plans-review-2026-10-04.md](../../plans-review-2026-10-04.md).
 It found four things that would have gone wrong and a list of gaps. The user accepted a fix
@@ -145,7 +145,7 @@ are in the design's status. The last one I checked while writing this plan.
 | Check | Who | Before | What it decides | Status |
 |---|---|---|---|---|
 | Run `cat -v`, press Ctrl+F12: `^[[24;5~` should appear | The user, in the terminal Hallux runs in | Step 6 | The key. If nothing arrives, another key takes its place, and only `OPEN_KEY` changes | **Done on 2026-10-04:** `^[[24;5~` appeared. The key is Ctrl+F12 |
-| Switch the model of a running session, with a model call | Whoever builds step 4, when the user says go. A few cents | Step 4 | Whether the model changes at once or at the next reboot, and what happens with Haiku | Open |
+| Switch the model of a running session, with a model call | Whoever builds step 4, when the user says go. A few cents | Step 4 | Whether the model changes at once or at the next reboot, and what happens with Haiku | **Done on 2026-10-05:** it changes with the next answer, also to and from Haiku. The check cost $0.22. The numbers are in step 4's file |
 
 ---
 
@@ -195,7 +195,7 @@ Each step can be merged by itself. A step needs the ones named beside it.
 | 1. Checking and saving a setting | [01-saving.md](01-saving.md) | | Built on 2026-10-05 |
 | 2. A setting changes in a running machine | [02-changes.md](02-changes.md) | 1 | Built on 2026-10-05 |
 | 3. The budget per boot | [03-budget.md](03-budget.md) | 2 | Built on 2026-10-05 |
-| 4. Switching the model | [04-model.md](04-model.md) | 2 | Not built |
+| 4. Switching the model | [04-model.md](04-model.md) | 2 | Built on 2026-10-05, after step 5 |
 | 5. The panel by itself | [05-panel.md](05-panel.md) | 2 | Built on 2026-10-05 |
 | 6. The panel at the shell | [06-shell.md](06-shell.md) | 5 | Not built |
 | 7. The panel over a full-screen program | [07-full-screen.md](07-full-screen.md) | 3, 6 | Not built |
@@ -230,8 +230,9 @@ What the review of 2026-10-04 changed in the steps. The user accepted all of it.
 - **A wrong model name that is saved ends Hallux at the next boot,** and at every start after
   it, until the file is edited or `--model` is passed. Nothing in Hallux knows which names
   exist. The Model row says so.
-- **The model switch may not work,** or not with Haiku. Then the model changes at the next
-  reboot, as the design says, and step 4 shrinks to a few lines.
+- **The model switch works,** also to and from Haiku: checked on 2026-10-05 (step 4). The
+  first answer on the new model costs more, once: it reads the whole conversation of the
+  boot at the full price.
 - **I can't see a real terminal.** Every test here runs on a pipe, with an output that goes
   nowhere. Whether the shell's screen is back exactly, with its scrollback and the pinned
   bar, shows only in the live run (step 8). Full-screen programs come and go that way today,
@@ -242,8 +243,9 @@ What the review of 2026-10-04 changed in the steps. The user accepted all of it.
   order, and steps 6 and 7 each test it.
 - **The budget per boot is checked between answers.** One answer can go over it. How far is
   measured in the live run.
-- **A wrong model name shows late:** as "model failed" on the bar, with the next answer.
-  Nothing in Hallux knows which names exist.
+- **A wrong model name isn't switched to.** The session refuses it, the bar says
+  `model not switched`, and the answers go on from the model that ran. Saved, it still ends
+  Hallux at the next boot.
 - **This plan and the plan for addon agents change the same files:** `terminal.py`,
   `blockmode.py`, `statusbar.py`, `config.py` and `machine.py`. They are built one after the
   other, this one first.
