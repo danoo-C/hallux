@@ -48,9 +48,9 @@ As the machine wrote it:
 
 | Point of the report | Plan | What kind of fix | Status |
 |---|---|---|---|
-| 1. Ticks stop and nothing says so | [point-1-ticks.md](point-1-ticks.md) | The machine marks every message while a program run has no ticks left, and the prompt says what that means | Built on 2026-10-05. The two tries in the test world are the user's, and open |
+| 1. Ticks stop and nothing says so | [point-1-ticks.md](point-1-ticks.md) | The machine marks every message while a program run has no ticks left, and the prompt says what that means | Built on 2026-10-05, and tried by the user |
 | 2. The user's file, or the program's | [point-2-whose-file.md](point-2-whose-file.md) | One rule in the prompt | Built on 2026-10-05, and tried by the user: "it did exactly what it should have done" |
-| 4. A card's numbers against what the user asked for | [point-4-requests-and-cards.md](point-4-requests-and-cards.md) | One rule in the prompt with the order of rule, request, card and prompt, and where a `hallux` command goes | Built on 2026-10-05. The try in the test world is the user's, and open |
+| 4. A card's numbers against what the user asked for | [point-4-requests-and-cards.md](point-4-requests-and-cards.md) | One rule in the prompt with the order of rule, request, card and prompt, and where a `hallux` command goes | Built on 2026-10-05, and tried by the user |
 
 This table is the only place that holds the status.
 
