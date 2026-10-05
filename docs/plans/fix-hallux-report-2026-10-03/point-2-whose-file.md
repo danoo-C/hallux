@@ -63,9 +63,11 @@ one run of kittymusic:
   repair costs the user's work.
 - **The error names the place,** so the user can fix it or ask for the fix. The music addon
   reports each problem with its line already.
-- **Under PROGRAMS, not under THE DISK IS REAL.** Rules made with `hallux` override the
-  prompt except for REPLY FORMAT and THE DISK IS REAL. Under PROGRAMS, a user who wants it
-  the other way can say so: `hallux kittymusic may repair my scores`.
+- **Under PROGRAMS, not under THE DISK IS REAL.** Nothing overrides THE DISK IS REAL. Under
+  PROGRAMS, a card can change the rule for its own program, and a rule made with `hallux`
+  for all of them ([point 4](point-4-requests-and-cards.md) has the order). A user who
+  wants it the other way says so: `hallux kittymusic may repair my scores`. That line goes
+  into kittymusic's card.
 
 **`docs/concept.md`:** "The rules for all of them", under "Programs, Python and friends",
 gets the rule, beside "Side effects are real". The prompt under "The system prompt" is the
@@ -77,9 +79,13 @@ first draft, kept for history. It stays as it is.
   formats.
 - **kittymusic's card.** This plan doesn't change it, but its line is wider than the new
   rule: "a score the machine composed itself is fixed and replayed" has no "still as it
-  wrote it". A card describes its program, so the machine may go on following it. The user
-  can tighten it:
-  `hallux kittymusic fixes a score only when it composed it in this run and nobody changed it since; any other broken score it reports and leaves alone`.
+  wrote it".
+  - **The card comes before the prompt here.** For its own program a card comes before
+    what the prompt says about programs in general
+    ([point 4](point-4-requests-and-cards.md) writes that down). So kittymusic goes on
+    repairing such a score until its card says otherwise.
+  - **One line tightens it,** and it is the first step of the try below:
+    `hallux kittymusic fixes a score only when it composed it in this run and nobody changed it since; any other broken score it reports and leaves alone`.
 
 ## Decisions
 
@@ -89,7 +95,8 @@ first draft, kept for history. It stays as it is.
 | Asking "repair it? y/n" | Not the default | A program that asks would stop every script. One that should ask can have it in its card |
 | A file the program wrote in this run | It may correct it, as long as the file is still as it wrote it | A composer has to be able to fix its own draft. The score in the report was written in that run and then changed by hand, so "in this run" alone would have allowed the repair |
 | A file the program can't be sure of | It is the user's | A wrong report costs a command, a wrong repair costs the user's work |
-| Where the rule stands | PROGRAMS | So that a rule from `hallux` can change it for one program |
+| Where the rule stands | PROGRAMS | So that a card can change it for one program, and a rule from `hallux` for all |
+| kittymusic's card against the rule | The card comes first. The user tightens it with one `hallux` line, the first step of the try | A card comes before the prompt's general rules ([point 4](point-4-requests-and-cards.md)), and its line allows the repair that was made |
 
 ## Tests
 
@@ -101,20 +108,27 @@ No test can show what the AI does with it.
 
 ## Done when
 
-The test passes, and the user has tried it in the test world, the way it happened. If the
-card's line is to be tightened, do that first.
+The test passes, and the user has tried it in the test world, the way it happened.
 
-1. Start kittymusic and ask for a short song. It composes one and plays it.
-2. Stop the song and stay in kittymusic. Outside the machine, open the score in your own
+1. Tighten the card, with the `hallux kittymusic fixes a score only when…` line from "What
+   doesn't change" above. Without it the card allows the repair, and the try can't show the
+   rule.
+2. Start kittymusic and ask for a short song. It composes one and plays it.
+3. Stop the song and stay in kittymusic. Outside the machine, open the score in your own
    editor (`home/<user>/Music/<song>.score` in the world's directory), take one
    `INSTRUMENT` block out and save. Keep a copy of the broken file beside it.
-3. In kittymusic, play that song again.
-4. Outside the machine, compare the score with the copy: `diff`.
-5. In kittymusic, ask for the repair in words.
+4. In kittymusic, play that song again.
+5. Outside the machine, compare the score with the copy: `diff`.
+6. In kittymusic, ask for the repair in words.
 
-**Should happen:** in 3 the program says what is missing and on which lines, and plays
-nothing. In 4 the two files are the same. In 5 the program repairs the score and says what
+**Should happen:** in 1 the machine confirms the change, and `cat /usr/local/bin/kittymusic`
+shows the new line. In 4 the program says what is missing and on which lines, and plays
+nothing. In 5 the two files are the same. In 6 the program repairs the score and says what
 it changed.
+
+**If the line of step 1 lands among the rules** and not in the card, it holds there too.
+That can happen while point 4 isn't built: only then does the prompt say where such a line
+goes.
 
 **A second try,** cheaper: the same with a copy of a score, `cp song.score broken.score`,
 edited in the machine's own editor. The program never wrote that file, so it reports and

@@ -23,6 +23,12 @@
   not when it has.
 - **Since the settings panel, ticks also come back:** a higher budget or Refill budgets
   gives the program its tick again. The AI isn't told that either; a `<tick>` just arrives.
+- **A lowered tick budget counts from the next screen.** When the budget is set under what
+  the run has spent while a program ticks, one more `<tick>` still goes out, and the pause
+  comes with the screen after it.
+- **A boot that ends inside a program** (a form with `<reboot/>`) leaves the program's
+  state behind. The count, `in_form` and the bar's note are all still there while the next
+  `<boot>` is sent.
 
 **What went wrong,** from the machine's log in the test world, on 2026-10-02:
 
@@ -65,9 +71,15 @@ machine sends says so:
 - **At the shell the count is zero,** so there is no mark there. One exception: with
   `tick_budget_usd = 0` ticks are off, and every message of the boot carries the mark,
   `<boot>` too.
-- **A boot starts the count at zero.** Today only leaving a program does that. A boot that
-  ends inside a program (a form with `<reboot/>`) leaves the count, and the next boot's
-  messages would carry a mark that isn't true.
+- **No `<tick>` carries the mark.** A tick that arrives while the tick budget is used up is
+  not sent: the program stays on screen without ticks, and the bar gets its note. It is
+  what `block_mode` does already while the boot's budget is used up. It covers a budget
+  that is lowered under a ticking program, where the tick would otherwise go out with the
+  mark: a tick that says no tick comes.
+- **A boot's end leaves the program.** `power_on` ends with `leave_block_mode()` in place
+  of `terminal.end_form()`. That resets the count, `in_form` and the bar's note together,
+  however the boot ended. Today only leaving a program does that, so after a boot that
+  ends inside a program the next `<boot>` would carry a mark that isn't true.
 - **The boot's budget needs no mark.** While it is used up, the machine sends nothing at
   all. When it is raised, the ticks are back before the next key goes out.
 - **`ticks_stopped` stays for what it does today:** it starts the ticks again when a budget
@@ -94,6 +106,15 @@ its place:
 - **"On the first message that arrives":** a program may still wait for its screen, as
   kittymusic does. It may not wait for a tick alone.
 
+**And under INPUT,** the first sentence names the mark. With `tick_budget_usd = 0` it is on
+`<boot>` and on the shell's messages too, and that sentence lists what every message
+carries:
+
+```text
+Every message carries the cwd, the local time and the terminal size (cols, rows), and
+ticks="paused" while ticks are paused (see RAW MODE). It is one of these:
+```
+
 **`docs/concept.md`:** the "Ticks" line under raw mode says that the program "just waits
 for a key". It gets the mark and the rule.
 
@@ -102,17 +123,23 @@ for a key". It gets the mark and the rule.
 - **The bar's note,** `live updates paused: tick budget used`, and the panel. They are the
   user's side of the same thing, and they work.
 - **No message when the ticks stop.** See the decisions below.
-- **A form with fields never ticks.** The parser drops its tick already
+- **A form without `raw="yes"` never ticks.** The parser drops its tick already
   (`hallux/protocol.py`), and `tests/test_protocol.py` holds that.
 - **Cards on the disk.** kittymusic's card stays as it is:
   - Its START ORDER, `play()` on the first tick, holds while ticks run.
   - Its NO TICKS section starts the song on the first key or click. It was written when the
-    machine couldn't know beforehand that ticks were paused. Now it knows, and the prompt
-    says to start at once.
-  - The card's "NEVER call play() before the now-playing screen is on screen" speaks
-    against that. In this one case the card and the prompt disagree. If the song then still
-    waits for a key, one line settles it:
-    `hallux kittymusic starts the song at once when ticks are paused`.
+    machine couldn't know beforehand that ticks were paused.
+  - **The card comes before the prompt here.** For its own program a card comes before
+    what the prompt says about programs in general
+    ([point 4](point-4-requests-and-cards.md) writes that down). The card says "NEVER call
+    play() before the now-playing screen is on screen", so with this card the song still
+    waits for the first key while ticks are paused. The prompt's "at once" is for programs
+    whose card doesn't say.
+  - **What the mark still gives kittymusic:** the message that picks the song carries it,
+    so the now-playing screen can say from the start that a key is needed.
+  - **To start at once,** one line changes the card:
+    `hallux kittymusic starts the song at once when ticks are paused`. It is the first step
+    of the try below.
 
 ## Decisions
 
@@ -120,7 +147,10 @@ for a key". It gets the mark and the rule.
 |---|---|---|
 | What the mark means | No tick comes now. It is on every message while the program run's tick budget is used up | The stuck song was picked on a screen without a tick. A mark only on the screens that tick would not have been on that message |
 | When the AI is told | With the next message that goes anyway | A message of its own is a model call, made after the budget is used up |
-| A last tick that says "this is the last" | Not built | The machine learns that the budget is used up from the cost of that tick's answer, so it can't mark the tick before sending it |
+| A last tick that says "this is the last" | Left for later | The machine learns that the budget is used up from the cost of that tick's answer. It could estimate from the tick before, and pause after a tick it labelled. That needs more state: the last cost, a flag for "paused early", and the mark and the restart following that flag. The bar tells the user already, and the stuck song is fixed without it |
+| A tick that arrives while the tick budget is used up | It is not sent | A budget lowered under a ticking program lets one more tick out today, and it would carry the mark. The boot's budget is held the same way already |
+| The end of a boot | It leaves the program: the count, `in_form` and the bar's note | A boot that ends inside a program leaves all three behind while the next `<boot>` goes out |
+| kittymusic's card against "at once" | The card comes first. The user changes it with one `hallux` line, the first step of the try | A card comes before the prompt's general rules ([point 4](point-4-requests-and-cards.md)), and its start order is there on purpose |
 | What the mark says | `paused`, and no reason | The budgets are hardware. The prompt names "a budget" and no more |
 | The boot's budget | No mark | Nothing is sent while it is used up, and the ticks are back as soon as it is raised |
 | Ticks switched off, `tick_budget_usd = 0` | The mark is on every message of the boot | It is true: no program will tick. It costs a few characters |
@@ -138,13 +168,21 @@ In `tests/test_machine.py`, with the fake model and the fake terminal:
 - the budget is raised, or the budgets are refilled: the next message has no mark;
 - the program is left: the next `<input>` at the shell has no mark;
 - `tick_budget_usd = 0`: every message has the mark, `<boot>` and `<input>` too;
-- a boot that ends inside a program whose tick budget is used up: the next boot's messages
-  have no mark;
+- the tick budget is lowered under what the run has spent while a program ticks: the tick
+  that arrives then is not sent, the form is kept without ticks and the bar has its note.
+  Raising the budget starts the ticks again;
+- no `<tick>` in any of these tests has the mark;
+- a boot that ends inside a program whose tick budget is used up: the next `<boot>` has no
+  mark, the bar's note is gone, and the machine is no longer in a form;
 - the boot's budget is used up and then raised: the `<keys>` that goes then has no mark;
   with the tick budget used up as well, it has;
 - Ctrl-C while the AI answers inside a paused program: the `<key … interrupted="yes">` has
   the mark;
-- the prompt has both new rules, and no longer says "just waits for a key".
+- the prompt has both new rules, no longer says "just waits for a key", and names the mark
+  under INPUT.
+
+The test that holds a budget lowered while a tick is answered stays as it is: the next
+screen comes up without ticks.
 
 ## Done when
 
@@ -161,11 +199,16 @@ and it is up to date. After the budget is raised it moves again, and that line i
 
 **The case from the report,** with a song that exists, so nothing is composed:
 
-1. In the panel, set the tick budget to `0.01`.
-2. Start kittymusic and play a song. After a tick or two the bar says
+1. `hallux kittymusic starts the song at once when ticks are paused`. The card comes before
+   the prompt, so the card has to say it: see "Cards on the disk" above.
+2. In the panel, set the tick budget to `0.01`.
+3. Start kittymusic and play a song. After a tick or two the bar says
    `live updates paused: tick budget used`.
-3. Go to the library with `l`, and pick a song.
+4. Go to the library with `l`, and pick a song.
 
-**Should happen:** the song starts without another key or click, and the screen says that
-its updates are paused. If it waits for the first key, that is the card's START ORDER: see
-"Cards on the disk" above.
+**Should happen:** in 1 the card says that a song starts at once while ticks are paused. In
+4 the song starts without another key or click, and the screen says that its updates are
+paused.
+
+**Without step 1** the card holds: the song waits for the first key, and the now-playing
+screen should say from the start that its updates are paused.
