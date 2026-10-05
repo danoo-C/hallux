@@ -55,7 +55,7 @@ The numbers are the ones of the plan's list.
 **Should happen:** after Esc the prompt is there with `echo hel` on it, and the cursor
 behind it. The command that runs is `echo hello`.
 
-- [ ] Tried
+- [x] Tried
 - Result:
 
 ### 5. The budget per boot
@@ -79,7 +79,7 @@ behind it. The command that runs is `echo hello`.
   `spent since the refill: $0.00 · this boot: $…`. The total on the right of the bar hasn't
   dropped. Then `echo again` runs.
 
-- [ ] Tried
+- [x] Tried
 - The cap, and what the boot had spent when it was reached:
 - Result:
 
@@ -95,16 +95,16 @@ behind it. The command that runs is `echo hello`.
 before. That answer costs more than the one after it: the new model reads the whole
 conversation of the boot once.
 
-- [ ] Tried
+- [x] Tried
 - The three totals:
-- Result:
+- Result: it works
 
 **If you like, a wrong name too:** open the row again and type `claude-banana-9`. With the
 next command the bar should say `model not switched: Model 'claude-banana-9' not found`, and
 the answer should still come, from the model that ran. Put a real name back, and the note
 should go with the next command. Don't save the wrong name: a boot that starts on it fails.
 
-- [ ] Tried
+- [x] Tried
 - Result:
 
 ### 7. The effort
@@ -116,7 +116,7 @@ should go with the next command. Don't save the wrong name: a boot that starts o
 
 **Should happen:** the bar shows the new effort after the reboot, and not before.
 
-- [ ] Tried
+- [x] Tried
 - Result:
 
 ### 8. Save
@@ -129,7 +129,7 @@ should go with the next command. Don't save the wrong name: a boot that starts o
 **Should happen:** only the lines you changed are new. Your comments and every other line
 are as they were. A setting that had no line has one at the end.
 
-- [ ] Tried
+- [x] Tried
 - Result:
 
 ### 9. The window
@@ -142,7 +142,7 @@ are as they were. A setting that had no line has one at the end.
 **Should happen:** the panel follows the window; on a small one the rows scroll and the
 buttons stay. After it closes, the bar is on the last row and the prompt is above it.
 
-- [ ] Tried
+- [x] Tried
 - Result:
 
 ### 10. Esc and the arrows
@@ -153,7 +153,7 @@ buttons stay. After it closes, the bar is on the last row and the prompt is abov
 
 **Should happen:** Esc feels quick, and an arrow key never closes the panel.
 
-- [ ] Tried
+- [x] Tried
 - Result:
 
 ### 11. The mouse
@@ -165,7 +165,7 @@ buttons stay. After it closes, the bar is on the last row and the prompt is abov
 **Should happen:** the clicks do what the keys do. At the shell the mouse is the terminal's
 again: selecting and scrolling back work as before the panel was opened.
 
-- [ ] Tried
+- [x] Tried
 - Result:
 
 ### 12. The hard exit from inside the panel
@@ -176,7 +176,7 @@ again: selecting and scrolling back work as before the panel was opened.
 **Should happen:** both end Hallux at once with `hallux: power cut`. The terminal is left
 usable: the cursor is there, and moving the mouse prints nothing.
 
-- [ ] Tried
+- [x] Tried
 - Result:
 
 ### 13. A password prompt
@@ -188,7 +188,7 @@ usable: the cursor is there, and moving the mouse prints nothing.
 **Should happen:** after Esc the password prompt is there again, empty. Only what you type
 now counts. The password prompt after that one behaves as always.
 
-- [ ] Tried
+- [x] Tried
 - Result:
 
 ---
@@ -199,4 +199,4 @@ An answer can arrive while the panel is open. Nothing of it is drawn until the p
 closes; the bar on the panel's last row stops spinning and shows the new cost.
 
 - **Is that enough to notice that the answer is there?**
-- Your word:
+- Your word: yeah, its enoght

@@ -105,29 +105,46 @@ Decided while building:
 
 ## What the live run taught
 
-**Partly run.** The user used the panel in their own terminal on 2026-10-05, while steps 6
-and 7 were built, and reported in their own words. What they weren't asked about, or didn't
-say, is open.
+**Run by the user on 2026-10-05,** in their own terminal, on the test world. The first
+points came up while steps 6 and 7 were built. The rest the user went through with
+[live-run-checklist.md](live-run-checklist.md), from 08:56 to 09:54, and ticked every one.
+Their rule for it: a point with nothing written under it went as expected. Two points they
+tried once more at 10:04, after the log had shown that they hadn't really been reached.
 
-| | Point | What is known |
-|---|---|---|
-| 1 | The key, with half a line typed | Not reported by itself. The user was asked to try it with point 2 |
-| 2 | The screen at the shell, during an answer | **A bug, found by the user.** The panel was opened during the boot. Afterwards a copy of the bar stood in the boot's text and the prompt lay on the bar's row. The kept text had been printed before the region was pinned again. Fixed in step 6. Then: "now it works perfectly" |
-| 3 | The screen in a program | The user was asked to try an editor with unsaved text, and vim in normal mode: "this is really working nicely" |
-| 4 | The tick budget | Asked with point 3, a paused player with a higher budget and with Refill budgets: the same answer |
-| 5 | The budget per boot: held line, how far over, Refill | Open |
-| 6 | The model: the bar, and what the first answer cost | Open in the user's terminal. The check of step 4 has the numbers |
-| 7 | The effort, over a reboot | Open |
-| 8 | Save, and the comments in `config.toml` | Open |
-| 9 | The window resized while the panel is open | Open |
-| 10 | Esc and the arrows, also over ssh | Open. After the demo of step 5 the user said "it feels great" |
-| 11 | The mouse, and selecting text at the shell afterwards | Open |
-| 12 | The hard exit from inside the panel | Open |
-| 13 | A password prompt | Open |
+The numbers are not the user's. They are from the test world's own log,
+`test-hallux/.hallux/hallux.log`, which has a line for each change, each save and each
+answer's cost.
+
+| | Point | What the user reported | What the log adds |
+|---|---|---|---|
+| 1 | The key, with half a line typed | As expected | |
+| 2 | The screen at the shell, during an answer | **A bug, found by the user.** The panel was opened during the boot. Afterwards a copy of the bar stood in the boot's text and the prompt lay on the bar's row. Fixed in step 6. Then: "now it works perfectly" | |
+| 3 | The screen in a program | An editor with unsaved text, and vim in normal mode: "this is really working nicely" | |
+| 4 | The tick budget | A paused player moves again with a higher budget: the same answer. Tried again on the day of the checklist: "the tick budget works" | The tick budget was raised from 1.25 to 10. In the second try it was set to $0.01 and, a minute and a half later, to $10 |
+| 5 | The budget per boot | As expected | The cap was set to $0.16 when the boot had spent $0.1384. The next answer cost $0.0261 and took the boot to $0.1644: **$0.0044 over the cap.** Nothing was sent for 18 seconds, until the cap was taken away, and the next line went through. **No refill is in the log,** of this run or of an earlier one |
+| 6 | The model | "it works" | From Opus to Sonnet: the first answer cost $0.0656, the one after it $0.0054. From Sonnet to Haiku: the first answer cost $0.0287. Then back to Opus. Each switch happened with the next message, as built |
+| 6 | A name that is no model | "the not existant model message works" | The first time `claude-banana-89` was put back before a message went out, so no switch was tried. The second time `claude-banana-45` was set, and four seconds later: `model not switched: Model 'claude-banana-45' not found (it stays claude-opus-5-5)`. The right name was put back after that |
+| 7 | The effort, over a reboot | As expected | Low to medium, then `reboot` five seconds later |
+| 8 | Save, and the comments in `config.toml` | As expected | Eleven saves. The file has its three comments and its first lines as they were. `effort`, `fallback_model` and `model` got lines at the end. The line of `max_budget_usd` was written and taken out again |
+| 9 | The window resized while the panel is open | As expected | |
+| 10 | Esc and the arrows | As expected: "yeah i tried esc and arrows". Not over ssh: "it should work over ssh. let it be a test for the future" | |
+| 11 | The mouse, and selecting text at the shell afterwards | As expected | |
+| 12 | The hard exit from inside the panel | As expected | Two power cuts, 22 seconds apart |
+| 13 | A password prompt | As expected | |
+| | Is the bar enough to notice an answer behind the panel? | "yeah, its enoght" | |
+
+**One thing no real run has shown yet,** by the log: **Refill budgets.** The button was
+never pressed in the test world; a paused program was made to move again with a higher
+number each time. What the button does is covered by the tests, and by the run on a
+pseudo-terminal in step 7, where a paused program ticked again after it.
+
+**What the numbers say:**
+
+- **One answer goes over the cap by less than that answer costs.** Here an answer of $0.026
+  ended $0.004 over. A long answer on a large model can go over by more: the check sits
+  between two answers.
+- **The first answer after a model switch costs several times a normal one.** $0.066 against
+  $0.005 on Sonnet, in a boot that had spent $0.19 before.
 
 **One more thing the user saw:** at 80 columns the note of the budget per boot is cut after
 a refill. They don't mind it at that width.
-
-**The open points are written out for the user** in
-[live-run-checklist.md](live-run-checklist.md): what to do, what should happen, and a line
-for what was seen. Their results go into the table above.

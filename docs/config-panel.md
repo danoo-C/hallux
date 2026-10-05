@@ -2,8 +2,8 @@
 
 **Status:** designed on 2026-10-03, and built on 2026-10-05 in the eight steps of
 [plans/config-panel](plans/config-panel/README.md). Each step's file says under "As built"
-where the code went another way than this page. The user has used it in a real terminal;
-which points of the live run are still open is in the plan's
+where the code went another way than this page. The user went through the live run in
+their own terminal the same day; what it showed is in the plan's
 [step 8](plans/config-panel/08-live-run.md) and under
 [Still to find out](#still-to-find-out). The idea is the user's: a
 panel inside Hallux that changes the machine's settings while it runs, saves them, and gives
@@ -539,7 +539,8 @@ Every row was accepted on 2026-10-03, with the rest of the recommendations.
 
 ## Still to find out
 
-Each needed a run. Four have their answer; four are still open.
+Each needed a run, and each has had one. One part of one point is left for later: a slow
+line.
 
 - **Answered on 2026-10-04: Ctrl+F12 reaches Hallux in the user's terminal.** The user ran
   `cat -v`, pressed it, and `^[[24;5~` appeared. So the key stands. In another terminal
@@ -555,14 +556,19 @@ Each needed a run. Four have their answer; four are still open.
   bar's region was pinned again, so the bar's row went up into the text. After the fix:
   "now it works perfectly". The same over a full-screen program: "this is really working
   nicely".
-- **Still open: a window that is resized while the panel is open.** The tests cover it on a
-  pipe; nobody has looked at it in a real terminal.
-- **Still open: whether the short wait after Esc is safe on a slow line.** Over ssh the
-  bytes of an arrow key can arrive apart, and the first one alone is Esc.
-- **Still open: by how much one answer goes over the budget per boot,** now that Hallux
-  checks between answers.
-- **Still open: whether the bar is enough** to tell you that an answer arrived while the
-  panel was open.
+- **Answered on 2026-10-05: a window that is resized while the panel is open** comes back
+  right in the user's terminal.
+- **Answered on 2026-10-05, for the user's own terminal: the short wait after Esc.** Esc is
+  quick there, and an arrow key never closed the panel: "yeah i tried esc and arrows".
+  **Left for later: a slow line.** Over ssh the bytes of an arrow key can arrive apart, and
+  the first one alone is Esc. The user didn't try it over ssh, expects it to work, and keeps
+  it as a test for the future. If an arrow key ever closes the panel there, the wait is one
+  number, `ESCAPE_SECONDS` in `hallux/blockmode.py`.
+- **Answered on 2026-10-05: by how much one answer goes over the budget per boot.** In the
+  live run an answer of $0.026 took a boot $0.004 over a cap of $0.16. It can't be more than
+  the cost of the answer that crosses the cap.
+- **Answered on 2026-10-05: the bar is enough** to tell you that an answer arrived while
+  the panel was open. The user: "yeah, its enoght".
 
 ---
 

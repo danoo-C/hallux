@@ -1,7 +1,10 @@
 # Plan: the config panel
 
-**Status:** written on 2026-10-04. What is built is in the table under
-[The steps](#the-steps). The design it follows is
+**Status:** written on 2026-10-04, and **built: all eight steps, with the live run, on
+2026-10-05.** The user declared it built that day. What each step built is in the table
+under [The steps](#the-steps), and two things are left for later: the Refill budgets button
+has not been pressed in a real run, and Esc has not been tried over ssh
+([step 8](08-live-run.md)). The design it follows is
 [config-panel.md](../../config-panel.md), in which no question is open. The decisions this
 plan takes on its own are in a table below. They are my proposals, and the user hasn't
 confirmed them yet. The two checks that had to happen before parts of the build are both
@@ -199,7 +202,7 @@ Each step can be merged by itself. A step needs the ones named beside it.
 | 5. The panel by itself | [05-panel.md](05-panel.md) | 2 | Built on 2026-10-05 |
 | 6. The panel at the shell | [06-shell.md](06-shell.md) | 5 | Built on 2026-10-05, and tried by the user: "now it works perfectly" |
 | 7. The panel over a full-screen program | [07-full-screen.md](07-full-screen.md) | 3, 6 | Built on 2026-10-05, and tried by the user: "this is really working nicely" |
-| 8. The bar, the documentation and the live run | [08-live-run.md](08-live-run.md) | 4, 7 | Built on 2026-10-05. The live run is partly done: its open points are in the step's file |
+| 8. The bar, the documentation and the live run | [08-live-run.md](08-live-run.md) | 4, 7 | Built on 2026-10-05, and the live run is done: the user went through every point. One small thing no real run has shown yet, the Refill budgets button, is named in the step's file |
 
 Steps 3, 4 and 5 don't depend on each other, and any of them can come first. This table is
 the only place that holds the status.

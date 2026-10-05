@@ -5,8 +5,10 @@ order the steps of the two plans are built, what has to happen before some of th
 a step is worked. It holds no status: each plan's README has a table for that, and those
 two tables are the only place that says what is built.
 
-**Where things stand:** both features are designed, planned and reviewed. Building began on
-2026-10-05 with the panel's step 1. The two tables say how far it is.
+**Where things stand:** both features are designed, planned and reviewed. **The config
+panel is built:** all eight steps and the live run, on 2026-10-05, on the branch
+`config-panel`. Next is part 2 below, the check of the agents plan against the code, and
+then addon agents. The two tables say how far each plan is.
 
 | | The config panel | Addon agents |
 |---|---|---|
