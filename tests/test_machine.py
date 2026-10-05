@@ -184,9 +184,13 @@ class FakeTerminal:
         return key
 
     kept = None                              # the ticks keep_form was called with
+    ticks = None                             # the ticks set_tick gave the program on screen
 
     def keep_form(self, tick=None):
         self.kept = (self.kept or []) + [tick]
+
+    def set_tick(self, seconds):
+        self.ticks = (self.ticks or []) + [seconds]
 
     async def end_form(self):
         if self.forms and self.ended < len(self.forms):
@@ -1181,6 +1185,81 @@ def test_the_effort_on_the_bar_is_the_one_the_session_got(tmp_path):
     assert bar == [(HAIKU, None), (SONNET, None)]
     assert view.hardware.effort == "high" and view.running.model_effort is None
 
+
+
+# --- a program whose ticks a budget stopped ticks again when the budget allows it -------------
+
+def test_a_paused_program_ticks_again_when_the_tick_budget_is_raised(tmp_path):
+    model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                      result(TOP, total=0.32),                           # a tick for $0.30
+                      result(screen("", prompt="$ "), total=0.33), result(HALT, total=0.34))
+    terminal = FakeTerminal("top", Action("tick", None),
+                            lambda: machine.change("tick_budget_usd", "1"), KEY["q"], "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert [form.tick for _, form in terminal.forms] == [3, 0]           # paused on the screen
+    assert terminal.ticks == [3]                         # the tick the program asked for
+    assert notes_of(terminal) == [TICKS_USED, None]
+
+
+def test_a_program_ticks_again_when_the_cap_that_stopped_it_is_raised(tmp_path):
+    model = FakeModel(result(screen("boot\n"), total=0.004), result(TOP, total=0.02),   # over
+                      result(screen("", prompt="$ "), total=0.03), result(HALT, total=0.04))
+    terminal = FakeTerminal("top", lambda: machine.change("max_budget_usd", ""), KEY["q"], "exit")
+    machine = Machine(tmp_path, A_CENT, terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert [form.tick for _, form in terminal.forms] == [0] and terminal.ticks == [3]
+    assert notes_of(terminal) == [CENT_USED, None]
+
+
+def test_a_cap_lowered_under_a_ticking_program_stops_its_ticks_until_it_is_raised(tmp_path):
+    model = FakeModel(result(screen("boot\n"), total=0.004), result(TOP, total=0.006),
+                      result(screen("", prompt="$ "), total=0.007), result(HALT, total=0.008))
+    terminal = FakeTerminal("top", lambda: machine.change("max_budget_usd", "0.005"),
+                            Action("tick", None),                        # held back: no ticks
+                            lambda: machine.change("max_budget_usd", "1"), KEY["q"], "exit")
+    machine = Machine(tmp_path, A_CENT, terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert [form.tick for _, form in terminal.forms] == [3]
+    assert terminal.kept == [0] and terminal.ticks == [3]
+    assert kinds(model) == ["boot", "input", "keys", "input"]            # the tick never went
+
+
+def test_with_both_budgets_used_up_ticks_wait_for_both(tmp_path):
+    cap_used = "budget used: $0.30 per boot"
+
+    def play(*in_the_panel):
+        model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                          result(TOP, total=0.32),                       # the tick uses up both
+                          result(screen("", prompt="$ "), total=0.33), result(HALT, total=0.34))
+        terminal = FakeTerminal("top", Action("tick", None), *in_the_panel, KEY["q"], "exit")
+        nonlocal machine
+        machine = Machine(tmp_path, Hardware(max_budget_usd=0.30), terminal, client_factory=model)
+        asyncio.run(machine.run())
+        return terminal
+
+    machine = None
+    seen = []
+    terminal = play(lambda: machine.change("tick_budget_usd", "1"),
+                    lambda: seen.append((machine.terminal.ticks, dict(machine.notes))),
+                    lambda: machine.change("max_budget_usd", "1"))
+    assert seen == [(None, {"max_budget_usd": cap_used})]     # one raised: no ticks, its note stays
+    assert terminal.ticks == [3]                              # both raised: it ticks again
+    assert notes_of(terminal) == [cap_used, f"{cap_used} · {TICKS_USED}", cap_used, None]
+
+    terminal = play(lambda: machine.refill())                 # the button does both at once
+    assert terminal.ticks == [3]
+    assert notes_of(terminal) == [cap_used, f"{cap_used} · {TICKS_USED}", TICKS_USED, None]
+
+
+def test_a_program_that_asked_for_no_tick_gets_none(tmp_path):
+    model = FakeModel(result(screen("boot\n"), total=0.004), result(NANO, total=0.02),
+                      result(screen("", prompt="$ "), total=0.03), result(HALT, total=0.04))
+    terminal = FakeTerminal("nano hello.txt", lambda: machine.change("max_budget_usd", ""),
+                            Action("C-x", "text", ()), "exit")
+    machine = Machine(tmp_path, A_CENT, terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert terminal.ticks is None
 
 def test_an_answers_cost_is_on_the_bar_before_the_answer_ends(tmp_path):
     """The end of an answer may wait for the panel, and the panel shows what was spent."""

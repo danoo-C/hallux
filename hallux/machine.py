@@ -95,6 +95,9 @@ class Terminal(Protocol):
         """The action that came back isn't sent: the program stays as it is and takes keys
         again. With a tick, that is its tick from now on."""
 
+    def set_tick(self, seconds: float) -> None:
+        """Give the program on screen this tick; its clock starts again with it."""
+
     async def end_form(self) -> None: ...
 
     def field_text(self, id: str) -> str: ...
@@ -128,6 +131,8 @@ class Machine:
         self.fields: dict[str, Field] = {}       # block mode: the fields on screen now
         self.in_form = False                     # a full-screen program is on screen
         self.tick_spent = 0.0                    # raw mode: dollars spent on ticks this run
+        self.tick_asked = 0.0                    # the tick the program on screen asked for,
+        self.ticks_stopped = False               # and whether a budget has stopped its ticks
         self.last_turn_cost = 0.0
         self.stream: ScreenStream | None = None  # what the last answer showed while written
 
@@ -364,7 +369,10 @@ class Machine:
         if hw.model == self.running.model:
             self.note("model", None)             # no model waits to be switched to
         if self.tick_spent < hw.tick_budget_usd:
-            self.note("tick_budget_usd", None)   # the program ticks again with its next screen
+            self.note("tick_budget_usd", None)
+            if self.ticks_stopped and not over:  # both budgets allow it: the program on screen
+                self.ticks_stopped = False       # ticks again, as it asked to
+                self.terminal.set_tick(self.tick_asked)
         self.check_events()
 
     def over_budget(self) -> bool:
@@ -455,11 +463,13 @@ class Machine:
         form, to_load = resolve(reply.form, self.fields)
         form = self.load_files(form, to_load)
         held = self.hold()
+        self.tick_asked = form.tick
         if form.tick and self.tick_spent >= self.hardware.tick_budget_usd:
             form = dataclasses.replace(form, tick=0)             # live updates stop here
             self.note("tick_budget_usd", "live updates paused: tick budget used")
         elif held:
             form = dataclasses.replace(form, tick=0)             # a tick couldn't be sent
+        self.ticks_stopped = bool(self.tick_asked) and not form.tick
         self.fields = {field.id: field for field in form.fields}
         self.in_form = True
         await self.terminal.show_form(reply.screen, form, reply.patch)
@@ -478,6 +488,7 @@ class Machine:
             if not held:
                 break
             self.terminal.keep_form(tick=0)       # not sent: the program stays, without ticks
+            self.ticks_stopped = bool(self.tick_asked)
         if action.key == "tick":                  # raw mode: time passed, nothing was pressed
             reply = await self.send(client, "tick", activity="updating…")
             self.tick_spent += self.last_turn_cost
@@ -572,6 +583,7 @@ class Machine:
     async def leave_block_mode(self) -> None:
         self.note("tick_budget_usd", None)
         self.fields, self.in_form, self.tick_spent = {}, False, 0.0
+        self.tick_asked, self.ticks_stopped = 0.0, False
         await self.terminal.end_form()
 
     def envelope(self, tag: str, body: str = "", **attrs: object) -> str:

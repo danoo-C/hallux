@@ -22,10 +22,9 @@ from prompt_toolkit.layout import (
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 
-from hallux.blockmode import OPEN_KEY, POWER_CUT_KEY
+from hallux.blockmode import ESCAPE_SECONDS, OPEN_KEY, POWER_CUT_KEY
 from hallux.statusbar import DIM, GRAY, YELLOW_NOTE, StatusBar
 
-ESCAPE_SECONDS = 0.05                 # how long Esc waits to be told from the start of an arrow key
 MESSAGE_SECONDS = 4.0                 # how long the foot says why a tab can't be chosen
 
 
@@ -84,6 +83,8 @@ class Panel:
         self.is_open = False
         self.closed = asyncio.Event()
         self.closed.set()
+        self.on_close: Callable[[], None] | None = None  # for who shows it as a layer: called
+                                                         # by the key that closes it, at once
         self.app: Application | None = None              # the app of run(), while it runs
         self.bindings = self._bindings()
         self.container = HSplit([
@@ -112,6 +113,8 @@ class Panel:
         self.closed.set()
         if self.app is not None and self.app.is_running and not self.app.is_done:
             self.app.exit()                              # once: a second exit is an error
+        if self.on_close is not None:
+            self.on_close()
 
     async def wait_closed(self) -> None:
         """Wait for the key that closes it. The app of run() may still be up for a moment."""

@@ -742,3 +742,30 @@ def test_the_panel_changes_a_setting_of_the_machine_at_its_prompt(tmp_path):
     assert load(tmp_path).effort == "medium"                     # saved
     assert model.sessions[0][1].endswith(">echo ok</input>")     # the line was kept
 
+
+def test_in_a_program_the_end_of_an_answer_waits_for_the_panel():
+    from hallux.protocol import Form
+
+    async def script(terminal, type_keys, panel, written):
+        await terminal.show_form("top - 01:02:03\n", Form((), raw=True))
+        ended = []
+
+        async def answer():
+            async with terminal.busy(lambda: None):
+                type_keys(CTRL_F12)
+                await asyncio.sleep(0.3)                 # the answer ends, the panel is open
+            ended.append("the answer is over")
+
+        answering = asyncio.ensure_future(answer())
+        await asyncio.sleep(0.8)
+        waiting = terminal.block.layered, panel.is_open, list(ended)
+        type_keys(ESC)
+        await asyncio.wait_for(answering, 5)
+        closed = terminal.block.layered, panel.is_open, terminal.visit
+        await terminal.end_form()
+        return waiting, closed, ended
+
+    waiting, closed, ended = with_panel(script)
+    assert waiting == (True, True, [])                   # a layer, and busy() hasn't ended
+    assert closed == (False, False, None) and ended == ["the answer is over"]
+

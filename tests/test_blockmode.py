@@ -460,3 +460,249 @@ def test_a_tick_that_isnt_sent_takes_nothing_back():
     assert tick == "tick" and second.events == ("<text>k</text>",)
     assert second.fields[0].text == "two\n" and not second.fields[0].changed   # the AI wrote it
 
+
+# --- hallux's own panel as a layer over a full-screen program ------------------------------
+
+CTRL_F12, ESC, DOWN, CTRL_SHIFT_DEL = "\x1b[24;5~", "\x1b", "\x1b[B", "\x1b[3;6~"
+
+
+def with_panel(script, bar=None, rows=24, cuts=None):
+    """Run `script(block, keys, panel, settings)`: block mode on a pipe that was handed a real
+    panel. Its Config tab is around fakes, and `settings.calls` is what they were asked."""
+    from test_panel import Screen
+    from test_panel_config import Machine as Settings
+
+    from hallux.panel import Panel
+    cuts = [] if cuts is None else cuts
+
+    async def main():
+        with create_pipe_input() as pipe:
+            settings = Settings()
+            block = BlockMode(input=pipe, output=Screen(rows, 80), bar=bar,
+                              power_cut=lambda: cuts.append("cut"))
+            block.panel = Panel([settings.tab()], power_cut=block.power_cut)
+            try:
+                return await script(block, pipe.send_text, block.panel, settings)
+            finally:
+                await block.end()
+    return asyncio.run(asyncio.wait_for(main(), 15))
+
+
+def on_screen(block):
+    """What block mode's app drew last, row by row."""
+    screen, size = block.app.renderer._last_screen, block.app.output.get_size()
+    return ["".join(screen.data_buffer[y][x].char for x in range(size.columns)).rstrip()
+            for y in range(size.rows)]
+
+
+def to_row(stop):
+    from test_panel_config import to
+    return to(stop)
+
+
+def test_the_panel_opens_over_a_program_and_leaves_it_as_it_was():
+    async def script(block, keys, panel, settings):
+        await block.show("  GNU nano 7.2\n", Form((EDITOR,), keys=("C-o", "C-x"), keymap="nano"))
+        keys("ab" + CTRL_F12)
+        await asyncio.sleep(0.3)
+        opened = block.layered, panel.is_open, on_screen(block)[0].split()
+        keys(to_row("tick_budget_usd") + "\r" + "1.25\r")       # typed into the panel
+        await asyncio.sleep(0.2)
+        keys(ESC)
+        await asyncio.sleep(0.3)
+        closed = block.layered, panel.is_open, on_screen(block)[0].strip()
+        keys("c")
+        await asyncio.sleep(0.2)
+        return opened, closed, block.field_text("text"), block.actions.empty()
+
+    opened, closed, text, nothing_sent = with_panel(script)
+    assert opened == (True, True, ["Hallux", "[", "Config", "]"])
+    assert closed == (False, False, "GNU nano 7.2")             # the program's screen is back
+    assert text == "abc" + EDITOR.text                          # from before, and the last key
+    assert nothing_sent                                         # none of it went to the AI
+
+
+def test_keys_in_one_burst_go_where_they_belong():
+    """Typed in one go: text, Ctrl+F12, keys for the panel, Ctrl+F12, text, an action key."""
+    async def script(block, keys, panel, settings):
+        await block.show("", Form((EDITOR,), keys=("C-o", "C-x")))
+        keys("ab" + CTRL_F12 + to_row("tick_budget_usd") + "\r1.25\r" + CTRL_F12 + "c" + CTRL["X"])
+        return await next_action(block), settings.calls
+
+    action, calls = with_panel(script)
+    assert calls == [("change", "tick_budget_usd", "1.25")]
+    assert action.key == "C-x" and action.fields[0].text == "abc" + EDITOR.text
+
+
+def test_typing_in_the_panel_is_plain_typing_over_vi_keys():
+    from prompt_toolkit.enums import EditingMode
+    from prompt_toolkit.key_binding.vi_state import InputMode
+
+    async def script(block, keys, panel, settings):
+        await block.show("", Form((EDITOR,), keys=("C-x",), keymap="vi"))
+        keys(ESC)                                      # vi's normal mode
+        await asyncio.sleep(0.7)
+        before = block.app.editing_mode, block.app.vi_state.input_mode
+        keys(CTRL_F12)
+        await asyncio.sleep(0.3)
+        keys(to_row("model") + "\r" + "dd-x-claude:wq" + "\r")     # all of them vi commands
+        await asyncio.sleep(0.2)
+        during = block.app.editing_mode
+        keys(ESC)
+        await asyncio.sleep(0.3)
+        after = block.app.editing_mode, block.app.vi_state.input_mode
+        keys("x")                                      # normal mode again: x deletes a letter
+        await asyncio.sleep(0.2)
+        return before, during, after, block.field_text("text"), settings.calls
+
+    before, during, after, text, calls = with_panel(script)
+    assert before == after == (EditingMode.VI, InputMode.NAVIGATION)
+    assert during == EditingMode.EMACS
+    assert calls == [("change", "model", "dd-x-claude:wq")]        # the name arrived whole
+    assert text == EDITOR.text[1:]
+
+
+def test_no_key_of_the_panel_reaches_a_raw_program():
+    async def script(block, keys, panel, settings):
+        await block.show("top\n", TOP)
+        keys(CTRL_F12 + "jk" + DOWN + "\r")
+        await asyncio.sleep(0.3)
+        during = block.layered, block.actions.empty()
+        keys(CTRL_F12)
+        await asyncio.sleep(0.2)
+        keys("q")
+        return during, (await next_action(block)).events, block.actions.empty()
+
+    during, events, no_more = with_panel(script)
+    assert during == (True, True)                      # and Ctrl+F12 itself never goes
+    assert events == ("<text>q</text>",) and no_more
+
+
+def test_without_a_panel_the_key_does_nothing_and_still_isnt_the_ais():
+    async def script(block, keys):
+        await block.show("top\n", TOP)
+        keys(CTRL_F12 + "q")
+        return (await next_action(block)).events, block.layered
+
+    assert session(script) == (("<text>q</text>",), False)
+
+
+def test_the_panel_opens_while_the_ai_is_busy_with_the_screen():
+    async def script(block, keys, panel, settings):
+        await block.show("", Form((EDITOR,), keys=("C-o", "C-x")))
+        keys(CTRL["O"] + "ab")                         # "ab" is typed while the AI thinks
+        first = await next_action(block)
+        await asyncio.sleep(0.2)
+        keys(CTRL_F12 + to_row("tick_budget_usd") + "\r2\r")
+        await asyncio.sleep(0.3)
+        during = block.layered, list(settings.calls), block.field_text("text")
+        keys(ESC)                                      # a key of its own: the panel gets it too
+        await asyncio.sleep(0.3)
+        closed = block.layered
+        keys("c")                                      # the AI still thinks: held again
+        await asyncio.sleep(0.2)
+        waiting = closed, block.field_text("text")
+        await block.show("", Form((Field("editor", "text"),), keys=("C-x",)))   # its next screen
+        keys(CTRL["X"])
+        return first.key, during, waiting, (await next_action(block)).fields[0].text
+
+    first, during, waiting, text = with_panel(script)
+    assert first == "C-o"
+    assert during == (True, [("change", "tick_budget_usd", "2")], EDITOR.text)   # at once
+    assert waiting == (False, EDITOR.text)             # closed; nothing got into the field
+    assert text == "abc" + EDITOR.text                 # what was held went to the next screen
+
+
+def test_a_tick_waits_for_the_panel_and_the_clock_starts_again():
+    async def script(block, keys, panel, settings):
+        await block.show("top\n", Form((), raw=True, tick=0.3))
+        waiting = asyncio.ensure_future(block.next_action())
+        await asyncio.sleep(0.1)
+        keys(CTRL_F12)
+        await asyncio.sleep(0.9)                       # three ticks long
+        no_tick = not waiting.done()
+        started = asyncio.get_running_loop().time()
+        keys(CTRL_F12)
+        action = await asyncio.wait_for(waiting, 5)
+        return no_tick, action.key, asyncio.get_running_loop().time() - started
+
+    no_tick, key, waited = with_panel(script)
+    assert no_tick and key == "tick" and 0.25 < waited < 1.0
+
+
+def test_set_tick_starts_a_wait_that_had_no_tick():
+    async def script(block, keys):
+        await block.show("top\n", Form((), raw=True, tick=0))
+        waiting = asyncio.ensure_future(block.next_action())
+        await asyncio.sleep(0.4)
+        no_tick = not waiting.done()
+        started = asyncio.get_running_loop().time()
+        block.set_tick(0.2)
+        action = await asyncio.wait_for(waiting, 5)
+        return no_tick, action.key, asyncio.get_running_loop().time() - started, block.form.tick
+
+    no_tick, key, waited, tick = session(script)
+    assert no_tick and key == "tick" and 0.15 < waited < 1.0 and tick == 0.2
+
+
+def test_a_click_in_the_panel_doesnt_reach_the_program():
+    click = "\x1b[<0;40;20M\x1b[<0;40;20m"             # in the empty part of both
+
+    async def script(block, keys, panel, settings):
+        await block.show("title bar\n", Form((EDITOR,), keys=("C-x",)))
+        keys(CTRL_F12)
+        await asyncio.sleep(0.3)
+        keys(click)
+        await asyncio.sleep(0.2)
+        under_the_panel = block.actions.empty()
+        keys(CTRL_F12)
+        await asyncio.sleep(0.2)
+        keys(click)
+        return under_the_panel, (await next_action(block)).key
+
+    assert with_panel(script) == (True, "click")
+
+
+def test_the_bar_stays_under_the_panel():
+    from hallux.statusbar import StatusBar
+    bar = StatusBar("claude-opus-5-5", "low")
+
+    async def script(block, keys, panel, settings):
+        await block.show("the program\n", Form((EDITOR,), keys=("C-x",)))
+        keys(CTRL_F12)
+        await asyncio.sleep(0.3)
+        return on_screen(block)
+
+    rows = with_panel(script, bar=bar, rows=12)
+    assert rows[0].split() == ["Hallux", "[", "Config", "]"]
+    assert "↑ ↓ move" in rows[-2] and "the program" not in "".join(rows)   # the foot, above
+    assert rows[-1].startswith(" • ") and "opus 5.5 · low" in rows[-1]     # block mode's own row
+
+
+def test_the_panel_closes_when_the_app_ends_under_it():
+    async def script(block, keys, panel, settings):
+        await block.show("top\n", TOP)
+        nothing_open = asyncio.ensure_future(block.panel_gone())
+        await asyncio.sleep(0.05)
+        keys(CTRL_F12)
+        await asyncio.sleep(0.3)
+        waiting = asyncio.ensure_future(block.panel_gone())
+        await asyncio.sleep(0.1)
+        opened = block.layered, waiting.done(), nothing_open.done()
+        block.app.exit()                               # the full-screen app dies
+        await asyncio.wait_for(waiting, 2)
+        return opened, block.layered, panel.is_open
+
+    assert with_panel(script) == ((True, False, True), False, False)
+
+
+def test_the_hard_exit_works_in_the_panel_over_a_program():
+    async def script(block, keys, panel, settings):
+        await block.show("top\n", TOP)
+        keys(CTRL_F12 + CTRL_SHIFT_DEL)
+        await asyncio.sleep(0.3)
+        return block.layered
+
+    cuts = []
+    assert with_panel(script, cuts=cuts) is True and cuts == ["cut"]
+

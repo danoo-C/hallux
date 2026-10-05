@@ -302,6 +302,7 @@ class Terminal:
                 # reader lets go. All that follows an answer waits here with it.
                 if self.visit is not None:
                     await self.visit
+                await self.block.panel_gone()            # over a program the panel is a layer
                 self.interrupt = None
                 store_typeahead(self.input, typed)
 
@@ -326,9 +327,9 @@ class Terminal:
     # ---------------------------------------------------------------- hallux's own panel
 
     def set_panel(self, panel: Panel) -> None:
-        """Hand the panel over. From now on Ctrl+F12 opens it, at a prompt and while the AI
-        works. A terminal that has none ignores the key."""
-        self.panel = panel
+        """Hand the panel over. From now on Ctrl+F12 opens it: at a prompt, while the AI
+        works, and over a full-screen program. A terminal that has none ignores the key."""
+        self.panel = self.block.panel = panel
 
     async def _visit_from_prompt(self) -> None:
         """The visit after Ctrl+F12 ended a prompt. What was typed behind Ctrl+F12 is the
@@ -371,6 +372,9 @@ class Terminal:
 
     def keep_form(self, tick: float | None = None) -> None:
         self.block.keep_form(tick)
+
+    def set_tick(self, seconds: float) -> None:
+        self.block.set_tick(seconds)
 
     async def end_form(self) -> None:
         if self.block.active:

@@ -8,10 +8,11 @@ is the AI's, except what you type into its fields.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import re
 from dataclasses import replace
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from prompt_toolkit.application import Application, get_app
 from prompt_toolkit.document import Document
@@ -21,7 +22,9 @@ from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import DynamicKeyBindings, KeyBindings
 from prompt_toolkit.key_binding.bindings.scroll import scroll_page_down, scroll_page_up
 from prompt_toolkit.keys import Keys
-from prompt_toolkit.layout import DynamicContainer, Float, FloatContainer, HSplit, Layout, Window
+from prompt_toolkit.layout import (
+    ConditionalContainer, DynamicContainer, Float, FloatContainer, HSplit, Layout, Window,
+)
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
@@ -32,8 +35,13 @@ from prompt_toolkit.widgets import TextArea
 from hallux.protocol import Action, Field, FieldState, Form, plain
 from hallux.statusbar import StatusBar
 
+if TYPE_CHECKING:
+    from hallux.panel import Panel             # block mode is handed one; it never imports it
+
 POWER_CUT_KEY = "c-s-delete"                   # the hard exit: Ctrl+Shift+Del
 OPEN_KEY = "c-f12"                             # opens and closes hallux's own panel (hallux.panel)
+ESCAPE_SECONDS = 0.05                          # in the panel: how long Esc waits to be told from
+                                               # the start of an arrow key
 
 SPECIAL_KEYS = {
     "Enter": "enter", "Escape": "escape", "Tab": "tab", "Backspace": "backspace",
@@ -221,6 +229,12 @@ class BlockMode:
         self.actions: asyncio.Queue[Action] = asyncio.Queue()
         self.held: list = []                           # keys typed while the AI thinks
         self.cut = ""                                  # nano's cut buffer
+        self.panel: Panel | None = None                # hallux's own panel, once handed over
+        self.layered = False                           # it is open, as a layer over the program
+        self.layer_gone = asyncio.Event()              # ... and set when it isn't
+        self.layer_gone.set()
+        self.under: tuple = ()                         # what the program had before the layer
+        self.clock = asyncio.Event()                   # set: the wait for a tick starts again
 
     @property
     def active(self) -> bool:
@@ -241,12 +255,15 @@ class BlockMode:
         if self.app is None:
             self.app = Application(
                 layout=Layout(DynamicContainer(lambda: self.container)),
-                key_bindings=DynamicKeyBindings(lambda: self.bindings),
+                key_bindings=DynamicKeyBindings(         # under the panel, the keys are its own
+                    lambda: self.panel.bindings if self.layered else self.bindings),
                 full_screen=True, mouse_support=True, input=self.input, output=self.output)
             self.running = asyncio.create_task(self.app.run_async(handle_sigint=False))
+            self.running.add_done_callback(lambda task: self._close_panel())   # it died
             processor = self.app.key_processor         # keys typed while the AI thinks wait
-            process_keys = processor.process_keys      # in the queue for the next screen
-            processor.process_keys = lambda: self._hold_keys() if self.waiting else process_keys()
+            self.process_keys = processor.process_keys     # in the queue for the next screen,
+            processor.process_keys = lambda: (             # unless they are typed into the panel
+                self._hold_keys() if self.waiting and not self.layered else self.process_keys())
         self.app.editing_mode = EditingMode.VI if form.keymap == "vi" else EditingMode.EMACS
         if form.fields:
             focus = self.areas.get(form.focus or "") or next(
@@ -288,18 +305,30 @@ class BlockMode:
         """Wait for an action key or a click; in raw mode with a tick, at most `tick` seconds,
         then return a tick. Raises EOFError if the full-screen app died."""
         getter = asyncio.ensure_future(self.actions.get())
-        tick = self.form.tick if self.form is not None and self.form.raw else 0
-        done, _ = await asyncio.wait({getter, self.running}, timeout=tick or None,
-                                     return_when=asyncio.FIRST_COMPLETED)
-        if getter in done:
-            return getter.result()
-        if not done:                                    # nothing happened: time for a tick
-            getter.cancel()
-            self.waiting = True                         # keys pressed now wait for the redraw
-            return Action(key="tick", focus=None)
-        getter.cancel()
-        self.running.result()                          # re-raises whatever killed the app
-        raise EOFError("block mode ended")
+        while True:                                     # once more whenever the clock restarts
+            self.clock.clear()
+            ticks = self.form is not None and self.form.raw and not self.layered
+            tick = self.form.tick if ticks else 0       # under the panel a tick waits
+            restart = asyncio.ensure_future(self.clock.wait())
+            done, _ = await asyncio.wait({getter, self.running, restart}, timeout=tick or None,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            restart.cancel()
+            if getter in done:
+                return getter.result()
+            if self.running in done:
+                getter.cancel()
+                self.running.result()                  # re-raises whatever killed the app
+                raise EOFError("block mode ended")
+            if not done:                                # nothing happened: time for a tick
+                getter.cancel()
+                self.waiting = True                     # keys pressed now wait for the redraw
+                return Action(key="tick", focus=None)
+
+    def set_tick(self, seconds: float) -> None:
+        """Give the program on screen this tick. A wait that is running starts again with it."""
+        if self.form is not None:
+            self.form = replace(self.form, tick=seconds)
+            self.clock.set()
 
     def keep_form(self, tick: float | None = None) -> None:
         """The action that came back never reached the AI: the form stays as it is and takes
@@ -318,6 +347,7 @@ class BlockMode:
         """Leave block mode: the shell screen comes back."""
         if self.app is None:
             return
+        self._close_panel()                            # it can't stay open over nothing
         self._release_keys()                           # prompt_toolkit keeps unprocessed keys
         if self.app.is_running:                        # as type-ahead for the shell prompt
             self.app.exit()
@@ -344,6 +374,46 @@ class BlockMode:
 
     def field_saved(self, id: str) -> None:
         self.baseline[id] = self.field_text(id)
+
+    # ---------------------------------------------------------------- hallux's own panel
+
+    def open_panel(self) -> None:
+        """Ctrl+F12: the panel as a layer over the program. The program's screen, its fields
+        and their cursors stay under it, untouched. The keys and the focus are the panel's,
+        and typing is plain typing, whatever the program's keys are: over vi keys in normal
+        mode a model's name would run as commands."""
+        if self.panel is None or self.layered or self.app is None or self.running.done():
+            return
+        app = self.app
+        self.under = (app.layout.current_window, app.editing_mode, app.ttimeoutlen)
+        self.layered = True
+        self.layer_gone.clear()
+        app.editing_mode, app.ttimeoutlen = EditingMode.EMACS, ESCAPE_SECONDS
+        self.panel.on_close = self._close_panel        # Esc, Ctrl+F12 or its Close button
+        self.panel.open()                              # takes the focus
+        self.clock.set()                               # a tick that is due waits
+        app.invalidate()
+
+    def _close_panel(self) -> None:
+        """The layer goes: the program has its keys, its focus and its way of editing again,
+        in the mode it was in. Also when the full-screen app ends under the panel."""
+        if not self.layered:
+            return
+        self.layered = False
+        self.panel.on_close = None
+        self.panel.close()                             # when it wasn't the panel that closed
+        focus, editing_mode, ttimeoutlen = self.under
+        if self.app is not None:
+            self.app.editing_mode, self.app.ttimeoutlen = editing_mode, ttimeoutlen
+            with contextlib.suppress(ValueError):      # the app has ended
+                self.app.layout.focus(focus)
+            self.app.invalidate()
+        self.layer_gone.set()
+        self.clock.set()                               # the program's clock starts again
+
+    async def panel_gone(self) -> None:
+        """Wait until the panel isn't open over the program: the end of an answer waits here."""
+        await self.layer_gone.wait()
 
     # ---------------------------------------------------------------- building the screen
 
@@ -413,6 +483,9 @@ class BlockMode:
         body = [_pad(line, columns) for line in body]      # a click anywhere maps exactly
         background = Window(Background("\n".join(body), self._click, raw=form.raw), wrap_lines=False)
         self.background = background
+        if self.panel is not None:                         # the panel, over all of the program
+            layer = ConditionalContainer(self.panel.container, Condition(lambda: self.layered))
+            floats.append(Float(content=layer, top=0, bottom=0, left=0, right=0, z_index=9))
         screen_area = FloatContainer(content=background, floats=floats)
         if self.bar is None:
             return screen_area
@@ -477,6 +550,7 @@ class BlockMode:
                     self._send_events(event.key_sequence)
 
             kb.add(POWER_CUT_KEY, eager=True)(lambda e: self.power_cut())
+            kb.add(OPEN_KEY, eager=True)(lambda e: self.open_panel())     # never the AI's
             return kb
         kind = lambda k: Condition(lambda: (f := self._focused()) is not None and f.kind == k)  # noqa: E731
         editor, line, pager = kind("editor"), kind("line"), kind("pager")
@@ -491,6 +565,7 @@ class BlockMode:
                                                     len(e.current_buffer.text)))
 
         kb.add(POWER_CUT_KEY, eager=True)(lambda e: self.power_cut())
+        kb.add(OPEN_KEY, eager=True)(lambda e: self.open_panel())
         kb.add("enter", filter=line, eager=True)(self._action("Enter"))       # 3270 Enter
         if "Enter" in form.keys:                         # a pager as a menu: the cursor's
             kb.add("enter", filter=pager, eager=True)(self._action("Enter"))  # line is the pick
@@ -560,13 +635,16 @@ class BlockMode:
         self._hold_keys()                              # keys typed right after the action key
 
     def _hold_keys(self) -> None:
-        """While the AI thinks, keys wait for its next screen. Only the hard exit and Ctrl-C
-        (which can interrupt the AI) are acted on right away."""
+        """While the AI thinks, keys wait for its next screen. Only the hard exit, the panel's
+        key and Ctrl-C (which can interrupt the AI) are acted on right away."""
         queue = self.app.key_processor.input_queue
         while queue:
             press = queue.popleft()
             if press.key == POWER_CUT_KEY:
                 self.power_cut()
+            elif press.key == OPEN_KEY and self.panel is not None:
+                self.open_panel()
+                return self.process_keys()             # what was typed behind it is the panel's
             elif press.key == "c-c" and self.ctrl_c(True):
                 continue
             else:

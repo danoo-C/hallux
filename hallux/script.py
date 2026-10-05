@@ -149,6 +149,9 @@ class ScriptTerminal:
     def keep_form(self, tick: float | None = None) -> None:
         pass
 
+    def set_tick(self, seconds: float) -> None:
+        pass
+
     async def end_form(self) -> None:
         pass
 
