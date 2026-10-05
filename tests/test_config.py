@@ -212,10 +212,11 @@ def test_save_changes_one_line_of_the_readme_example(tmp_path):
     assert config.load(tmp_path).tick_budget_usd == 1.25
 
     config.save(tmp_path, {"effort": "high", "max_budget_usd": 3.0})
-    lines = saved(tmp_path).splitlines()
-    assert 'effort = "high"                   # low, medium, high, xhigh, max' in lines
-    assert "max_budget_usd = 3.0             # stop a boot after spending this much" in lines
-    assert len(lines) == len(example.splitlines())
+    lines, before = saved(tmp_path).splitlines(), example.splitlines()
+    was = {line.split(" = ")[0]: line for line in before if " = " in line}
+    assert was["effort"].replace('"low"', '"high"') in lines               # the comment stays,
+    assert was["max_budget_usd"].replace("2.0", "3.0") in lines            # spaces and all
+    assert "#" in was["effort"] and "#" in was["max_budget_usd"] and len(lines) == len(before)
     assert config.load(tmp_path) == Hardware(
         "claude-opus-5-5", "high", "claude-haiku-4-5", 3.0, tick_budget_usd=1.25,
         addons=("window",))

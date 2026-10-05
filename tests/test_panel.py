@@ -1,5 +1,6 @@
 """Hallux's own panel, the host: a real prompt_toolkit app, keys from a pipe, stand-in tabs."""
 import asyncio
+import contextlib
 
 import pytest
 
@@ -62,7 +63,15 @@ def session(panel, script, rows=24, columns=80):
             await asyncio.sleep(0.1)
 
             async def press(keys, wait=0.06):
+                drawn_again = asyncio.Event()
+                note = lambda app: drawn_again.set()                   # noqa: E731
+                if panel.app is not None:
+                    panel.app.after_render += note
                 pipe.send_text(keys)
+                with contextlib.suppress(asyncio.TimeoutError):        # a slow computer
+                    await asyncio.wait_for(drawn_again.wait(), 2)
+                if panel.app is not None:
+                    panel.app.after_render -= note
                 await asyncio.sleep(wait)
 
             try:

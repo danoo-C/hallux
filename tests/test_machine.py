@@ -892,7 +892,7 @@ def test_refill_starts_every_budget_anew(tmp_path, caplog):
 # --- the budget per boot: hallux checks it itself, before a message goes to the AI -------------
 
 P = "user@hallux:~$ "
-CENT_USED = "budget used: $0.01 per boot"
+CENT_USED = "budget used: $0.01 per boot · raise it: ctrl+f12"      # the panel's key
 A_CENT = Hardware(max_budget_usd=0.01)
 
 
@@ -1044,7 +1044,7 @@ def test_a_refill_lets_the_boot_spend_its_cap_once_more(tmp_path, caplog):
     terminal = FakeTerminal("a", "b", refill, "b", "c", "d", EOFError)
     machine = Machine(tmp_path, Hardware(max_budget_usd=0.10), terminal, client_factory=model)
     asyncio.run(machine.run())
-    used = "budget used: $0.10 per boot"
+    used = "budget used: $0.10 per boot · raise it: ctrl+f12"
     assert kinds(model) == ["boot", "input", "input", "input"]          # a, b and c; d never
     assert terminal.prompts == [(P, ""), (P, ""), (P, "b"), (P, ""), (P, ""), (P, "d")]
     assert notes_of(terminal) == [used, None, used]                     # $0.11 more: used again
@@ -1073,7 +1073,7 @@ def test_a_reboot_starts_the_count_at_zero(tmp_path):
     machine = Machine(tmp_path, Hardware(max_budget_usd=0.10), terminal, client_factory=model)
     asyncio.run(machine.run())
     assert [len(session) for session in model.sessions] == [2, 1]
-    assert notes_of(terminal) == ["budget used: $0.10 per boot"]
+    assert notes_of(terminal) == ["budget used: $0.10 per boot · raise it: ctrl+f12"]
     assert machine.view().spent_since_refill == machine.view().spent_boot == pytest.approx(0.12)
 
 
@@ -1226,7 +1226,7 @@ def test_a_cap_lowered_under_a_ticking_program_stops_its_ticks_until_it_is_raise
 
 
 def test_with_both_budgets_used_up_ticks_wait_for_both(tmp_path):
-    cap_used = "budget used: $0.30 per boot"
+    cap_used = "budget used: $0.30 per boot · raise it: ctrl+f12"
 
     def play(*in_the_panel):
         model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),

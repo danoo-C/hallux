@@ -139,6 +139,7 @@ def test_a_scripted_run_halts_at_its_cap(tmp_path, capsys):
     assert terminal.lines == ["echo two", "echo three"]                  # never typed,
     assert "".join(echoed) == "boot\n$ echo one\none\n"                  # and none glued on
     assert len(model.sessions[0]) == 2
+    # once, and without the panel's key: a script has no keyboard to press it on
     assert capsys.readouterr().err.count("hallux: budget used: $0.01 per boot\n") == 1
 
 

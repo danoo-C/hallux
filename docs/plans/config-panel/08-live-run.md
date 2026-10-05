@@ -81,6 +81,53 @@ By the user, in a real terminal. Each line is something the tests can't show.
 The live run is written up below, the status lines say "built", and the design's "Still to
 find out" has an answer for each of its points, or says that it is still open.
 
+## As built
+
+Built on 2026-10-05, on the branch `config-panel`. 1 new test and 2 changed, 1054 in all.
+Decided while building:
+
+- **The hint is three parts,** and `idle_hint(room)` joins as many as fit. Parts go from
+  the end, and the last one left is cut only when it doesn't fit by itself.
+- **`PANEL_KEY`** in `hallux/statusbar.py` is the key as the bar writes it. The hint and the
+  note of a used-up budget per boot both take it from there.
+- **A scripted run's note has no key.** `budget used: $0.01 per boot` is printed as before:
+  a script has no keyboard to press Ctrl+F12 on, and it halts there anyway.
+- **While the AI listens to an addon the bar says `listening: …`,** as before, and not the
+  hint. The key isn't named then.
+- **The README has a feature line for the panel** and names its design under
+  "Documentation", beside what the step's table lists.
+- **`docs/concept.md` says why the old sentence is gone:** it had said that a switch inside
+  a running session would break the first principle.
+- **`tests/panel_demo.py` is gone.** It showed the panel before anything in Hallux opened
+  it. The user has used the real one since.
+- **The panel tests wait for the screen to be drawn again** after they type, not for a fixed
+  time alone. One of them had failed once, in a full run on a busy computer.
+
 ## What the live run taught
 
-Not run yet.
+**Partly run.** The user used the panel in their own terminal on 2026-10-05, while steps 6
+and 7 were built, and reported in their own words. What they weren't asked about, or didn't
+say, is open.
+
+| | Point | What is known |
+|---|---|---|
+| 1 | The key, with half a line typed | Not reported by itself. The user was asked to try it with point 2 |
+| 2 | The screen at the shell, during an answer | **A bug, found by the user.** The panel was opened during the boot. Afterwards a copy of the bar stood in the boot's text and the prompt lay on the bar's row. The kept text had been printed before the region was pinned again. Fixed in step 6. Then: "now it works perfectly" |
+| 3 | The screen in a program | The user was asked to try an editor with unsaved text, and vim in normal mode: "this is really working nicely" |
+| 4 | The tick budget | Asked with point 3, a paused player with a higher budget and with Refill budgets: the same answer |
+| 5 | The budget per boot: held line, how far over, Refill | Open |
+| 6 | The model: the bar, and what the first answer cost | Open in the user's terminal. The check of step 4 has the numbers |
+| 7 | The effort, over a reboot | Open |
+| 8 | Save, and the comments in `config.toml` | Open |
+| 9 | The window resized while the panel is open | Open |
+| 10 | Esc and the arrows, also over ssh | Open. After the demo of step 5 the user said "it feels great" |
+| 11 | The mouse, and selecting text at the shell afterwards | Open |
+| 12 | The hard exit from inside the panel | Open |
+| 13 | A password prompt | Open |
+
+**One more thing the user saw:** at 80 columns the note of the budget per boot is cut after
+a refill. They don't mind it at that width.
+
+**The open points are written out for the user** in
+[live-run-checklist.md](live-run-checklist.md): what to do, what should happen, and a line
+for what was seen. Their results go into the table above.

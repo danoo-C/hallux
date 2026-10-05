@@ -434,7 +434,8 @@ def test_a_program_goes_on_when_its_action_isnt_sent(tmp_path):
         return held
 
     held = with_terminal(script, bar=StatusBar("claude-opus-5-5", "low"))
-    assert held == (2, "xyhi\n", {"max_budget_usd": "budget used: $0.01 per boot"})
+    assert held == (2, "xyhi\n",
+                    {"max_budget_usd": "budget used: $0.01 per boot · raise it: ctrl+f12"})
     boot, nano, ctrl_x, ctrl_d = model.sessions[0]     # ^O never reached the AI
     assert ctrl_x.startswith('<action key="C-x"') and ">xyzhi\n</field>" in ctrl_x
     assert 'unchanged="yes"' not in ctrl_x             # the text in full: the AI hasn't seen it
@@ -768,4 +769,3 @@ def test_in_a_program_the_end_of_an_answer_waits_for_the_panel():
     waiting, closed, ended = with_panel(script)
     assert waiting == (True, True, [])                   # a layer, and busy() hasn't ended
     assert closed == (False, False, None) and ended == ["the answer is over"]
-

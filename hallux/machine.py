@@ -1,8 +1,10 @@
 """The machine: one Claude agent session per boot, wired to a terminal.
 
 The terminal side only reads keys and writes the AI's text. It never draws a character
-of the machine's screen itself; see docs/concept.md, "The terminal". Its one exception is
-hallux's own status bar on the bottom row, which the AI is never told about.
+of the machine's screen itself; see docs/concept.md, "The terminal". It has two things of
+its own, which the AI is never told about: hallux's status bar on the bottom row, and
+hallux's panel (hallux.panel), which Ctrl+F12 puts over the screen for as long as it is
+open. The machine provides what the panel shows and does: view, change, save and refill.
 """
 from __future__ import annotations
 
@@ -30,7 +32,7 @@ from hallux.passwords import Passwords
 from hallux.protocol import (
     Action, Field, Form, Reply, ScreenStream, Secret, envelope, json_body, parse, resolve,
 )
-from hallux.statusbar import describe
+from hallux.statusbar import PANEL_KEY, describe
 from hallux.tools import SERVER, build_addon_servers, build_server
 
 log = logging.getLogger("hallux")
@@ -387,6 +389,8 @@ class Machine:
         if not self.over_budget():
             return False
         note = f"budget used: ${self.hardware.max_budget_usd:.2f} per boot"
+        if getattr(self.terminal, "attended", True):             # somebody can raise it
+            note += f" · raise it: {PANEL_KEY}"
         if self.notes.get("max_budget_usd") != note:             # said once
             log.warning("%s ($%.2f spent)", note, self.session_spent - self.refilled_at)
             self.notify([note], "max_budget_usd")

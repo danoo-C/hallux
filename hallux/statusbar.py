@@ -2,7 +2,9 @@
 
 It shows an activity light (gray when idle, a green-yellow spinner while the AI works),
 what the AI is doing, the model, the effort, what the session has cost and how long the
-last answer took. The AI is told the screen is one row shorter and never draws here.
+last answer took. When nothing happens it names hallux's own keys: the hard exit, and the
+one that opens the panel (hallux.panel). The AI is told the screen is one row shorter and
+never draws here.
 
 In the scrolling shell the bar is pinned with a scroll region (rows 1..rows-1 scroll,
 the last row stays); in block mode it's a row of the full-screen layout.
@@ -20,7 +22,9 @@ FADE_SECONDS = 1.6
 GREEN, YELLOW = (0x5F, 0xD7, 0x87), (0xD7, 0xD7, 0x5F)
 GRAY, DIM, RED, BACKGROUND = "#808080", "#5c5c5c", "#ff5f5f", "#1c1c1c"
 YELLOW_NOTE = "#d7af5f"
-IDLE_HINT = "power off: ctrl+shift+del · ctrl+c ×3"
+PANEL_KEY = "ctrl+f12"                # as the bar writes the key that opens hallux's own panel
+# The way out comes first: on a narrow window the hint loses whole parts from its end.
+IDLE_HINT = ("power off: ctrl+shift+del", f"config: {PANEL_KEY}", "ctrl+c ×3")
 
 VERBS = {"list_dir": "listing", "stat": "checking", "read_file": "reading", "find": "searching",
          "write_file": "writing", "edit_file": "editing", "make_dir": "creating",
@@ -91,14 +95,14 @@ class StatusBar:
         elif s.listening:
             light, light_color, text, text_color = "•", GRAY, f"listening: {s.listening}", GRAY
         else:
-            light, light_color, text, text_color = "•", GRAY, IDLE_HINT, DIM
+            light, light_color, text, text_color = "•", GRAY, None, DIM
         info = " · ".join(part for part in (
             short_model(s.model), s.effort or "",
             f"${s.cost:.2f}",
             f"{now - s.started:.1f}s" if s.busy else (f"{s.seconds:.1f}s" if s.seconds else ""),
         ) if part)
         room = max(0, width - len(info) - 5)             # " x " + text + "  " + info + " "
-        text = fit(text, room)
+        text = fit(idle_hint(room) if text is None else text, room)
         gap = max(1, width - 3 - len(text) - len(info) - 1)
         pieces = [(GRAY, " "), (light_color, light), (GRAY, " "), (text_color, text),
                   (GRAY, " " * gap), (DIM, info), (GRAY, " ")]
@@ -114,6 +118,15 @@ class StatusBar:
         out = [f"\x1b[0m\x1b[48;2;{bg}m\x1b[2K"]         # erase the row in the bar's color
         out += [f"\x1b[38;2;{_rgb(color)}m{text}" for color, text in self.segments(width)]
         return "".join(out) + "\x1b[0m"
+
+
+def idle_hint(room: int) -> str:
+    """hallux's own keys, as many as fit into `room`. Whole parts go from the end, the way
+    out last; a part is never cut in the middle while another could go instead."""
+    parts = list(IDLE_HINT)
+    while len(parts) > 1 and len(" · ".join(parts)) > room:
+        parts.pop()
+    return " · ".join(parts)
 
 
 def fade(now: float) -> str:

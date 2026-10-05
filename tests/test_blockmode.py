@@ -705,4 +705,3 @@ def test_the_hard_exit_works_in_the_panel_over_a_program():
 
     cuts = []
     assert with_panel(script, cuts=cuts) is True and cuts == ["cut"]
-
