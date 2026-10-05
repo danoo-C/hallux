@@ -16,49 +16,83 @@
 - **The machine takes the ticks away** in three cases, by showing the program's screen with
   no tick: the tick budget of this program run is used up, the boot is over its budget, or
   the program comes up while either is so (`hallux/machine.py`, `block_mode`).
+- **The tick budget counts for the whole run of a program,** over all its screens. It starts
+  anew when the program goes back to the shell.
 - **The AI isn't told.** The prompt has one sentence: "The terminal may stop ticking when a
   budget is used up; the program then just waits for a key." It says that it can happen,
   not when it has.
 - **Since the settings panel, ticks also come back:** a higher budget or Refill budgets
   gives the program its tick again. The AI isn't told that either; a `<tick>` just arrives.
-- **What went wrong.** kittymusic's card said to call `play()` on the first `<tick>`. No
-  tick came, so the song never started. The machine then guessed, from a key that arrived
-  before any tick had.
+
+**What went wrong,** from the machine's log in the test world, on 2026-10-02:
+
+| Time | What happened |
+|---|---|
+| 23:35:00 | The last `<tick>` of a song in kittymusic. The ticks stop mid-song |
+| 23:38:40 | A click. The machine goes back to kittymusic's library: a form with a field, and no tick |
+| 23:38:54 | The user types `2` there: play song 2 |
+| 23:39:06 | The machine draws the now-playing screen with `tick="2"`, and waits for the first tick to call `play()` |
+| 23:39:29 | No tick came. The user clicks, and only then `play()` is called |
+
+- **The card waits for the first tick on purpose.** Its START ORDER says never to call
+  `play()` before the now-playing screen is on screen: the song starts when the user sees
+  it, and the bar counts from there. All the tool calls of an answer run before its screen
+  is shown, so a tick is the only "afterwards" a program has.
+- **The message that started the song came from a screen that asks for no tick.** Whatever
+  tells the AI has to be on that message, or the AI guesses again.
 
 ## Build
 
-**The mark.** While a raw-mode program that asked for a tick has its ticks stopped, every
-message the machine sends into that program says so:
+**The mark.** While the tick budget of the program run is used up, every message the
+machine sends says so:
 
 ```text
-<keys ticks="paused" cwd="/home/user" time="…" cols="100" rows="29"><text>j</text></keys>
+<action key="Enter" focus="q15" ticks="paused" cwd="/home/user" time="…" cols="120" rows="29">
+<keys ticks="paused" cwd="/home/user" time="…" cols="120" rows="29"><text>j</text></keys>
 ```
 
-- **It rides on a message that goes anyway:** `<keys>`, which is all a raw-mode program
-  gets besides `<tick>`. No message is sent to say it. A scripted run sends `<action>` into
-  such a program, and that carries the mark too.
-- **No mark means ticks run,** or the program never asked for one.
-- **When the ticks come back, a `<tick>` arrives,** as today, and the mark is gone from the
-  next `<keys>`.
-- **In the code:** the machine knows already whether a budget has stopped the ticks of the
-  program on screen (`ticks_stopped`, from the panel's step 7). `block_mode` adds the mark
-  to what it sends when that is so.
-- **Only raw-mode programs tick.** Today a form with fields that names a tick counts as
-  having asked for one, though block mode never ticks it. The machine takes the tick a
-  program asked for from a raw form only, so such a form gets no mark and no `set_tick`.
+- **It means: no tick comes now, whatever the form asks for.** It is on the messages from
+  every screen of the program, also from one that asked for no tick. So the AI knows before
+  it draws a screen that would tick.
+- **It rides on messages that go anyway.** No message is sent to say it.
+- **No mark means ticks run** for a form that asks for one.
+- **When the budget allows ticks again,** the next message has no mark. A program whose
+  screen asks for a tick gets a `<tick>`, as today.
+- **In the code:** `Machine.envelope` builds every message. It adds the mark when
+  `tick_spent` has reached `tick_budget_usd`. The mark stands after the message's own
+  attributes and before `cwd`, so the tests that pin a message by its tag and its own
+  attributes stay as they are.
+- **At the shell the count is zero,** so there is no mark there. One exception: with
+  `tick_budget_usd = 0` ticks are off, and every message of the boot carries the mark,
+  `<boot>` too.
+- **A boot starts the count at zero.** Today only leaving a program does that. A boot that
+  ends inside a program (a form with `<reboot/>`) leaves the count, and the next boot's
+  messages would carry a mark that isn't true.
+- **The boot's budget needs no mark.** While it is used up, the machine sends nothing at
+  all. When it is raised, the ticks are back before the next key goes out.
+- **`ticks_stopped` stays for what it does today:** it starts the ticks again when a budget
+  allows it. The mark doesn't use it.
 
 **The prompt,** under RAW MODE. The last sentence of that section goes, and two things take
 its place:
 
 ```text
 - Ticks can stop. The terminal pauses them when one of the machine's budgets is used up,
-  and may start them again. While they are paused, every message in the program carries
-  ticks="paused": nothing wakes you then but a key or a click. Show that what should move
-  stands still (a line such as "paused: press a key to update"), and bring the screen up
-  to date with every key. When a <tick> arrives again, they are back.
-- Never wait for a tick to do what the command is for. Start the song, open the file,
-  load the data when the program starts. A tick only redraws.
+  and may start them again. While they are paused, every message carries ticks="paused":
+  no <tick> comes then, whatever the form asks for, and only a key or a click wakes you.
+  Keep tick in the form all the same: that is how they start again. Show that what should
+  move stands still (a line such as "paused: press a key to update"), and bring the screen
+  up to date with every key.
+- Don't let a program depend on a tick. What has to wait until its screen is up (a song
+  that starts when the player shows) is done on the first message that arrives, a tick or
+  a key, and at once when ticks are paused.
 ```
+
+- **"Keep tick in the form":** the machine starts again only a tick that the form on screen
+  asks for (`settle`). A form that dropped its tick would stand still after the budget is
+  raised, until a key.
+- **"On the first message that arrives":** a program may still wait for its screen, as
+  kittymusic does. It may not wait for a tick alone.
 
 **`docs/concept.md`:** the "Ticks" line under raw mode says that the program "just waits
 for a key". It gets the mark and the rule.
@@ -68,37 +102,55 @@ for a key". It gets the mark and the rule.
 - **The bar's note,** `live updates paused: tick budget used`, and the panel. They are the
   user's side of the same thing, and they work.
 - **No message when the ticks stop.** See the decisions below.
-- **Cards on the disk.** kittymusic's card in the test world has lines of its own for this
-  by now: play on the first key or click, and say that ticks ran out. They agree with the
-  new rule. Its line "call play() only on the FIRST tick" does not; the user can change it
-  with `hallux`.
+- **A form with fields never ticks.** The parser drops its tick already
+  (`hallux/protocol.py`), and `tests/test_protocol.py` holds that.
+- **Cards on the disk.** kittymusic's card stays as it is:
+  - Its START ORDER, `play()` on the first tick, holds while ticks run.
+  - Its NO TICKS section starts the song on the first key or click. It was written when the
+    machine couldn't know beforehand that ticks were paused. Now it knows, and the prompt
+    says to start at once.
+  - The card's "NEVER call play() before the now-playing screen is on screen" speaks
+    against that. In this one case the card and the prompt disagree. If the song then still
+    waits for a key, one line settles it:
+    `hallux kittymusic starts the song at once when ticks are paused`.
 
 ## Decisions
 
 | Topic | Decision | Why |
 |---|---|---|
+| What the mark means | No tick comes now. It is on every message while the program run's tick budget is used up | The stuck song was picked on a screen without a tick. A mark only on the screens that tick would not have been on that message |
 | When the AI is told | With the next message that goes anyway | A message of its own is a model call, made after the budget is used up |
 | A last tick that says "this is the last" | Not built | The machine learns that the budget is used up from the cost of that tick's answer, so it can't mark the tick before sending it |
 | What the mark says | `paused`, and no reason | The budgets are hardware. The prompt names "a budget" and no more |
-| The stuck program | A rule in the prompt, beside the mark | With the mark alone a program that starts its work on a tick still waits for the first key |
+| The boot's budget | No mark | Nothing is sent while it is used up, and the ticks are back as soon as it is raised |
+| Ticks switched off, `tick_budget_usd = 0` | The mark is on every message of the boot | It is true: no program will tick. It costs a few characters |
+| The stuck program | A rule: don't depend on a tick. Do it on the first message, and at once when ticks are paused | "Never wait for a tick" would forbid kittymusic's start order, which is there on purpose |
+| The form while ticks are paused | It keeps its tick | The machine restarts only a tick that is asked for |
 
 ## Tests
 
 In `tests/test_machine.py`, with the fake model and the fake terminal:
 
 - a ticking program whose tick budget runs out: the `<keys>` after that has
-  `ticks="paused"`, and none before it has;
-- the same when the budget per boot stopped the ticks, and when the program came up with
-  the budget used already;
-- the budget is raised: the next message has no mark;
-- a program that asked for no tick never has the mark, also when the boot is over its
-  budget;
-- a form with fields that names a tick: no mark, and `set_tick` isn't called for it;
+  `ticks="paused"`, and no message before it has;
+- the case from the log: the program then shows a form with a field and no tick, and the
+  `<action>` from that form has the mark;
+- the budget is raised, or the budgets are refilled: the next message has no mark;
+- the program is left: the next `<input>` at the shell has no mark;
+- `tick_budget_usd = 0`: every message has the mark, `<boot>` and `<input>` too;
+- a boot that ends inside a program whose tick budget is used up: the next boot's messages
+  have no mark;
+- the boot's budget is used up and then raised: the `<keys>` that goes then has no mark;
+  with the tick budget used up as well, it has;
+- Ctrl-C while the AI answers inside a paused program: the `<key … interrupted="yes">` has
+  the mark;
 - the prompt has both new rules, and no longer says "just waits for a key".
 
 ## Done when
 
-The tests pass, and the user has tried it in the test world:
+The tests pass, and the user has tried both in the test world.
+
+**A program that ticks:**
 
 1. In the panel, set the tick budget to `0.01`.
 2. Start a program that ticks, such as `top`, and press a key once its updates are paused.
@@ -106,3 +158,14 @@ The tests pass, and the user has tried it in the test world:
 
 **Should happen:** after the key the program's own screen says that its updates are paused,
 and it is up to date. After the budget is raised it moves again, and that line is gone.
+
+**The case from the report,** with a song that exists, so nothing is composed:
+
+1. In the panel, set the tick budget to `0.01`.
+2. Start kittymusic and play a song. After a tick or two the bar says
+   `live updates paused: tick budget used`.
+3. Go to the library with `l`, and pick a song.
+
+**Should happen:** the song starts without another key or click, and the screen says that
+its updates are paused. If it waits for the first key, that is the card's START ORDER: see
+"Cards on the disk" above.

@@ -1,7 +1,9 @@
 # Plan: fixing what Hallux reported about its environment
 
-**Status:** written on 2026-10-05. Nothing is built. The decisions each plan takes are my
-proposals, and the user hasn't confirmed them yet.
+**Status:** written on 2026-10-05, then checked the same day against the code, the cards of
+the test world and the machine's log, and corrected. The user approved the corrections;
+"What the check changed" below lists them. The other decisions are my proposals. Nothing is
+built.
 
 **Where this comes from.** On 2026-10-03 the machine in the user's test world was asked what
 it thinks of its environment. It gave 8 out of 10 and named four places where it had to
@@ -40,9 +42,9 @@ As the machine wrote it:
 
 | Point of the report | Plan | What kind of fix | Status |
 |---|---|---|---|
-| 1. Ticks stop and nothing says so | [point-1-ticks.md](point-1-ticks.md) | The machine marks its messages while ticks are paused, and the prompt says what that means | Not built |
+| 1. Ticks stop and nothing says so | [point-1-ticks.md](point-1-ticks.md) | The machine marks every message while a program run has no ticks left, and the prompt says what that means | Not built |
 | 2. The user's file, or the program's | [point-2-whose-file.md](point-2-whose-file.md) | One rule in the prompt | Not built |
-| 4. A card's numbers against what the user asked for | [point-4-requests-and-cards.md](point-4-requests-and-cards.md) | One rule in the prompt | Not built |
+| 4. A card's numbers against what the user asked for | [point-4-requests-and-cards.md](point-4-requests-and-cards.md) | One rule in the prompt, and one sentence on where a `hallux` command goes | Not built |
 
 This table is the only place that holds the status.
 
@@ -57,31 +59,59 @@ This table is the only place that holds the status.
 
 - **All three change `hallux/prompt.md`.** That file is everything the AI knows about its
   world. Point 1 also changes what the machine sends.
-- **The prompt grows by about fifteen lines,** on 272 today. It is sent with every message
+- **The prompt grows by about twenty lines,** on 272 today. It is sent with every message
   and cached.
 - **A test can hold the words, not the behaviour.** Each plan tests that the prompt says
   the new rule, as `tests/test_addons.py` does for addons, and point 1 tests what the
   machine sends. Whether the AI then acts on it shows only with a real model. So each plan
   ends with a try by hand in the test world. Those are a few commands of normal use.
-- **`docs/concept.md` copies parts of the prompt,** under "The system prompt". Each plan
-  names the lines that have to follow.
+- **Each try repeats the case from the report.** All three happened in kittymusic on
+  2026-10-02, between 23:14 and 23:39, and the machine's log in the test world has every
+  message of it. Points 1 and 2 were in the same run of the program. Each plan tells what
+  the log shows.
+- **`docs/concept.md` follows in its own sections,** which each plan names. The prompt it
+  shows under "The system prompt" is the first draft, kept for history, and stays as it is.
 - **Cards that exist stay as they are.** A card is the user's and the machine's; nothing
   here rewrites one. Where a card in the test world says something else than the new rule,
-  the plan says so.
-- **Any order.** Points 2 and 4 are a rule each. Point 1 has code, and is the one that left
-  a program stuck.
+  the plan says so, and names the `hallux` command that would change it.
+- **Any order.** Points 2 and 4 are prompt rules only. Point 1 has code, and is the one
+  that left a program stuck.
 
 ## Decisions these plans take
 
-My proposals. Each plan's file says more.
+Each plan's file says more.
 
 | Point | Topic | Decision | Why |
 |---|---|---|---|
 | 1 | How the AI learns that ticks are paused | A mark on the messages that go anyway: `ticks="paused"` | It costs nothing. A message of its own would be a model call after the budget is used up |
+| 1 | Which messages carry it | Every one, while the program run's tick budget is used up, also from a screen that asked for no tick | The stuck song was picked on a screen without a tick |
 | 1 | What it learns | That they are paused, not why | The budgets are the machine's hardware, which it can't see |
-| 1 | The stuck program | A rule: never wait for a tick to do what the command was for | The mark arrives with the next key. A program that waits for a tick to start would still wait until then |
+| 1 | The stuck program | A rule: don't depend on a tick. Do it on the first message that arrives, and at once when ticks are paused | "Never wait for a tick" would forbid kittymusic's start order, which is there on purpose |
 | 2 | A file with a mistake in it | The program says what is wrong and where, and leaves the file alone | It is what a real program does, and a repair from memory can be wrong |
-| 2 | A file the program wrote itself in this run | It may correct it | Otherwise a program couldn't fix its own draft |
+| 2 | A file the program wrote itself in this run | It may correct it, as long as the file is still as it wrote it | Otherwise a program couldn't fix its own draft. The score in the report was the program's own, changed by hand afterwards |
 | 2 | Where the rule stands | Under PROGRAMS, not under THE DISK IS REAL | A rule made with `hallux` can then change it for one program |
-| 4 | A card against the command line | The command line comes first. A card's numbers and habits are defaults | It is how options work on a real program, and it is what the machine did |
-| 4 | A limit that must hold | It is made a rule, with `hallux` | Rules come before a request already. A card needs no second kind of sentence |
+| 4 | A card against a request | The request comes first, in the program's arguments or typed into it. A card's numbers and habits are defaults | It is how options work on a real program, and it is what the machine did |
+| 4 | A limit that must hold | It is made a rule, with `hallux`, and the prompt says that such a limit goes into the Rules and not into the card | Rules come before a request. In the card it would be a default |
+| 4 | A request against a rule | The rule comes first | This is new. A limit needs a place where it holds |
+
+## What the check changed
+
+The first version of these plans was read against `hallux/machine.py`, `hallux/protocol.py`,
+the tests, kittymusic's card and the log. Each plan missed the case it came from. The user
+approved these corrections on 2026-10-05.
+
+| Point | The first version | Now | What the check found |
+|---|---|---|---|
+| 1 | The mark is on a message only while the screen that is up asked for a tick | It is on every message while the program run's tick budget is used up | The song that got stuck was picked on kittymusic's library screen, which asks for no tick |
+| 1 | A rule: never wait for a tick | Don't depend on a tick: the first message that arrives, and at once when ticks are paused | The card waits for the first tick on purpose, so that the screen is up before the song starts |
+| 1 | Nothing on the form while ticks are paused | The form keeps its tick | The machine restarts only a tick that is asked for |
+| 1 | "A form with fields that names a tick counts as having asked for one", and a change for it | Taken out | The parser drops that tick already, and a test holds it |
+| 1 | A test for the mark while the boot's budget stopped the ticks | The test says there is none | Nothing is sent while that budget is used up, and raising it restarts the ticks before the next key |
+| 1 | The count of a program's ticks starts anew when the program is left | Also when a boot starts | A boot can end inside a program, and the mark would then be on the next boot's messages |
+| 2 | A program may correct what it wrote during this run | Only while the file is still as it wrote it | The repaired score was composed and changed by the machine in that same run, and then edited by hand |
+| 2 | kittymusic's card "agrees with the rule" | Its line is wider than the rule, and the plan names the command that tightens it | "A score the machine composed itself is fixed" fits the repair that was made |
+| 2 | The try by hand breaks a copy made with `cp` | It breaks a song the program just composed, from outside the machine | The program never wrote the copy, so that try passes with the old rule too |
+| 4 | What the user asks for "on the command line" | What the user asks the program for, in its arguments or typed into it | The three minutes were typed into kittymusic's own line |
+| 4 | A limit is made a rule with `hallux` | And the prompt says that it goes into the Rules, not into the card | Every change to kittymusic so far went into its card |
+| 4 | A rule before a request "is what the prompt says today" | It is a new decision | The prompt says only that rules override the prompt |
+| 2, 4 | The prompt copied in `docs/concept.md` gets the new rules | The sections on programs and on rules get them | That copy is the first draft, kept for history |
