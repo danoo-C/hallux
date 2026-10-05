@@ -419,6 +419,18 @@ def test_the_prompt_says_where_a_change_made_with_hallux_goes():
         assert part in line
 
 
+def test_the_prompt_says_whose_a_file_with_a_mistake_is():
+    programs = SYSTEM_PROMPT.split("\nPROGRAMS\n")[1].split("\nADDONS\n")[0]
+    rule = rule_of(programs, "A program changes a file only when changing it is what the command")
+    for part in ("prints what is wrong and where, as the real program would, and leaves the file "
+                 "as it is.",
+                 "A file it wrote itself in this run, and that is still as it wrote it, it may "
+                 "correct.",
+                 "One that has changed since, or that it can't be sure of, is the user's.",
+                 "When the user asks for the repair, make it."):
+        assert part in rule
+
+
 def test_the_prompt_says_what_paused_ticks_mean():
     raw_mode = SYSTEM_PROMPT.split("\nRAW MODE: ")[1].split("\nBOOT\n")[0]
     paused = rule_of(raw_mode, "Ticks can stop.")

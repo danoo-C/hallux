@@ -634,6 +634,11 @@ The rules for all of them:
 
 - **Side effects are real.** A script's `open("out.txt", "w")` becomes `write_file`, and
   `os.listdir()` becomes `list_dir`. Only the *printed* output is imagined.
+- **A program changes a file only when that is what the command is for:** an editor, a
+  redirect, `sed -i`, a program that saves. One that reads a file and finds a mistake in it
+  says what is wrong and where, and leaves the file as it is. It may correct a file it wrote
+  itself in this run, as long as the file is still as it wrote it. A file that has changed
+  since is yours, and it is repaired when you ask for that.
 - **Line-based interactive programs just work**, because the AI owns the prompt. The `python3`
   REPL (`>>>` / `...`), `sqlite3`, `bc` and text adventures all keep state within the session.
 - **Full-screen programs** (`nano`, `vim`, `less`, `man`, invented games with menus) run in
