@@ -148,3 +148,43 @@ In `tests/test_panel_config.py`:
 
 A `config.toml` with all six settings loads, one with `agent_max_running = -1` stops with a
 message that names the setting, and the panel's tests pass with the six rows hidden.
+
+## As built
+
+Built on 2026-10-05, on the branch `addon-agents`. 91 new tests, 1192 in all. Two old tests
+changed, as this file says above: the one that pins which settings change now, and the one
+that holds every setting to a row. Decided while building:
+
+- **The pair's function is `config.check_together(hardware, changed=None)`.** Without
+  `changed` its words name both settings, for `load` and `save`. With it, the words go
+  behind that one setting in its row of the panel: `is over the budget for all jobs`, or
+  `is under the budget per job`. The sentence that names both doesn't fit a row: at 80
+  columns 37 characters are left behind a value.
+- **`save` asks it once, after its last change,** on the file as it would be. So a save
+  also mends a file whose pair was wrong. And it refuses a change that would leave a file
+  that was edited by hand with a wrong pair, naming both.
+- **The two helpers are `config.agent_model(hardware, running)` and
+  `config.agent_effort(hardware, asked, model)`.** Nothing calls them before step 9.
+- **Without an ask, and with no `effort` set for the machine, an agent gets none,** as the
+  machine does.
+- **`agent_model` is checked like `model`:** a name that isn't empty, or left out.
+- **A typed count has at most six digits.** A typed time is a number with or without an
+  `s`, and is kept with a point: `config.toml` gets `600.0`.
+- **The time is shown as `600s`,** and its row opens with `600`.
+- **An empty Agent model** is typed as nothing, or picked as `none`, the first of its
+  list.
+- **The tab is told with one argument:** `ConfigTab(view, change, save, refill,
+  agents=False)`. `stops()` and `draw()` take the same word, and `AGENTS` holds the six
+  names.
+- **The six rows stand in the first group, after the Event budget.**
+- **`PICKED`** holds the rows that are picked from a list and never typed: Effort and Max
+  agent effort. **`HOW`** holds what the foot says for a typed row that isn't dollars.
+
+**Looked at on a pipe, at 80 columns by 24 rows:** the tab with the six rows, the Agent
+model row open with its list and its warning, and a budget per job that was refused. The
+rows line up, and the refusal fits behind its value. A real terminal shows them from step
+10 on, and that step has the check on a pseudo-terminal.
+
+**Nothing to try by hand.** The rows are hidden, and nothing reads the settings yet. What
+works now: the six can be written into `config.toml`, and a wrong value stops Hallux at
+the start with its words.

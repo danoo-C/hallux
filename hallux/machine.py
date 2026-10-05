@@ -164,7 +164,10 @@ class Machine:
         old = getattr(self.hardware, name)
         if value == old:                         # Enter on a row that was left as it was
             return None
-        self.hardware = dataclasses.replace(self.hardware, **{name: value})
+        changed = dataclasses.replace(self.hardware, **{name: value})
+        if reason := config.check_together(changed, name):       # two that can't both hold
+            return reason
+        self.hardware = changed
         self.unsaved[name] = value
         self.from_flags.discard(name)            # the flag's value is gone for this run
         log.info("config: %s %s -> %s", name, old, value)

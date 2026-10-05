@@ -14,7 +14,9 @@ from test_panel import ESC, StandIn, click, drawn, session  # noqa: E402
 from hallux import config  # noqa: E402
 from hallux.config import Hardware, View  # noqa: E402
 from hallux.panel import Panel  # noqa: E402
-from hallux.panel_tabs.config import BUTTONS, LABELS, ConfigTab, State, draw, stops  # noqa: E402
+from hallux.panel_tabs.config import (  # noqa: E402
+    AGENTS, BUTTONS, LABEL_WIDTH, LABELS, ConfigTab, State, draw, stops,
+)
 
 UP, DOWN, LEFT, RIGHT, HOME, END = "\x1b[A", "\x1b[B", "\x1b[D", "\x1b[C", "\x1b[H", "\x1b[F"
 BACKSPACE, DELETE, ENTER, CTRL_U = "\x7f", "\x1b[3~", "\r", "\x15"
@@ -22,6 +24,8 @@ BACKSPACE, DELETE, ENTER, CTRL_U = "\x7f", "\x1b[3~", "\r", "\x15"
 
 class Machine:
     """What stands in for the machine: a view, and the three things the tab can ask for."""
+
+    agents = False                           # the machine has an addon with an agent
 
     def __init__(self, hardware=Hardware(), **view):
         self.hardware, self.calls, self.reasons = hardware, [], {}
@@ -57,18 +61,23 @@ class Machine:
         return "budgets refilled"
 
     def tab(self):
-        return ConfigTab(self.view, self.change, self.save, self.refill)
+        return ConfigTab(self.view, self.change, self.save, self.refill, agents=self.agents)
+
+
+class MachineWithAnAgent(Machine):
+    agents = True
 
 
 def text(machine, state=None):
     """The whole tab as text, as draw() gives it."""
-    result = draw(machine.view(), state or State())
+    result = draw(machine.view(), state or State(), machine.agents)
     return "\n".join("".join(part[1] for part in line) for line in (*result.rows, result.buttons))
 
 
-def to(stop, start=None):
+def to(stop, start=None, agents=False):
     """The keys that move to this row or button: from the first row, or from `start`."""
-    steps = stops().index(stop) - (stops().index(start) if start else 0)
+    order = stops(agents)
+    steps = order.index(stop) - (order.index(start) if start else 0)
     return (DOWN if steps > 0 else UP) * abs(steps)
 
 
@@ -80,10 +89,129 @@ def on(machine, script, extra=(), **size):
 
 def test_every_setting_has_a_row():
     assert set(LABELS) == {f.name for f in fields(Hardware)}
-    assert stops() == [name for name in LABELS if config.WHEN[name] in ("now", "reboot")
-                       and config.WHEN[name] == "now"] + [
-                           name for name in LABELS if config.WHEN[name] == "reboot"] + list(BUTTONS)
+    assert stops(agents=True) == [name for name in LABELS if config.WHEN[name] == "now"] + [
+        name for name in LABELS if config.WHEN[name] == "reboot"] + list(BUTTONS)
+    assert stops() == [stop for stop in stops(agents=True) if stop not in AGENTS]
     assert len(stops()) == 9                                # six rows that change, three buttons
+    assert len(stops(agents=True)) == 15                    # and the six of the addon agents
+
+
+def test_no_label_runs_into_its_value():
+    """Tried in the check of 2026-10-05: "Agent effort, at most" and "Budget for all jobs" did."""
+    assert max(len(label) for label in LABELS.values()) < LABEL_WIDTH
+    shown = text(MachineWithAnAgent())
+    assert all(f"    {label:<{LABEL_WIDTH}}" in shown for label in LABELS.values())
+
+
+def test_the_agents_rows_are_hidden_until_the_tab_is_told():
+    hidden, told = text(Machine()), text(MachineWithAnAgent())
+    assert not any(LABELS[name] in hidden for name in AGENTS)
+    assert all(LABELS[name] in told for name in AGENTS)
+    without = [line for line in told.splitlines()
+               if not line.strip().startswith(tuple(LABELS[name] for name in AGENTS))]
+    assert "\n".join(without) == hidden                     # nothing else differs but those rows
+
+    async def script(press, panel):
+        await press(to("event_budget_usd") + DOWN + ENTER)  # the row after it, on this machine
+        return panel.tab.state.open
+
+    assert on(Machine(), script) == "effort"                # the arrow keys pass over the six
+    assert on(MachineWithAnAgent(), script) == "agent_model"
+
+
+def test_the_agents_rows_as_they_are_shown():
+    machine = MachineWithAnAgent(Hardware(agent_model="claude-haiku-4-5", agent_max_effort="xhigh",
+                                          agent_max_running=3, agent_job_budget_usd=0.125,
+                                          agent_budget_usd=4, agent_timeout_seconds=90.5))
+    assert text(MachineWithAnAgent()).split("\n\n")[1] == """\
+  Changes now
+    Model              claude-opus-5-5
+    Budget per boot    none                spent in this boot: $0.00
+    Tick budget        $0.25
+    Event budget       $0.25               spent since you typed: $0.00
+    Agent model        same as Model
+    Max agent effort   high
+    Agents at once     2
+    Budget per job     $1.00
+    Budget, all jobs   $2.00
+    Time per job       600s"""
+    shown = {line[4:23].strip(): line[23:].strip() for line in text(machine).splitlines()}
+    assert [shown[LABELS[name]] for name in AGENTS] == [
+        "claude-haiku-4-5", "xhigh", "3", "$0.125", "$4.00", "90.5s"]
+
+
+@pytest.mark.parametrize("name, opens_with, how, offered", [
+    ("agent_model", "", "type a name, or ↑ ↓ pick",
+     ["› none", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"]),
+    ("agent_max_effort", "high", "↑ ↓ pick", ["low", "medium", "› high", "xhigh", "max"]),
+    ("agent_max_running", "2", "type a whole number", []),
+    ("agent_job_budget_usd", "1.00", "type the dollars", []),
+    ("agent_budget_usd", "2.00", "type the dollars", []),
+    ("agent_timeout_seconds", "600", "type the seconds", []),
+])
+def test_each_agents_row_opens_with_its_own_hint_and_list(name, opens_with, how, offered):
+    machine = MachineWithAnAgent()
+
+    async def script(press, panel):
+        await press(to(name, agents=True) + ENTER)
+        return panel.tab.state.typed.text, drawn(panel)[-1], text(machine, panel.tab.state)
+
+    line, foot, shown = on(machine, script)
+    assert line == opens_with and foot == f" {how} · Enter take · Esc leave it as it was"
+    listed = [row.strip() for row in shown.split(LABELS[name])[1].split("\n\n")[0].splitlines()[1:]]
+    assert [row for row in listed if row.lstrip("› ") in config.EFFORTS + config.MODELS + ("none",)
+            ] == offered
+
+
+def test_an_agents_number_is_typed_and_its_effort_is_picked():
+    machine = MachineWithAnAgent()
+
+    async def script(press, panel):
+        await press(to("agent_max_running", agents=True) + ENTER + "3" + ENTER)
+        await press(to("agent_timeout_seconds", "agent_max_running", agents=True) + ENTER
+                    + "90s" + ENTER)
+        await press(to("agent_max_effort", "agent_timeout_seconds", agents=True) + ENTER)
+        await press("max")                                  # nothing is typed into this row
+        await press(DOWN + ENTER)
+        await press(to("agent_model", "agent_max_effort", agents=True) + ENTER + DOWN + ENTER)
+        return text(machine)
+
+    shown = on(machine, script)
+    assert machine.calls == [("change", "agent_max_running", "3"),
+                             ("change", "agent_timeout_seconds", "90s"),
+                             ("change", "agent_max_effort", "xhigh"),         # the next of the five
+                             ("change", "agent_model", "claude-opus-5-5")]    # the one after none
+    assert machine.hardware == Hardware(agent_max_running=3, agent_timeout_seconds=90.0,
+                                        agent_max_effort="xhigh", agent_model="claude-opus-5-5")
+    assert "Time per job       90s" in shown and "Agent model        claude-opus-5-5" in shown
+    assert shown.endswith("4 changes not saved")
+
+
+def test_the_agent_model_row_says_what_a_wrong_name_does():
+    machine = MachineWithAnAgent()
+
+    async def script(press, panel):
+        await press(to("agent_model", agents=True) + ENTER)
+        return text(machine, panel.tab.state)
+
+    offered = on(machine, script)
+    assert "a wrong name fails every job" in offered
+    assert "ends Hallux" not in offered                     # that is the Model row's warning
+
+
+def test_a_budget_that_cant_hold_with_the_other_is_refused_in_its_row():
+    machine = MachineWithAnAgent()
+    machine.reasons["agent_job_budget_usd"] = "is over the budget for all jobs"
+
+    async def script(press, panel):
+        await press(to("agent_job_budget_usd", agents=True) + ENTER + "3" + ENTER)
+        return panel.tab.typing, drawn(panel)
+
+    still_open, screen = on(machine, script)
+    assert still_open and machine.hardware == Hardware()
+    [row] = [line for line in screen if line.lstrip().startswith("Budget per job")]
+    assert row.endswith("3                   is over the budget for all jobs")
+    assert len(row) <= 80                                   # all of it, on a window of 80
 
 
 def test_the_text_of_the_tab():

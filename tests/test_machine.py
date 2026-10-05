@@ -845,6 +845,32 @@ def test_a_wrong_value_changes_nothing(tmp_path, caplog):
     assert "config" not in caplog.text and terminal.statuses == []
 
 
+def test_a_change_that_cant_hold_with_another_setting_changes_nothing(tmp_path, caplog):
+    """A budget per job above the budget for all jobs: no job could ever start. The row of the
+    panel gets the words, and they fit behind it at 80 columns."""
+    caplog.set_level(logging.INFO, logger="hallux")
+    machine, _ = idle(tmp_path)
+    assert machine.change("agent_job_budget_usd", "3") == "is over the budget for all jobs"
+    assert machine.change("agent_budget_usd", "0.5") == "is under the budget per job"
+    assert machine.hardware == Hardware() and machine.unsaved == {}
+    assert "config" not in caplog.text
+    assert machine.change("agent_budget_usd", "10") is None       # the other one first, and
+    assert machine.change("agent_job_budget_usd", "3") is None    # then it holds
+    assert machine.change("agent_budget_usd", "0") is None        # agents off: any budget per job
+    assert machine.unsaved == {"agent_budget_usd": 0.0, "agent_job_budget_usd": 3.0}
+
+
+def test_three_changes_of_the_two_budgets_are_saved(tmp_path):
+    """Each change holds when it is made, and the file takes them as a pair."""
+    machine, _ = idle(tmp_path)
+    for name, text in (("agent_job_budget_usd", "0.5"), ("agent_budget_usd", "10"),
+                       ("agent_job_budget_usd", "5")):
+        assert machine.change(name, text) is None
+    assert list(machine.unsaved) == ["agent_job_budget_usd", "agent_budget_usd"]
+    assert machine.save() is None and machine.unsaved == {}
+    assert config.load(tmp_path) == Hardware(agent_job_budget_usd=5.0, agent_budget_usd=10.0)
+
+
 def test_the_same_value_is_no_change(tmp_path, caplog):
     caplog.set_level(logging.INFO, logger="hallux")
     machine, _ = idle(tmp_path, Hardware(model="claude-sonnet-5-5"), from_flags=["model"])
