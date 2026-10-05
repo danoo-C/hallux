@@ -21,6 +21,10 @@ MUSIC = addons.Addon("music", "A sound card.", "the manual", {}, agent=addons.Ag
     "composer", "You compose one song.", {}, "high", "composing…"))
 MAIL = addons.Addon("mail", "A mailbox.", "the manual", {}, agent=addons.Agent(
     "sorter", "You sort mail.", {}))
+GUI = addons.Addon("gui", "A window.", "the manual", {}, agent=addons.Agent(
+    "designer", "You design.", {}))
+ROOMY = Hardware(agent_budget_usd=1000)                  # no budget in the way of a test
+CHEAP = Outcome(ok=True, cost_usd=0.30, tokens=100, turns=1)
 
 
 @pytest.fixture
@@ -51,11 +55,13 @@ class StandIn:
         ("raise", error)        break
 
     A script that runs out ends well. `stopped` is what it comes back with when it is stopped
-    while it waits; None there means it doesn't come back at all."""
+    while it waits; None there means it doesn't come back at all. With `lingers`, it comes
+    back only when that gate opens: its cost takes a while to arrive."""
 
-    def __init__(self, job, script, stopped=Outcome(ok=False, cost_usd=0.07, tokens=900, turns=2)):
+    def __init__(self, job, script, stopped=Outcome(ok=False, cost_usd=0.07, tokens=900, turns=2),
+                 lingers=None):
         self.job, self.script, self.when_stopped = job, list(script), stopped
-        self.stop_asked = asyncio.Event()
+        self.stop_asked, self.lingers = asyncio.Event(), lingers
         self.ran_in = None
 
     async def run(self):
@@ -79,6 +85,8 @@ class StandIn:
                 if self.stop_asked.is_set():
                     if self.when_stopped is None:
                         await asyncio.sleep(3600)        # it never comes back by itself
+                    if self.lingers is not None:
+                        await self.lingers.wait()
                     return self.when_stopped
             elif kind == "end":
                 return more[0]
@@ -93,12 +101,14 @@ class StandIn:
 class World:
     """A Jobs on a test world, with stand-in workers, inside a running event loop."""
 
-    def __init__(self, root, hardware=Hardware()):
+    def __init__(self, root, hardware=ROOMY):
         self.disk, self.hardware = Disk(root), hardware
         self.scripts, self.workers, self.reports, self.arrivals = {}, [], 0, 0
         self.now = 100.0                                 # the clock: a test moves it
+        self.boot_over = False                           # what the machine says of its budget
         self.jobs = Jobs(self.disk, lambda: self.hardware, self.make, on_report=self.reported,
-                         on_event=self.arrived, clock=lambda: self.now)
+                         on_event=self.arrived, over_budget=lambda: self.boot_over,
+                         clock=lambda: self.now)
         self.jobs.start()
 
     def make(self, job):
@@ -117,6 +127,13 @@ class World:
         """Start a job whose worker will follow this script. Returns its pid."""
         self.scripts[self.jobs._next] = (script, more)
         return self.jobs.spawn(addon, brief, folder, edit)
+
+    def tries(self, *script, addon=MUSIC, folder="/tmp/work", **more):
+        """spawn(), or the code it was refused with."""
+        try:
+            return self.spawn(*script, addon=addon, folder=folder, **more)
+        except addons.Refused as refusal:
+            return refusal.code
 
     def row(self, pid):
         """The job's row, without reading the table: reading it lets an ended job go."""
@@ -139,7 +156,7 @@ class World:
         return self.row(pid)
 
 
-def run(root, scenario, hardware=Hardware()):
+def run(root, scenario, hardware=ROOMY):
     async def main():
         return await scenario(World(root, hardware))
     return asyncio.run(asyncio.wait_for(main(), 20))
@@ -242,7 +259,8 @@ def test_the_row_starts_with_the_declarations_status_or_the_agents_name(root):
 def test_a_job_carries_its_limits_from_the_settings_at_its_start(root):
     async def scenario(world):
         first = world.spawn(("wait", asyncio.Event()))
-        world.hardware = Hardware(agent_job_budget_usd=0.25, agent_timeout_seconds=90)
+        world.hardware = Hardware(agent_job_budget_usd=0.25, agent_timeout_seconds=90,
+                                  agent_budget_usd=1000)
         second = world.spawn(("wait", asyncio.Event()), addon=MAIL, folder="/tmp/work")
         await world.until(lambda: len(world.workers) == 2)
         return [worker.job.limits for worker in world.workers], (first, second)
@@ -542,7 +560,8 @@ def test_the_timeout_kills_a_job(root, music):
         pid = world.spawn(("write", "new.score", "x"), ("wait", asyncio.Event()))
         return await world.ended(pid), world.events()
 
-    row, [(_, event)] = run(root, scenario, Hardware(agent_timeout_seconds=0.05))
+    row, [(_, event)] = run(root, scenario, Hardware(agent_timeout_seconds=0.05,
+                                                     agent_budget_usd=1000))
     assert (row["state"], row["why"], row["cost_usd"]) == ("killed", "timeout", 0.07)
     assert (event["state"], event["why"], event["written"]) == ("killed", "timeout", 1)
     assert not (music / "new.score").exists()
@@ -771,3 +790,143 @@ def test_the_line_for_a_jobs_end_says_what_landed_or_why_not(root, music):
     assert run(root, scenario) == [
         "done: nothing written", "done: a.score, b.score",
         "done: neon.score.new (neon.score was changed meanwhile)", "killed: kill"]
+
+
+# ---------------------------------------------------------------- the caps
+
+def test_two_jobs_run_and_a_third_waits_for_one_to_end(root):
+    async def scenario(world):
+        gate = asyncio.Event()
+        tried = [world.tries(("wait", gate)), world.tries(("wait", asyncio.Event()), addon=MAIL),
+                 world.tries(addon=GUI)]                 # agent_max_running is 2
+        why = world.jobs.why_not(GUI)
+        gate.set()
+        await world.ended(tried[0])
+        return tried, why, world.tries(addon=GUI), world.jobs.table()
+
+    tried, why, then, table = run(root, scenario)
+    assert tried == [30001, 30002, "EAGAIN"] and why == "too many jobs"
+    assert then == 30003                                 # a refusal used up no pid
+    assert [row["pid"] for row in table] == [30001, 30002, 30003]        # and left no row
+    assert not (root / ".hallux").exists()               # nor a folder of copies
+
+
+def test_with_no_agents_at_once_every_start_is_refused(root):
+    async def scenario(world):
+        off = [world.tries(), world.tries(addon=MAIL)], world.jobs.why_not(MUSIC)
+        world.hardware = ROOMY                           # a change acts on the next spawn
+        return off, world.tries(), world.jobs.why_not(MAIL)
+
+    off, then, why = run(root, scenario, Hardware(agent_max_running=0))
+    assert off == (["EAGAIN", "EAGAIN"], "agents are off")
+    assert then == 30001 and why is None
+    assert not (root / ".hallux").exists()               # a refusal makes no folder of copies
+
+
+def test_one_job_of_an_addons_agent_at_a_time(root):
+    async def scenario(world):
+        gate = asyncio.Event()
+        first = world.tries(("wait", gate))
+        second, why = world.tries(), world.jobs.why_not(MUSIC)
+        other = world.jobs.why_not(MAIL)                 # another addon's agent may start
+        gate.set()
+        await world.ended(first)
+        return first, second, why, other, world.tries()
+
+    assert run(root, scenario) == (30001, "EAGAIN", "already running", None, 30002)
+
+
+def test_the_budget_for_all_jobs_is_never_passed(root):
+    """With the defaults, $1.00 a job and $2.00 for all: a job that runs counts with its full
+    cap, one that has ended with what it cost, and the one that asks with its full cap."""
+    async def scenario(world):
+        seen = [world.tries(("end", CHEAP)), world.tries(("end", CHEAP), addon=MAIL)]   # 1 + 1
+        await world.ended(30001), await world.ended(30002)                  # both cost $0.30
+        seen.append(world.tries(("wait", asyncio.Event())))                 # 0.60 + 1.00
+        seen += [world.tries(addon=MAIL), world.jobs.why_not(MAIL)]         # 0.60 + 1.00 + 1.00
+        world.jobs.refill()                                                 # 0 + 1.00 + 1.00
+        return seen, world.tries(addon=MAIL), world.jobs.spent_since_refill
+
+    seen, after_the_refill, counted = run(root, scenario, Hardware())
+    assert seen == [30001, 30002, 30003, "EAGAIN", "jobs budget used"]
+    assert after_the_refill == 30004 and counted == 0.0
+
+
+def test_a_killed_job_counts_with_its_full_cap_until_its_cost_arrives(root):
+    async def scenario(world):
+        cost_arrives = asyncio.Event()
+        pid = world.tries(("wait", asyncio.Event()), lingers=cost_arrives)
+        await world.until(lambda: world.workers)
+        world.jobs.kill(pid)
+        await asyncio.sleep(0.02)
+        meanwhile = [world.jobs.why_not(MAIL), world.jobs.why_not(MUSIC),
+                     world.row(pid)["state"], world.jobs.spent_since_refill]
+        cost_arrives.set()
+        await world.ended(pid)
+        return meanwhile, world.jobs.why_not(MAIL), world.jobs.spent_since_refill
+
+    meanwhile, then, counted = run(root, scenario, Hardware(agent_budget_usd=1.5))
+    assert meanwhile == ["jobs budget used", "already running", "killed", 0.0]   # 1.00 + 1.00
+    assert then is None and counted == 0.07              # 0.07 + 1.00 fits into 1.50
+
+
+def test_a_job_whose_cost_isnt_known_counts_with_its_full_cap_for_good(root):
+    async def scenario(world):
+        pid = world.tries(("wait", asyncio.Event()), stopped=Outcome(ok=False))
+        await world.until(lambda: world.workers)
+        world.jobs.kill(pid)
+        await world.ended(pid)
+        return world.jobs.spent, world.jobs.spent_boot, world.jobs.why_not(MAIL)
+
+    assert run(root, scenario, Hardware()) == (1.0, 1.0, None)      # 1.00 + 1.00 just fits
+    assert run(root, scenario, Hardware(agent_budget_usd=1.99))[2] == "jobs budget used"
+
+
+def test_over_the_boots_budget_no_job_starts(root):
+    async def scenario(world):
+        world.boot_over = True
+        refused_ = world.tries(), world.jobs.why_not(MUSIC)
+        world.boot_over = False                          # the cap was raised
+        return refused_, world.tries()
+
+    assert run(root, scenario) == (("EAGAIN", "boot budget used"), 30001)
+
+
+@pytest.mark.parametrize("hardware, words", [
+    (Hardware(agent_max_running=0), "agents are off"),
+    (Hardware(agent_budget_usd=0), "agents are off"),    # that turns them off too
+    (Hardware(agent_max_running=1), "too many jobs"),
+    (Hardware(agent_budget_usd=1.5), "jobs budget used"),
+    (Hardware(), None),
+])
+def test_why_an_agent_cant_start_is_the_check_spawn_makes(root, hardware, words):
+    async def scenario(world):
+        world.hardware = Hardware()                      # one job of another addon runs
+        world.tries(("wait", asyncio.Event()))
+        world.hardware = hardware
+        before = world.jobs.table()
+        return world.jobs.why_not(MAIL), world.tries(addon=MAIL), before, world.jobs.table()
+
+    why, tried, before, after = run(root, scenario)
+    assert why == words and (tried == "EAGAIN") == (words is not None)
+    assert len(after) - len(before) == (words is None)   # asking started nothing
+
+
+def test_the_jobs_dollars_are_a_sum_of_their_own(root):
+    async def scenario(world):
+        for addon in (MUSIC, MAIL):
+            await world.ended(world.spawn(("end", CHEAP), addon=addon, folder="/tmp/work"))
+        first_boot = world.jobs.spent, world.jobs.spent_boot, world.jobs.spent_since_refill
+        running = world.spawn(("wait", asyncio.Event()), folder="/tmp/work")
+        await world.until(lambda: len(world.workers) == 3)
+        await world.jobs.end_boot()                      # its cost is read: it counts in this boot
+        ended = world.jobs.spent, world.jobs.spent_boot
+        world.jobs.new_boot()
+        return first_boot, running, ended, (world.jobs.spent, world.jobs.spent_boot,
+                                            world.jobs.spent_since_refill)
+
+    first_boot, _, ended, next_boot = run(root, scenario)
+    assert first_boot == (0.6, 0.6, 0.6)
+    assert [round(amount, 2) for amount in ended] == [0.67, 0.67]
+    assert round(next_boot[0], 2) == 0.67 and next_boot[1:] == (0.0, 0.0)
+

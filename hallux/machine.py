@@ -26,6 +26,7 @@ from claude_agent_sdk import (
 
 from hallux import config, sandbox
 from hallux.addons import Addon, Events, stop_all
+from hallux.agents import Job, Jobs, NoWorker, Worker
 from hallux.config import Hardware
 from hallux.disk import Disk
 from hallux.passwords import Passwords
@@ -112,7 +113,8 @@ class Machine:
     def __init__(self, root: Path, hardware: Hardware, terminal: Terminal,
                  client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient,
                  addons: Sequence[Addon] = (), events: Events | None = None,
-                 from_flags: Iterable[str] = ()):
+                 from_flags: Iterable[str] = (),
+                 worker_factory: Callable[[Job], Worker] = NoWorker):
         self.disk = Disk(root)
         self.hardware = hardware                 # the settings as they are now
         self.running = hardware                  # what this boot's session runs on: see power_on
@@ -138,6 +140,10 @@ class Machine:
         self.ticks_stopped = False               # and whether a budget has stopped its ticks
         self.last_turn_cost = 0.0
         self.stream: ScreenStream | None = None  # what the last answer showed while written
+        # The jobs of the addons' agents (hallux.agents). They read the settings as they are,
+        # ask whether the boot is over its budget, and say when one of them reports or ends.
+        self.jobs = Jobs(self.disk, lambda: self.hardware, worker_factory,
+                         on_report=self.job_reported, over_budget=self.over_budget)
 
     # ---------------------------------------------------------------- for hallux's own panel
 
@@ -147,8 +153,8 @@ class Machine:
                   "event_budget_usd": "event_budget_usd" in self.notes,
                   "tick_budget_usd": "tick_budget_usd" in self.notes}
         return config.View(
-            hardware=self.hardware, running=self.running, spent_boot=self.session_spent,
-            spent_since_refill=self.session_spent - self.refilled_at,
+            hardware=self.hardware, running=self.running, spent_boot=self.boot_spent(),
+            spent_since_refill=self.boot_spent() - self.refilled_at,
             spent_ticks=self.tick_spent if self.in_form else None, spent_events=self.event_spent,
             paused=frozenset(name for name, used_up in paused.items() if used_up),
             from_flags=frozenset(self.from_flags), unsaved=frozenset(self.unsaved),
@@ -189,10 +195,12 @@ class Machine:
     def refill(self) -> str:
         """Start the counting of every budget anew, at the limits as they are. What was really
         spent stays on the bar. Returns a line for the panel."""
-        log.info("budgets refilled: events $%.2f, ticks $%.2f, boot $%.2f", self.event_spent,
-                 self.tick_spent, self.session_spent - self.refilled_at)
+        log.info("budgets refilled: events $%.2f, ticks $%.2f, boot $%.2f, jobs $%.2f",
+                 self.event_spent, self.tick_spent, self.boot_spent() - self.refilled_at,
+                 self.jobs.spent_since_refill)
         self.event_spent = self.tick_spent = 0.0
-        self.refilled_at = self.session_spent    # the boot's cap counts from here
+        self.jobs.refill()
+        self.refilled_at = self.boot_spent()     # the boot's cap counts from here
         self.settle()
         return "budgets refilled"
 
@@ -224,6 +232,7 @@ class Machine:
     async def run(self) -> None:
         """Power on, reboot as often as the machine asks, return when it halts."""
         await self.terminal.start()
+        self.jobs.start()                        # inside the loop: a job's worker runs in it
         try:
             while await self.power_on():
                 log.info("reboot")
@@ -234,6 +243,7 @@ class Machine:
         """One boot-to-shutdown lifetime. Returns True if the machine wants to reboot."""
         self.disk.cwd = "/"
         self.session_spent = self.refilled_at = 0.0
+        self.jobs.new_boot()
         self.forget_events()
         for reason in ("event_budget_usd", "max_budget_usd", "model"):
             self.note(reason, None)              # a new boot: nothing spent, heard or waiting
@@ -302,8 +312,9 @@ class Machine:
                         restore = reply.edit
                 return reply.reboot
             finally:                             # halt, reboot or a crash: a program that
-                await self.leave_block_mode()    # is still on screen ends with the boot
-                self.stop_addons()
+                await self.leave_block_mode()    # is still on screen ends with the boot,
+                await self.jobs.end_boot()       # and so does every job, before the addons'
+                self.stop_addons()               # hooks: a job may be inside an addon function
                 self.forget_events()
 
     async def read_shell_line(self, restore: str) -> str | Key | Interrupted:
@@ -355,8 +366,10 @@ class Machine:
                 else "events are off: event_budget_usd is 0")
 
     def refill_event_budget(self) -> None:
-        """The user typed a line: somebody is at the keyboard, so events may spend again."""
+        """The user typed a line: somebody is at the keyboard, so events may spend again, and
+        so may the addons' jobs."""
         self.event_spent = 0.0
+        self.jobs.refill()
         self.settle()
 
     def settle(self) -> None:
@@ -381,10 +394,24 @@ class Machine:
                 self.terminal.set_tick(self.tick_asked)
         self.check_events()
 
+    def boot_spent(self) -> float:
+        """What this boot has spent: the main session, and each job once it has ended. The two
+        are kept apart: an event's turn is measured as the change of the main session's sum."""
+        return self.session_spent + self.jobs.spent_boot
+
     def over_budget(self) -> bool:
-        """The boot has a cap, and has spent it since it started or since the last refill."""
+        """The boot has a cap, and has spent it since it started or since the last refill. A
+        job that still runs isn't in it, so a boot can pass its cap by what its running jobs
+        spend: at most the budget for all jobs."""
         cap = self.hardware.max_budget_usd
-        return cap is not None and self.session_spent - self.refilled_at >= cap
+        return cap is not None and self.boot_spent() - self.refilled_at >= cap
+
+    def job_reported(self) -> None:
+        """A job reported or ended. Its cost can take the boot over its cap while the machine
+        sits at the prompt, where nothing else would ask: the bar says so at once, and not
+        after the next line was typed into it."""
+        if self.over_budget():
+            self.hold()
 
     def ticks_used_up(self) -> bool:
         """The program run has spent its tick budget. No tick goes to the AI, and every other
@@ -401,7 +428,7 @@ class Machine:
         if getattr(self.terminal, "attended", True):             # somebody can raise it
             note += f" · raise it: {PANEL_KEY}"
         if self.notes.get("max_budget_usd") != note:             # said once
-            log.warning("%s ($%.2f spent)", note, self.session_spent - self.refilled_at)
+            log.warning("%s ($%.2f spent)", note, self.boot_spent() - self.refilled_at)
             self.notify([note], "max_budget_usd")
         self.events.pause()
         return True
@@ -509,6 +536,7 @@ class Machine:
             reply = await self.send(client, "tick", activity="updating…")
             self.tick_spent += self.last_turn_cost
             return reply
+        self.jobs.refill()                        # a key or an action: somebody is there
         if action.events:                         # raw mode: every key, as events
             return await self.send(client, "keys", "".join(action.events))
         attrs: dict[str, object] = {"key": action.key}

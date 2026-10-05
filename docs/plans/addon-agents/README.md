@@ -1,7 +1,8 @@
 # Plan: addon agents
 
-**Status:** written on 2026-10-04. **Steps 1 to 7 are built,** on 2026-10-05; the table under
-[The steps](#the-steps) says how far the build is. The design it follows is
+**Status:** written on 2026-10-04. **Steps 1 to 8 are built,** the first seven on
+2026-10-05; the table under [The steps](#the-steps) says how far the build is. The design
+it follows is
 [addon-agents.md](../../addon-agents.md), in which no question is open. The decisions this
 plan takes on its own are in a table below. They are my proposals, and the user hasn't
 confirmed them, apart from what the review and the check settled. The
@@ -219,7 +220,7 @@ step of the config panel's plan.
 | 5. The landing | [05-landing.md](05-landing.md) | 4 | Built on 2026-10-05 |
 | 6. The declaration | [06-declaration.md](06-declaration.md) | | Built on 2026-10-05 |
 | 7. The jobs | [07-jobs.md](07-jobs.md) | 3, 5, 6 | Built on 2026-10-05 |
-| 8. The caps | [08-caps.md](08-caps.md) | 7, panel 3 | Not built |
+| 8. The caps | [08-caps.md](08-caps.md) | 7, panel 3 | Built on 2026-10-06 |
 | 9. A job's real session | [09-session.md](09-session.md) | 6, 7 | Not built |
 | 10. The main agent's side | [10-main-agent.md](10-main-agent.md) | 8, 9, panel 5 | Not built |
 | 11. A job's end in a full-screen program | [11-wake.md](11-wake.md) | 10, panel 3 and 7 | Not built |

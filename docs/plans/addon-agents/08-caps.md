@@ -157,3 +157,45 @@ In `tests/test_machine.py`:
 
 With the default settings, a test starts jobs until one is refused, types a line, and the
 next one starts.
+
+## As built
+
+Built on 2026-10-06, on the branch `addon-agents`. 23 new tests, 1383 in all. The tests of
+step 7 were given settings with room in them, since the caps now apply to their jobs too.
+Decided while building:
+
+- **The machine's new argument is `worker_factory`,** beside `client_factory`. Until step 9
+  its default is a worker that fails at once and says why: `this hallux has no worker to
+  run a job`. Nothing can call `spawn` before step 10, so no run meets it.
+- **`Jobs` is given `over_budget`,** the machine's own check, and asks it last. The words
+  are checked in this order: `agents are off`, `already running`, `too many jobs`,
+  `jobs budget used`, `boot budget used`.
+- **`Jobs.why_not(addon)`** is the question "could this agent start", and `spawn` asks
+  exactly it. The caps come before the folder and the files, so a job that couldn't start
+  anyway never has its folder looked at.
+- **The jobs' sums are `Jobs`' own:** `spent` since Hallux started, `spent_boot`, and
+  `spent_since_refill`. A job is in them when its worker has come back. One whose cost
+  isn't known is in them with its full cap, as the design says.
+- **`Jobs.new_boot()`** is what the machine calls when a boot starts: the boot has spent
+  nothing on jobs, and their budget is full. The end of the boot before it has waited for
+  the costs of the jobs it killed, so those are in the old boot.
+- **`boot_spent()`** is the main session's sum plus the jobs' for this boot. The cap, the
+  log's lines and the panel's view all read it. So the Budget per boot row has the jobs in
+  it from this step on, which step 10's file still lists as its own.
+- **A typed line fills both budgets in one place,** `refill_event_budget()`. A key or an
+  action in a full-screen program fills the jobs' alone, after the check that holds an
+  action back, so one that is held fills nothing.
+- **The machine asks `hold()` whenever a job reports,** not only at its end. It costs
+  nothing when the boot is under its cap.
+- **The refill's line in the log** ends with what the jobs had spent: `…, jobs $0.30`.
+- **Two amounts are compared with a little room,** a billionth of a dollar: sums of
+  dollars aren't exact, and `0.1 + 0.2` must still fit into `0.3`.
+
+**The "Done when" is a test,** with the default settings: four jobs of $0.30 each start
+one after the other, the fifth is refused at $1.20 spent, a line is typed, and it starts.
+
+**The lines of `machine.py` moved.** The references into it in steps 9, 10, 11 and 15 are
+set again, and step 10's three into `prompt.md`, which the user's new section had moved.
+
+**Nothing here needs a terminal or a model.** A running machine has a `Jobs` now, and no
+way to reach it before step 10.

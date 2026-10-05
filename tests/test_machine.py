@@ -1546,3 +1546,227 @@ def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monk
     assert [tab.title for tab in panel.tabs] == ["Config"]   # one tab, around the machine,
     assert panel.tabs[0].view is Recorded.view and panel.bar is given["bar"]
     assert panel.power_cut is Keyboard.power_cut and panel.ctrl_c is Keyboard.count_ctrl_c
+
+
+# --- the jobs of the addons' agents: the machine's side of the caps ------------------------------
+
+import dataclasses  # noqa: E402
+
+from test_agents import MUSIC, StandIn  # noqa: E402
+
+from hallux import addons  # noqa: E402
+from hallux.agents import Outcome  # noqa: E402
+
+ONE_AT_A_TIME = Hardware(agent_job_budget_usd=1.0, agent_budget_usd=1.0)    # a second job fits
+CHEAP = Outcome(ok=True, cost_usd=0.30, tokens=100, turns=1)                # only after a refill
+
+
+class Pause:
+    """Among the scripted keys: no key. The terminal waits here until something is so, and the
+    event loop turns meanwhile, which is when a job's worker runs."""
+
+    def __init__(self, until):
+        self.until = until
+
+
+class PatientTerminal(FakeTerminal):
+    async def patience(self):
+        loop = asyncio.get_running_loop()
+        while self.keys and (isinstance(self.keys[0], Pause) or (
+                callable(self.keys[0]) and not isinstance(self.keys[0], type))):
+            step = self.keys.pop(0)
+            if not isinstance(step, Pause):
+                step()
+                continue
+            deadline = loop.time() + 5
+            while not step.until():
+                assert loop.time() < deadline, "it never happened"
+                await asyncio.sleep(0.005)
+
+    async def read_line(self, prompt, default=""):
+        await self.patience()
+        return await super().read_line(prompt, default)
+
+    async def next_action(self):
+        await self.patience()
+        return await super().next_action()
+
+
+class Bench:
+    """A machine whose jobs are run by stand-in workers, and the keys that start them."""
+
+    def __init__(self, tmp_path, model, hardware=ONE_AT_A_TIME, attached=(), **more):
+        self.terminal, self.tried, self.scripts = PatientTerminal(), [], {}
+        self.machine = Machine(tmp_path, hardware, self.terminal, client_factory=model,
+                               addons=attached, worker_factory=self.worker, **more)
+        self.jobs = self.machine.jobs
+
+    def worker(self, job):
+        return StandIn(job, self.scripts.get(job.pid, (("end", CHEAP),)))
+
+    def start(self, addon=MUSIC, script=None):
+        """A key that starts a job in /tmp, and notes its pid or what it was refused with."""
+        def key():
+            try:
+                self.tried.append(self.jobs.spawn(addon, "a song", "/tmp"))
+                if script is not None:
+                    self.scripts[self.tried[-1]] = script
+            except addons.Refused as refused:
+                self.tried.append(refused.code)
+        return key
+
+    def settled(self):
+        """A pause until every job's worker has come back."""
+        return Pause(lambda: not self.jobs._live)
+
+    def run(self, *keys):
+        self.terminal.keys = list(keys)
+        asyncio.run(asyncio.wait_for(self.machine.run(), 20))
+        return self.tried
+
+
+def test_a_machine_has_its_jobs_and_they_read_its_settings_as_they_are(tmp_path):
+    machine, _ = idle(tmp_path)
+    assert machine.jobs.disk is machine.disk and machine.jobs.settings() is machine.hardware
+    assert machine.change("agent_max_running", "0") is None
+    assert machine.jobs.settings().agent_max_running == 0       # the panel's change, at once
+    assert machine.jobs.why_not(MUSIC) == "agents are off"
+    from hallux.script import ScriptTerminal
+    scripted = Machine(tmp_path, Hardware(), ScriptTerminal([]))    # as a scripted run makes it
+    assert scripted.jobs.settings() is scripted.hardware
+
+
+def test_done_when_jobs_start_until_one_is_refused_and_a_typed_line_lets_the_next_start(tmp_path):
+    """The step's "Done when", with the default settings: $1.00 a job, $2.00 for all jobs."""
+    bench = Bench(tmp_path, FakeModel(screen(""), screen("notes.md\n"), HALT), Hardware())
+    steps = []
+    for _ in range(4):                               # each costs $0.30: 1.30, 1.60, 1.90, 2.20
+        steps += [bench.start(), bench.settled()]
+    tried = bench.run(*steps, bench.start(), "ls", bench.start(), bench.settled(), EOFError)
+    assert tried == [30001, 30002, 30003, 30004, "EAGAIN", 30005]
+    assert round(bench.jobs.spent, 2) == 1.5 and bench.jobs.spent_since_refill == 0.3
+
+
+def test_a_key_or_an_action_in_a_full_screen_program_fills_the_jobs_budget(tmp_path):
+    """Somebody is at the keyboard then. A tick doesn't fill it: nobody is."""
+    model = FakeModel(screen(""), TOP, TOP, TOP, screen("", prompt="$ "), NANO, NANO,
+                      screen("", prompt="$ "), HALT)
+    bench = Bench(tmp_path, model)
+    refilled = []
+    note = lambda: refilled.append(bench.jobs.spent_since_refill)       # noqa: E731
+    tried = bench.run(
+        "top", bench.start(), bench.settled(), bench.start(),           # $0.30: the next is refused
+        Action("tick", None), note, bench.start(),                      # a tick: still refused
+        KEY["x"], note, bench.start(), bench.settled(),                 # a key: it starts
+        KEY["q"], "nano hello.txt", bench.start(), bench.settled(), bench.start(),
+        Action("C-o", "text", ()), note, bench.start(), bench.settled(),     # an action: it starts
+        Action("C-x", "text", ()), EOFError)
+    assert tried == [30001, "EAGAIN", "EAGAIN", 30002, 30003, "EAGAIN", 30004]
+    assert refilled == [0.3, 0.0, 0.0]
+
+
+def test_an_event_doesnt_fill_the_jobs_budget_and_a_typed_line_does(tmp_path):
+    listens = [lambda: hub.listen("bell")] + result(screen(""))      # the AI, while it boots
+    model = FakeModel(listens, screen("ding\n"), screen("notes.md\n"), HALT)
+    bench = Bench(tmp_path, model)
+    hub = bench.machine.events
+    ring = Typing("l", meanwhile=lambda: hub.emit("bell", {"ring": 1}))     # an event at the prompt
+    tried = bench.run(bench.start(), bench.settled(), bench.start(),
+                      ring, bench.start(), "ls", bench.start(), bench.settled(), EOFError)
+    assert kinds(model) == ["boot", "events", "input", "key"]
+    assert tried == [30001, "EAGAIN", "EAGAIN", 30002]
+
+
+def test_a_reboot_fills_the_jobs_budget_and_kills_what_runs_before_the_addons_hooks(tmp_path):
+    at_the_hook = []
+    music = addons.Addon("music", "A sound card.", "the manual", {}, agent=MUSIC.agent,
+                         stop=lambda: at_the_hook.append(
+                             [(job.pid, job.state, job.why) for job in bench.jobs.kept]))
+    model = FakeModel(screen(""), screen("rebooting\n", prompt="", tail="<reboot/>"),
+                      screen("boot 2\n"), HALT)
+    bench = Bench(tmp_path, model, attached=[music])
+    second_boot = []
+    look = lambda: second_boot.append((bench.jobs.table(), bench.jobs.waiting(),      # noqa: E731
+                                       bench.jobs.spent_boot, bench.jobs.spent_since_refill,
+                                       round(bench.jobs.spent, 2)))
+    forever = (("wait", asyncio.Event()),)
+    tried = bench.run(bench.start(script=forever), Pause(lambda: bench.jobs._live[30001].worker),
+                      "reboot", look, bench.start(), bench.settled(), "poweroff")
+    assert at_the_hook[0] == [(30001, "killed", "boot")]            # killed before the hook ran
+    assert second_boot == [([], [], 0.0, 0.0, 0.07)]                # an empty table, a full budget:
+    assert tried == [30001, 30002]                                  # its cost is in the old boot
+
+
+def test_the_machines_refill_fills_the_jobs_budget_and_the_boots_cap_counts_from_there(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="hallux")
+    bench = Bench(tmp_path, FakeModel(screen(""), HALT), dataclasses.replace(ONE_AT_A_TIME,
+                                                                           max_budget_usd=0.5))
+    machine, views = bench.machine, []
+    look = lambda: views.append((machine.over_budget(), round(machine.view().spent_boot, 3),   # noqa: E731
+                                 round(machine.view().spent_since_refill, 3)))
+    tried = bench.run(bench.start(), bench.settled(), look, bench.start(),      # $0.30: refused
+                      lambda: machine.refill(), bench.start(), bench.settled(), look, EOFError)
+    assert tried == [30001, "EAGAIN", 30002]
+    assert views == [(False, 0.301, 0.301),                         # the boot's $0.001, the job's $0.30
+                     (False, 0.601, 0.3)]                           # over $0.50 in all, not since
+    assert "budgets refilled: events $0.00, ticks $0.00, boot $0.30, jobs $0.30" in caplog.text
+
+
+def test_a_job_that_ends_at_the_prompt_can_take_the_boot_over_its_cap(tmp_path):
+    """Its cost is part of what the boot has spent, once it has ended. The bar says so before a
+    line is typed, and the line that is typed then is held back and fills nothing."""
+    model = FakeModel(screen(""), HALT)
+    bench = Bench(tmp_path, model, dataclasses.replace(ONE_AT_A_TIME, max_budget_usd=0.2))
+    seen = []
+    look = lambda: seen.append((notes_of(bench.terminal)[-1:], bench.jobs.spent_since_refill))  # noqa: E731
+    tried = bench.run(bench.start(), bench.settled(), look, "ls", look, bench.start(),
+                      Key("C-d", "", keep_line=False))
+    used = "budget used: $0.20 per boot · raise it: ctrl+f12"
+    assert seen == [([used], 0.3), ([used], 0.3)]                   # up before the line, and after
+    assert kinds(model) == ["boot"]                                 # the line never went out
+    assert tried == [30001, "EAGAIN"] and bench.machine.over_budget()
+    assert round(bench.machine.boot_spent(), 3) == 0.301
+
+
+def test_over_the_boots_budget_no_job_starts_until_the_cap_is_raised(tmp_path):
+    bench = Bench(tmp_path, FakeModel(result(screen(""), total=0.02), HALT),
+                  dataclasses.replace(ONE_AT_A_TIME, max_budget_usd=0.01))
+    machine = bench.machine
+    tried = bench.run(bench.start(), lambda: bench.tried.append(machine.jobs.why_not(MUSIC)),
+                      lambda: machine.change("max_budget_usd", "5"), bench.start(),
+                      bench.settled(), EOFError)
+    assert tried == ["EAGAIN", "boot budget used", 30001]
+
+
+def test_a_job_that_ends_during_an_events_turn_isnt_charged_to_the_event_budget(tmp_path):
+    """The jobs' dollars are a sum of their own. An event's turn is measured as the change of
+    the main session's sum; in one number, the job's $0.30 would count as the event's."""
+    def the_job_ends():                              # while the AI answers the event
+        job = bench.jobs._live[30001]
+        bench.jobs._settle(job, CHEAP)
+
+    model = FakeModel([lambda: hub.listen("bell")] + result(screen("")),
+                      [the_job_ends] + result(screen("ding\n"), total=0.011), HALT)
+    bench = Bench(tmp_path, model, Hardware())
+    hub, spent = bench.machine.events, []
+    ring = Typing("l", meanwhile=lambda: hub.emit("bell", {"ring": 1}))
+    forever = (("wait", asyncio.Event()),)
+    bench.run(bench.start(script=forever),
+              Pause(lambda: bench.jobs._live[30001].worker), ring,
+              lambda: spent.append((round(bench.machine.event_spent, 3), bench.jobs.spent_boot,
+                                    round(bench.machine.spent, 3))), EOFError)
+    assert spent == [(0.01, 0.3, 0.011)]             # the turn's cent, and the job's dollars apart
+
+
+def test_the_event_budget_is_filled_by_a_typed_line_and_a_boot_only_as_before(tmp_path):
+    model = FakeModel(screen(""), TOP, TOP, screen("", prompt="$ "), screen("notes.md\n"), HALT)
+    bench = Bench(tmp_path, model)
+    machine, seen = bench.machine, []
+
+    def spend():                                     # as if events had cost this much
+        machine.event_spent = 0.1
+
+    look = lambda: seen.append(machine.event_spent)                 # noqa: E731
+    bench.run("top", spend, KEY["x"], look, KEY["q"], look, "ls", look, EOFError)
+    assert seen == [0.1, 0.1, 0.0]                   # a key in a program fills only the jobs'
+

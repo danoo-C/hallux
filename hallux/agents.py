@@ -41,6 +41,7 @@ LINE_MAX = 500                                # characters of one such line
 STOP_SECONDS = 5.0                            # for a stopped worker to come back with the cost
 BOOT_SECONDS = 5.0                            # for all of them together, at the end of a boot
 ENDED = ("done", "failed", "killed")
+ROUNDING = 1e-9                               # dollars added up aren't exact: 0.1 + 0.2
 CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
@@ -108,6 +109,20 @@ def _ended(state: str, why: str | None, landed: dict | None) -> str:
     return f"{state}: {names}"
 
 
+class NoWorker:
+    """What a machine has in place of a worker until it is given one that can run a job: its
+    jobs fail at once, and say so."""
+
+    def __init__(self, job: Job) -> None:
+        self.job = job
+
+    async def run(self) -> Outcome:
+        return Outcome(ok=False, why="this hallux has no worker to run a job", cost_usd=0.0)
+
+    async def stop(self) -> None:
+        pass
+
+
 class Job:
     """One job: its row in the table, and what its worker may do to it."""
 
@@ -169,16 +184,23 @@ class Job:
 
 class Jobs:
     def __init__(self, disk: Disk, settings: Callable[[], Hardware],
-                 make_worker: Callable[[Job], Worker],
+                 make_worker: Callable[[Job], Worker] = NoWorker,
                  on_report: Callable[[], None] = lambda: None,
                  on_event: Callable[[], None] = lambda: None,
+                 over_budget: Callable[[], bool] = lambda: False,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.disk = disk                      # the machine's: a job's folder is a path of it
         self.settings = settings              # as they are when they are asked for
         self.make_worker = make_worker
         self.on_report = on_report            # a job reported or ended: the bar, the panel
         self.on_event = on_event              # an event started to wait: the prompt
+        self.over_budget = over_budget        # the machine's: has the boot used its budget
         self.clock = clock
+        # The jobs' dollars, apart from the main session's. A job is in them when its worker
+        # has come back; one whose cost isn't known counts with its full cap.
+        self.spent = 0.0                      # since hallux started
+        self.spent_boot = 0.0                 # by the jobs of this boot
+        self.spent_since_refill = 0.0         # what counts for agent_budget_usd
         self.loop: asyncio.AbstractEventLoop | None = None
         self._lock = threading.RLock()        # spawn is called in an addon's own thread
         self._next = FIRST_PID
@@ -204,6 +226,8 @@ class Jobs:
         if not isinstance(brief, str) or len(brief) > BRIEF_MAX:
             raise Refused("EMSGSIZE")
         with self._lock:
+            if self.why_not(addon):           # a cap: the way a failed fork reads
+                raise Refused("EAGAIN")
             pid = self._next
             try:                              # the folder and the files: the fenced disk checks
                 disk = JobDisk(self.disk, folder, list(edit or ()), pid)
@@ -291,6 +315,10 @@ class Jobs:
             if ended_here:
                 self._close(job, *self._ending(job, outcome))
             self._live.pop(job.pid, None)
+            counted = job.limits.budget_usd if job.cost_usd is None else job.cost_usd
+            self.spent += counted
+            self.spent_boot += counted
+            self.spent_since_refill += counted
             cost = "cost unknown" if job.cost_usd is None else f"${job.cost_usd:.4f}"
             log.info("job %d %s%s: %d turns, %ds, %d tokens, %s", job.pid, job.state,
                      f" ({job.why})" if job.why else "", job.turns, job.seconds(self.clock()),
@@ -355,6 +383,40 @@ class Jobs:
         with self._lock:
             self._table.clear()
             self._events.clear()
+
+    # ------------------------------------------------------------------ the caps
+
+    def why_not(self, addon: Addon) -> str | None:
+        """Why a job of this addon's agent can't start now, in words, or None if it can. It is
+        the check spawn makes, without starting anything; the panel shows the words.
+
+        The budget for all jobs is never passed: a job that runs, or was killed and hasn't
+        said what it cost, counts with its full cap, and so does the one that asks."""
+        hw = self.settings()
+        with self._lock:
+            if hw.agent_max_running == 0 or hw.agent_budget_usd == 0:
+                return "agents are off"
+            if any(job.addon.name == addon.name for job in self._live.values()):
+                return "already running"      # one job of an addon's agent at a time
+            if len(self._live) >= hw.agent_max_running:
+                return "too many jobs"
+            running = sum(job.limits.budget_usd for job in self._live.values())
+            asked = self.spent_since_refill + running + hw.agent_job_budget_usd
+            if asked > hw.agent_budget_usd + ROUNDING:
+                return "jobs budget used"
+        if self.over_budget():                # the boot's, jobs included
+            return "boot budget used"
+        return None
+
+    def refill(self) -> None:
+        """Somebody is at the keyboard: what the ended jobs cost counts from nothing again."""
+        with self._lock:
+            self.spent_since_refill = 0.0
+
+    def new_boot(self) -> None:
+        """A boot starts: it has spent nothing on jobs yet, and their budget is full."""
+        with self._lock:
+            self.spent_boot = self.spent_since_refill = 0.0
 
     # ------------------------------------------------------------------ what a worker reports
 
