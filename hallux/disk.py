@@ -43,7 +43,7 @@ def _fail(code: int) -> OSError:
     return OSError(code, os.strerror(code))
 
 
-def _replace_once(text: str, old: str, new: str) -> str:
+def replace_once(text: str, old: str, new: str) -> str:
     count = text.count(old)
     if count != 1:
         raise ValueError(f"`old` matches {count} times, it must match exactly once")
@@ -240,7 +240,7 @@ class Disk:
     def edit_file(self, path: str, old: str, new: str) -> dict:
         real = self.real(path)
         with real.open(encoding="utf-8", newline="") as f:
-            text = _replace_once(f.read(), old, new)
+            text = replace_once(f.read(), old, new)
         write_whole(real, text)
         return {"ok": True}
 
@@ -347,7 +347,7 @@ class Disk:
 
     def memory_edit(self, old: str, new: str) -> dict:
         text = self.memory_read()["text"]
-        text = _replace_once(text, old, new) if old else text + new
+        text = replace_once(text, old, new) if old else text + new
         self.hidden.mkdir(exist_ok=True)
         temp = self.memory_file.with_suffix(".tmp")
         temp.write_text(text, encoding="utf-8", newline="")

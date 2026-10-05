@@ -111,3 +111,45 @@ In `tests/test_jobdisk.py`, on a test world, with no model:
 
 A test job writes a new score and changes a given one, reads both back as it wrote them,
 and the user's folder is, byte for byte, what it was.
+
+## As built
+
+Built on 2026-10-05, on the branch `addon-agents`. 51 new tests, 1243 in all; no old test
+changed. Decided while building:
+
+- **The fence is a `Disk` of its own.** A path goes through the machine's jail first, and
+  what it really leads to has to lie inside the folder: that is the check this file
+  describes. Then the reading is done by a second `Disk` whose root is the job's folder, so
+  a link that is swapped between the check and the read still can't lead out. A third
+  `Disk`, with the copies as its root, reads the job's own versions. Both answer exactly as
+  the machine's disk does, because they are the same code.
+- **A refusal is an `OSError` with the path in it:** `refusal(code, path)` puts the path of
+  the machine into the error's `filename`. Step 7 makes `Refused` of it. Too many files,
+  `E2BIG`, names no path.
+- **A path in `edit` without a `/` in front starts at the machine's working directory,**
+  like the folder itself, not at the folder. The main agent names both as it sees them.
+- **A given file of more than 1 MB is refused at the start,** with `EFBIG`. The plan didn't
+  name this. The job could read such a file and never write it back, and would learn that
+  only from an `EDQUOT` in the middle of its work.
+- **Writing over a folder is `EISDIR`,** as on the machine's disk, not `EACCES`.
+- **A given file that someone deleted meanwhile can still be written.** An append then
+  starts from nothing. The landing of step 5 finds the conflict.
+- **The copies' folder is made with the first write.** A refusal leaves nothing in
+  `.hallux/jobs`, and neither does a job that writes nothing.
+- **In the job's listing a changed file has the real file's mode,** and its own size and
+  time.
+- **A name the job makes up** may start with a letter, a digit, `-` or `_`.
+- **`/tmp`, `/var` and a folder below `/root` are allowed.** The list of refused folders is
+  the one this file has, and nothing was added.
+- **A folder called `.hallux` inside the job's folder is hidden from the job.** It comes
+  with the second `Disk`, and nothing needs it otherwise.
+- **`replace_once` in `hallux/disk.py` lost its underscore.** The job's `edit_file` uses
+  it, so its words for an `old` that doesn't match are the disk's.
+- **`sweep(disk)` deletes everything in `.hallux/jobs`,** also what is no job's folder, and
+  returns every name.
+
+**The "Done when" is a test:** a job writes a new score and changes a given one, reads both
+back as it wrote them, and the user's folder is the same byte for byte, with every time of
+change as it was.
+
+**Nothing here needs a terminal or a model.** Nothing uses a `JobDisk` before step 7.
