@@ -386,6 +386,39 @@ def test_options(tmp_path):
     assert all(name.startswith("mcp__hallux__") for name in options.allowed_tools)
 
 
+# --- the words of the prompt: a test holds what it says, not what the AI does with it ----------
+
+def rule_of(section, start):
+    """The rule of the prompt that starts with these words, on one line."""
+    return " ".join(section[section.index(f"- {start}"):].split("\n- ")[0].split())
+
+
+def test_the_prompt_puts_a_request_before_a_card_and_a_rule_before_a_request():
+    programs = SYSTEM_PROMPT.split("\nPROGRAMS\n")[1].split("\nADDONS\n")[0]
+    assert programs.index("- Programs invented with hallux") < programs.index("- A card says")
+    rule = rule_of(programs, "A card says what its program does when it isn't asked otherwise")
+    for part in ("its numbers and habits are defaults",
+                 "in its arguments or typed into it, comes before them",
+                 "one request changes nothing for the next run",
+                 "A rule still comes before a request."):
+        assert part in rule
+    assert rule.endswith("Where a card says how its program does something, that comes before "
+                         "what this prompt says about programs in general, never before REPLY "
+                         "FORMAT and THE DISK IS REAL.")
+
+
+def test_the_prompt_says_where_a_change_made_with_hallux_goes():
+    command = SYSTEM_PROMPT.split("\nTHE hallux COMMAND\n")[1]
+    assert ("go into ~/.bashrc, a change to an invented program into its card, and everything "
+            "else into the Rules section of memory.") in " ".join(command.split())
+    assert command.index("- Only a hallux command typed") < command.index("- A change to how")
+    line = rule_of(command, "A change to how an invented program behaves goes into its card.")
+    for part in ('("never more than a minute") goes into the Rules.',
+                 "When it isn't clear which is meant, it goes into the card.",
+                 "The confirming line says where the change went."):
+        assert part in line
+
+
 NANO = ('<screen>\n  GNU nano 7.2   hello.txt\n</screen><prompt></prompt>'
         '<form keys="C-o C-x" focus="text" keymap="nano">'
         '<editor id="text" top="3" left="1" height="20" file="hello.txt"/></form>')

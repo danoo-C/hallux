@@ -4,7 +4,7 @@
 the test world and the machine's log, and corrected. A review followed the same day, with
 two cases run against the machine, and changed the plans once more. The user approved both
 rounds: "What the check changed" and "What the review changed" below list them. The other
-decisions are my proposals. Nothing is built.
+decisions are my proposals. The table of the plans says what is built.
 
 **Where this comes from.** On 2026-10-03 the machine in the user's test world was asked what
 it thinks of its environment. It gave 8 out of 10 and named four places where it had to
@@ -50,7 +50,7 @@ As the machine wrote it:
 |---|---|---|---|
 | 1. Ticks stop and nothing says so | [point-1-ticks.md](point-1-ticks.md) | The machine marks every message while a program run has no ticks left, and the prompt says what that means | Not built |
 | 2. The user's file, or the program's | [point-2-whose-file.md](point-2-whose-file.md) | One rule in the prompt | Not built |
-| 4. A card's numbers against what the user asked for | [point-4-requests-and-cards.md](point-4-requests-and-cards.md) | One rule in the prompt with the order of rule, request, card and prompt, and where a `hallux` command goes | Not built |
+| 4. A card's numbers against what the user asked for | [point-4-requests-and-cards.md](point-4-requests-and-cards.md) | One rule in the prompt with the order of rule, request, card and prompt, and where a `hallux` command goes | Built on 2026-10-05. The try in the test world is the user's, and open |
 
 This table is the only place that holds the status.
 
@@ -66,8 +66,8 @@ This table is the only place that holds the status.
 
 - **All three change `hallux/prompt.md`.** That file is everything the AI knows about its
   world. Point 1 also changes what the machine sends.
-- **The prompt grows by about twenty-five lines,** on 272 today. It is sent with every
-  message and cached.
+- **The prompt grows by about twenty-five lines,** on 272 before the first of the three was
+  built. It is sent with every message and cached.
 - **A test can hold the words, not the behaviour.** Each plan tests that the prompt says
   the new rule, as `tests/test_addons.py` does for addons, and point 1 tests what the
   machine sends. Whether the AI then acts on it shows only with a real model. So each plan
