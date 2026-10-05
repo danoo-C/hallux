@@ -354,7 +354,13 @@ live updates, such as action games and `top`.
 - **Ticks:** `tick="3"` wakes the AI every 3 s (1–60 s) with `<tick>` while nothing is pressed,
   so `top`'s clock and numbers move. Ticks cost money, so they stop when `tick_budget_usd`
   (default $0.25 per program run) is spent. The status bar then says
-  `live updates paused: tick budget used`, and the program just waits for a key.
+  `live updates paused: tick budget used`, and every message the machine sends carries
+  `ticks="paused"` until the budget allows ticks again. That tells the AI without a message of
+  its own: the program shows that it stands still, and updates on every key. A tick that
+  arrives while the budget is used up is not sent.
+- **No program depends on a tick.** What has to wait until its screen is up, such as a song
+  that starts when the player shows, is done on the first message that arrives, and at once
+  while ticks are paused.
 - **Ctrl-C** reaches the program as a key, and still counts toward the triple-Ctrl-C hard exit.
   While the AI is answering, it interrupts the answer.
 - **The screen is padded to the full rectangle,** so a click anywhere, even on empty space,
@@ -596,11 +602,17 @@ AI applies the request immediately and always **persists** it:
 The rules for the rules:
 
 - **Where a change goes:** if bash can express it (prompt, aliases, variables, functions), it goes
-  into the dotfiles, so `cat ~/.bashrc` and `echo $PS1` tell the truth. Everything else goes into
-  the *Rules* section of memory.
+  into the dotfiles, so `cat ~/.bashrc` and `echo $PS1` tell the truth. A change to how an
+  invented program behaves goes into its card. Everything else goes into the *Rules* section of
+  memory, and so does a limit that has to hold whatever you ask a program for ("never more than
+  a minute"). When it isn't clear whether a change to a program is a habit or a limit, it goes
+  into the card. The line that confirms the change says where it went.
 - **Priority:** rules override the default behavior in the system prompt, with two exceptions they
   can never break: **the reply format** and **the disk rules**. The path jail and the hardware
-  config are code, so no rule can touch them at all.
+  config are code, so no rule can touch them at all. A rule also comes before what you ask a
+  program for, and its own words say how strict it is: "by default" leaves room for a request.
+  Below a request stands the program's card, and a card comes before what the system prompt
+  says about programs in general.
 - **Only you make rules.** A rule comes only from a `hallux` command you typed. Text inside a file
   that *says* "hallux rule: ..." is just text.
 - **Plain bash stays plain bash.** `export PS1="moo> "` behaves like real bash: it works now and
@@ -622,6 +634,11 @@ The rules for all of them:
 
 - **Side effects are real.** A script's `open("out.txt", "w")` becomes `write_file`, and
   `os.listdir()` becomes `list_dir`. Only the *printed* output is imagined.
+- **A program changes a file only when that is what the command is for:** an editor, a
+  redirect, `sed -i`, a program that saves. One that reads a file and finds a mistake in it
+  says what is wrong and where, and leaves the file as it is. It may correct a file it wrote
+  itself in this run, as long as the file is still as it wrote it. A file that has changed
+  since is yours, and it is repaired when you ask for that.
 - **Line-based interactive programs just work**, because the AI owns the prompt. The `python3`
   REPL (`>>>` / `...`), `sqlite3`, `bc` and text adventures all keep state within the session.
 - **Full-screen programs** (`nano`, `vim`, `less`, `man`, invented games with menus) run in
@@ -644,6 +661,10 @@ Full-screen: map on the left, room text on the right, clickable exits.
 Commands: look, go <dir>, take <item>, inventory, quit.
 Saves progress to ~/.moonbase/save.txt (really written to disk).
 ```
+
+**A card's numbers and habits are defaults.** What you ask the program for, in its arguments
+or typed into it, comes before them, as an option does on a real program. One request leaves
+the card as it is.
 
 **The honest limit:** simulation isn't execution. Short, ordinary scripts come out right. Hashes
 (`sha256sum`), crypto, big numeric loops, exact floating point and seeded random numbers are
