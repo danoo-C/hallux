@@ -22,17 +22,18 @@ does.
 | The machine's disk | A job's folder is a path of the machine, and a path without `/` in front starts at the machine's working directory, as for every tool |
 | The settings, as a function | They are read when they are needed, since the config panel can change them |
 | What makes a worker | A function. The tests pass one that makes stand-ins; step 9 makes the real one |
+| What to call when a job reports or ends | A function. The machine uses it to draw the bar and the panel again (steps 12 and 16), and to look at the boot's budget when a job has ended (step 8) |
 
 - **It learns the event loop when it is started,** from inside the running loop. It can't be
   given one when it is made: Hallux builds its parts before the loop runs
-  (`hallux/app.py:59-76`).
+  (`hallux/app.py:59-84`).
 
 **`spawn(addon, brief, folder, edit)`** returns a pid, or raises `Refused` (step 6). `addon`
 is the loaded addon with its declaration, which step 6 put there.
 
 - It is called in the addon's own thread. So it only checks, notes the row under a lock, and
   hands the start of the worker to Hallux's event loop with `call_soon_threadsafe`, as the
-  machine wakes its prompt from an addon's thread today (`hallux/machine.py:226`).
+  machine wakes its prompt from an addon's thread today (`hallux/machine.py:318`).
 - **The checks,** in this step: the brief is text of at most 2000 characters, or
   `EMSGSIZE`; and the job's disk accepts the folder and the list (step 4). The caps come in
   step 8.
@@ -104,6 +105,10 @@ aren't in the hub of the addons' events, which drops what nobody listens to. `Jo
 them out oldest first, and calls a function it was given whenever one arrives; step 10
 uses that to wake the prompt.
 
+- **Each event carries one mark:** whether it has had a message of its own. Step 10 lets an
+  event end the prompt, or wake a program, only once. `Jobs` keeps the mark; the machine
+  sets it.
+
 **The table** as the main agent gets it: the rows as dictionaries. A job that has ended
 stays until the main agent has seen it once, in the table or in an event. At most 32 rows;
 the oldest ended ones go first.
@@ -158,6 +163,9 @@ well, fail.
 - the timeout: `killed`, `why: timeout`;
 - after any end, the job's disk handle raises `ESTALE`;
 - the events come out oldest first, and the function is called for each;
+- an event that was marked as having had a message of its own keeps the mark while it waits;
+- the function for a report is called when a status is set, when a tool call begins or ends,
+  and when the job ends;
 - an ended job leaves the table once it was read, and 33 jobs leave 32 rows;
 - the end of a boot with a job running: no event, an empty table, and the next pid is one
   higher, not 30001;

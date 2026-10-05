@@ -34,7 +34,8 @@ part reads right for a reader that has `check` and not `play`:
 | The heading "WHAT PLAY RETURNS" | It names both: what `play` and `check` return |
 | "Fix them all, then play again." | "Fix them all, then try again." |
 
-Nothing else of the text changes.
+Nothing else of the text changes. The manual's tests pin the old heading in three places
+(`tests/test_music_manual.py:25,86,304`), and those change with it.
 
 | Part | Who reads it |
 |---|---|
@@ -78,7 +79,7 @@ In `tests/test_addon_music.py` and `tests/test_music_manual.py`:
   describe `play`, `stop` or `compose` as functions to call. It doesn't tell its reader to
   play anything;
 - the manual is under its limit, and still holds everything the tests of the manual look
-  for today;
+  for today, under the heading's new name;
 - with a stand-in worker that writes the design's drum beat: `compose` returns a pid, the
   worker's `check` reads its own copy and returns the beat's numbers, the file lands, and
   the event names it.

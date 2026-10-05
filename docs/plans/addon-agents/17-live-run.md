@@ -16,8 +16,8 @@ their events and job control in one sitting.
 | File | What changes |
 |---|---|
 | `README.MD`, "Features" and "Addons" | An addon can bring an agent; the composer; `check` |
-| `README.MD`, "Configuration" | The six settings, with their defaults; that jobs count towards `max_budget_usd` |
-| `README.MD`, "Cost and speed" | What the `~` on the bar means; that a job is a second session with its own cost |
+| `README.MD`, "Configuration" | The six settings, with their defaults; that jobs count towards `max_budget_usd`, each when it has ended, so a boot can pass its cap by what the running jobs spend, at most the budget for all jobs (step 8) |
+| `README.MD`, "Cost and speed" | What the `~` means, on the bar and in the panel; that a job is a second session with its own cost |
 | `README.MD`, "Safety and privacy" | What a job can reach, and that what it reads in its folder goes to the API like everything the machine reads |
 | `README.MD`, "Keys" | Ctrl-Z and `fg` in full-screen programs; the panel's Agents and Details tabs on Ctrl+F12 |
 | `README.MD`, "Writing an addon" | `agent()`, `spawn`, and what a job can reach |
@@ -44,7 +44,9 @@ By the user, in a real terminal. Each line is something the tests can't show.
 6. **A reboot and a power-off** with a job running: nothing is left in the folder, and
    nothing in `.hallux/jobs`.
 7. **The hard exit** with a job running, then a new start: the log names what was swept.
-8. **The config panel:** the jobs' budget raised while a job is refused.
+8. **The config panel:** the jobs' budget raised while a job is refused. Then jobs until one
+   is refused again, and **Refill budgets**, once: no real run has pressed that button yet
+   (the panel's live run).
 9. **The memory of the computer:** how much each Claude Code process takes, with two jobs
    running.
 10. **Watching a job:** Ctrl+F12 while a composer works. The list moves, the Details tab
@@ -52,6 +54,10 @@ By the user, in a real terminal. Each line is something the tests can't show.
 11. **A kill from the panel:** `k`, `y`. The folder is as it was, and the shell prints what
     a killed job prints.
 12. **A machine without the music addon:** the two tabs are grey and say why.
+13. **A job's end and an editor:** a composition ends while nano is open with unsaved text,
+    and the AI listens to the music addon. Nothing happens on the screen, and the text is
+    as it was: a program with fields isn't woken (step 11). Does the `Done` line come when
+    nano is left?
 
 ## Done when
 

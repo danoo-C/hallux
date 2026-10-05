@@ -31,7 +31,7 @@ test.
 - `spawn` in the wrong place: it is the first parameter, or the second after `disk`.
 
 - **Where the five effort names live.** `hallux/config.py` has them today, and it imports
-  from `hallux/addons.py` (`hallux/config.py:12`), so the loader can't import from
+  from `hallux/addons.py` (`hallux/config.py:15`), so the loader can't import from
   `config.py`. The names move to `addons.py`, and `config.py` takes them from there.
 - **`connect()` stays the last check** (`hallux/addons.py:275-280`): only an addon that
   loads may report. The checks of `agent()` come before it.

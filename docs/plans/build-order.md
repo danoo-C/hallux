@@ -7,22 +7,24 @@ two tables are the only place that says what is built.
 
 **Where things stand:** both features are designed, planned and reviewed. **The config
 panel is built:** all eight steps and the live run, on 2026-10-05, on the branch
-`config-panel`. Next is part 2 below, the check of the agents plan against the code, and
-then addon agents. The two tables say how far each plan is.
+`config-panel`. **Part 2, the check of the agents plan against the code, is done:** on
+2026-10-05, and its fixes are in the plan. Next is addon agents, part 3, on the branch
+`addon-agents`. The two tables say how far each plan is.
 
 | | The config panel | Addon agents |
 |---|---|---|
 | The design | [config-panel.md](../config-panel.md) | [addon-agents.md](../addon-agents.md) |
 | The plan | [config-panel/README.md](config-panel/README.md), 8 steps | [addon-agents/README.md](addon-agents/README.md), 17 steps |
 | The review of both | [plans-review-2026-10-04.md](../plans-review-2026-10-04.md) | The same |
+| The check of part 2 | | [addon-agents-plan-check-2026-10-05.md](../addon-agents-plan-check-2026-10-05.md) |
 
 ---
 
 ## In short
 
 1. **The config panel first,** its steps 1 to 8 in their order.
-2. **Then a short check of the agents plan against the code,** because the panel has moved
-   the lines it cites.
+2. **Then a check of the agents plan against the code,** because the panel has moved the
+   lines it cites. Done on 2026-10-05.
 3. **Then addon agents,** its steps in their order, with one swap: step 16 before step 13.
 
 Two steps of the agents plan touch no file the panel touches and can be built at any time,
@@ -40,8 +42,9 @@ These are the user's rules for this project. They hold for every step.
   README holds the decisions the steps share.
 - **Commit only when asked.** The user pushes and opens pull requests.
 - **Ask which branch to build on.** The designs and plans are on `multi-agent`. Earlier
-  features each had a branch of their own. The panel is built on `config-panel`, a branch
-  off `multi-agent`; for addon agents, ask again.
+  features each had a branch of their own. The panel was built on `config-panel`, a branch
+  off `multi-agent`. Addon agents is built on `addon-agents`, a branch off `main`, which
+  the user chose on 2026-10-05; the fixes of part 2 are on it too.
 - **A step is done** when its tests pass with all the old ones, its "Done when" holds, its
   status in the README's table says so, and what was decided while building is written into
   the step's file under "As built".
@@ -51,16 +54,17 @@ These are the user's rules for this project. They hold for every step.
 - **Make a mistake loud.** Where something an author left out would get a quiet fallback,
   make it a failed check with a readable reason.
 
-**The tests:** `env -u FORCE_COLOR .venv/bin/python -m pytest -q`. There are 838 today. With
-`FORCE_COLOR` set in the shell two of them fail, because Python then colours a child's
-traceback; that is in the code today and no step of the panel's plan touches it.
+**The tests:** `env -u FORCE_COLOR .venv/bin/python -m pytest -q`. There are 1066 today,
+2026-10-05. With `FORCE_COLOR` set in the shell two of them fail, because Python then
+colours a child's traceback; step 2 of the agents plan mends the music addon's.
 
 **The plans' own decisions.** Each README has a table of decisions the plan took by itself.
 The user hasn't gone through them one by one. Building a step means accepting the ones it
 uses; if one looks wrong when its step comes, say so before building it.
 
-**Line numbers** in the steps are the code's of 2026-10-04. Each reference also names what
-stands there, so find it by that.
+**Line numbers** in the panel's steps are the code's of 2026-10-04. In the agents plan they
+are the code's of 2026-10-05, set again by the check of part 2. Each reference also names
+what stands there, so find it by that.
 
 ---
 
@@ -89,7 +93,9 @@ In the order of its plan. "P3" is step 3 of the panel's plan.
 
 ## Part 2: the check between the two
 
-When the panel is built, before the first step of addon agents that needs it:
+**Done on 2026-10-05.** The report is
+[addon-agents-plan-check-2026-10-05.md](../addon-agents-plan-check-2026-10-05.md), and the
+agents plan's README lists what it changed, step by step. What was asked for:
 
 - **Read the agents plan against the code as it is then.** Its line references are from
   before the panel. It is a read, and fixes to the plan's text; no code.
@@ -110,7 +116,7 @@ When the panel is built, before the first step of addon agents that needs it:
 |---|---|---|---|
 | 1 | A1. Whole-file writes | | Can be built any time, also before the panel |
 | 2 | A2. `check` | | The same |
-| 3 | A3. The six settings | P1 | |
+| 3 | A3. The six settings | P1, P5 | It builds the six rows of the Config tab, hidden |
 | 4 | A4. The fenced disk | A1 | |
 | 5 | A5. The landing | A4 | |
 | 6 | A6. The declaration | | After the panel: it changes `config.py`, as the panel does |
@@ -118,7 +124,7 @@ When the panel is built, before the first step of addon agents that needs it:
 | 8 | A8. The caps | A7, P3 | |
 | 9 | A9. A job's real session | A6, A7 | **A paid check,** a few cents, with three questions about the SDK: the cost after `interrupt()`, where live tokens come from, whether the dollar cap stops mid-turn |
 | 10 | A10. The main agent's side | A8, A9, P5 | |
-| 11 | A11. A job's end in a full-screen program | A10, P3, P7 | |
+| 11 | A11. A job's end in a full-screen program | A10, P3, P7 | A check on a pseudo-terminal before the user's try, here and in A12, A15 and A16 |
 | 12 | A12. The status bar and the costs | A10 | |
 | 13 | A16. The panel's two tabs | A10, P5 to P7 | |
 | 14 | A13. The composer | A2, A11, A12 | The scripted run costs a little. The first live run is the user's, and sets the budgets again |
@@ -151,3 +157,4 @@ No step can close these; the last step of each plan does.
 | Whether the bar's redraw once a second disturbs typing | A13 |
 | Whether a kept screen comes back exactly | A15, then A17 |
 | How much memory each Claude Code process takes | A17 |
+| Whether the Refill budgets button does in a real run what its tests say | A17 |

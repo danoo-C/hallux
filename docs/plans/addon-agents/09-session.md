@@ -31,14 +31,19 @@ The answers go into "As built" at the end of this file.
 | Option | For a job |
 |---|---|
 | The system prompt | Hallux's rules for a worker, then the addon's `prompt` from its declaration |
-| The model and the effort | The two helpers of step 3 |
-| The turns and the dollar cap | The job's own, which it carries since step 7: 60 turns, and `agent_job_budget_usd` as it was when the job started |
-| The fallback model | None. The main session has the machine's (`hallux/machine.py:132`); a job fails before it runs on a model nobody chose for it |
+| The model and the effort | The two helpers of step 3. The model's helper is given the model the main session runs on, for a machine without `agent_model` |
+| The turns and the dollar cap | The job's own, which it carries since step 7: 60 turns, and `agent_job_budget_usd` as it was when the job started. The cap is the SDK's own for a session. The main session has none of the SDK's since the panel's step 3: Hallux checks its budget itself |
+| The fallback model | None. The main session has the machine's (`hallux/machine.py:207`); a job fails before it runs on a model nobody chose for it |
 | The tools | Three groups, below. Claude Code's own tools are off |
 | Everything else | As for the main session: no settings of yours, no MCP servers of yours, no transcript, the OS sandbox if it is set |
 
 - **What both kinds of session share** moves into one function, and `Machine.options()`
-  uses it. The main session's options are the same afterwards.
+  uses it. The main session's options are the same afterwards. A dollar cap isn't among
+  what they share.
+- **The real worker is the default of the machine's argument** (step 8), as the SDK's
+  client is the default of `client_factory` (`hallux/machine.py:113`). So `app.py` passes
+  nothing, and a scripted run, which builds its own machine (`hallux/script.py:170`), makes
+  real workers too. The tests pass stand-ins.
 - **The sandbox's start script is written once per run.** Today it is written again
   whenever options are built (`hallux/sandbox.py:45`). With sessions that start at
   different times, a session could start while the script is half-written.
@@ -80,7 +85,7 @@ the given files by name, or one line saying that it can only create files.
 - **"Well" is a result of the kind `success` that carries no error.** A call to the API that
   failed arrives as `success` with `is_error` set
   (`claude_agent_sdk/_errors.py:78-80`). The machine tests the flag for its own answers
-  (`hallux/machine.py:483`); the worker has to as well, or the half-done work of a failed
+  (`hallux/machine.py:658`); the worker has to as well, or the half-done work of a failed
   job lands.
 - **A result after a kill** says so: its `terminal_reason` is `aborted_streaming` or
   `aborted_tools` (`claude_agent_sdk/types.py:1363-1371`). So the worker can tell a job
@@ -110,6 +115,10 @@ hands out scripted messages and calls the job's real tools:
   the effort are the helpers'; 60 turns; the dollar cap; no built-in tools; only the job's
   tools are allowed;
 - the main session's options are what they were before this step;
+- a machine that is made without a worker argument makes real workers, also one made for a
+  scripted run;
+- on a machine whose `model` setting is a name the session refused, a job without
+  `agent_model` gets the model that runs;
 - the first message holds the brief and the list of files, or the line for none;
 - a scripted job writes a file with `write_file`, calls `set_status` and ends: the file is
   in the job's copies, the row had the status, and the worker comes back well with its cost;

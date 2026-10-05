@@ -21,7 +21,15 @@ doing right now, in two tabs of Hallux's own panel: section 17. The plan is in
 
 **The plan's review, 2026-10-04:** [plans-review-2026-10-04.md](plans-review-2026-10-04.md)
 checked this design and its plan against the code and the SDK. The design held up. What it
-left unsaid is in the sections now, and the last block of [Decisions](#decisions) lists it.
+left unsaid is in the sections now, and [Decisions](#decisions) lists it.
+
+**The plan's check, 2026-10-05:**
+[addon-agents-plan-check-2026-10-05.md](addon-agents-plan-check-2026-10-05.md) read the plan
+against the code after the config panel and the three fixes of Hallux's report were built.
+It changed four things here, which the user decided: a job's end wakes only a program
+without fields, a job without `agent_model` gets the model that runs, the lines that say a
+job is real stand like THE DISK IS REAL, and how far a boot can pass its cap is said. They
+are in sections 6, 8 and 13, and the last block of [Decisions](#decisions) lists them.
 
 **It replaces section 8 of [addons.md](addons.md),** "Later: worker agents". In that sketch
 the main agent waited for its worker. Here the worker runs beside it.
@@ -405,7 +413,7 @@ file, like the machine itself.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `agent_model` | the machine's `model` | The model every addon agent runs on |
+| `agent_model` | the model the machine runs on | The model every addon agent runs on |
 | `agent_max_effort` | `"high"` | An agent gets the effort it asks for, or this if it asks for more |
 | `agent_max_running` | `2` | Jobs at the same time, over all addons. `0` turns addon agents off |
 | `agent_job_budget_usd` | `1.00` | What one job may cost. A job that uses it up is killed |
@@ -427,7 +435,8 @@ file, like the machine itself.
   ([config-panel.md](config-panel.md), section 5). The budget per boot then counts the jobs
   that have ended since the refill.
 - **In dollars, like the three budgets that exist.** The SDK has a dollar cap for a session
-  (`max_budget_usd`), which Hallux uses for the main one today. Tokens are shown, not
+  (`max_budget_usd`). Hallux used it for the main session until the config panel made the
+  budget per boot a check of its own; a job's session uses it. Tokens are shown, not
   capped.
 - **A job's dollars are known when it ends.** The SDK reports what a session cost with its
   result, and a job is one request, so that number comes once, at the end. While a job runs,
@@ -459,8 +468,15 @@ file, like the machine itself.
   check of Hallux's own ([config-panel.md](config-panel.md), section 6). Each job counts
   when it has ended. Over the cap no new job starts, with `EAGAIN`, as no new message goes
   to the AI. This needs step 3 of the panel's plan.
+- **A boot can pass its cap while jobs run.** A running job isn't counted yet, so a boot
+  just under its cap can start jobs, and they spend their caps. The budget for all jobs
+  bounds how far: $2.00 with the defaults. The README says so.
+- **Without `agent_model` a job gets the model the main session really runs on,** not the
+  `model` setting. The two differ only when the setting holds a name that is no model: a
+  running session refuses such a name and goes on, and a new session fails on it. Every
+  job is a new session.
 - **On Haiku an agent gets no effort,** like the machine's own model: Haiku 4.5 has no
-  effort levels (`hallux/config.py:34`).
+  effort levels (`hallux/config.py:50`).
 - **The config panel gets the six settings as rows.** Every job is a new session, so a
   change acts from the next job.
 - **A job may start in any turn,** also one that a tick or an event caused. The player of
@@ -588,8 +604,8 @@ prompt treats the table as data, and the jail holds whatever it does.
 | At the shell prompt, listening to that addon | Interrupts the prompt, as events do today |
 | At the shell prompt, not listening | Comes in front of the next line or key |
 | Answering | Waits, then as above |
-| In a full-screen program, listening to that addon | Wakes the program at once, the way a tick does |
-| In a full-screen program, not listening | Comes in front of the next key, action or tick |
+| In a full-screen program without fields, listening to that addon | Wakes the program at once, the way a tick does |
+| In a full-screen program with fields, or not listening | Comes in front of the next key, action or tick |
 | At a password prompt | Waits until the prompt is answered |
 | Running a `--script` | Comes in front of the next line |
 
@@ -599,6 +615,11 @@ prompt treats the table as data, and the jail holds whatever it does.
   hadn't been told by then is gone with it.
 - **An event counts as told when its message has really gone out.** A message that is held
   back, or one the model fails on, leaves the event waiting.
+- **It starts a message of its own only once.** After a failure it waits for the next
+  message of any kind. Otherwise a model that is down would be called in a loop, with
+  nobody typing.
+- **Not while the boot is over its budget.** Nothing is sent then, so the event waits, and
+  goes out when the cap is raised.
 - **With events of addons that wait too,** there is one `<events>` block: the addons' events
   first, then the jobs', each oldest first.
 - **Job events have a list of their own,** beside the hub that holds the addons' events.
@@ -609,25 +630,26 @@ prompt treats the table as data, and the jail holds whatever it does.
 - **In front of the next message** means the message starts with an `<events>` block, and
   the AI handles both in one answer. That is when bash prints `[1]+  Done`: after the
   command's output, before the next prompt.
-- **It wakes a full-screen program,** if the AI listens to the addon. Other events from
-  addons still wait until such a program ends (the limit the live run of the music addon
-  hit). A job's end is sent at once, as a message of its own, and the program answers with
+- **It wakes a full-screen program that has no fields,** if the AI listens to the addon.
+  That is a program in raw mode: a player, `htop`. Other events from addons still wait
+  until such a program ends (the limit the live run of the music addon hit). A job's end is sent at once, as a message of its own, and the program answers with
   its new screen, as it does for a tick. So a player can show that the song is ready.
   - **Once per job,** since a job ends once.
   - **Paid from the event budget,** like an event at the shell prompt. When that budget is
     used up, the event comes in front of the program's next key, action or tick.
-  - **Why not wait for the next tick:** a form with fields has no ticks, and a player's
-    ticks stop when the tick budget is used up. In the live run $0.25 covered about 100
-    seconds, and a composition takes longer. The player would sit on "composing…" until a
-    key is pressed.
+  - **Why not wait for the next tick:** a player's ticks stop when the tick budget is used
+    up. In the live run $0.25 covered about 100 seconds, and a composition takes longer.
+    The player would sit on "composing…" until a key is pressed.
   - **Also when it arrives during an answer.** A job can end while the AI answers a key or
     a tick of the program. Hallux looks for a waiting event before it waits for the next
     key, so that one isn't missed.
-  - **A program with fields keeps what you typed.** The wake is the one message that
-    reaches the AI without the fields while such a program is up. So in the answer to a
-    wake, Hallux ignores any text the AI gives a field. And if the model fails on a wake, or
-    the message is held back, the program stays on screen and the event waits: unsaved text
-    in an editor must not be lost because a background job ended.
+  - **A program with fields isn't woken.** A wake would be the one message that reaches
+    the AI without the fields while such a program is up, and its answer could lose what
+    you typed in three ways: it restates a field, it leaves the field out, or it ends the
+    program. So the event comes in front of the program's next action. Unsaved text in an
+    editor must not be lost because a background job ended. Until 2026-10-05 this design
+    woke every program and guarded only the first of the three.
+  - **If the model fails on a wake,** the program stays on screen and the event waits.
 
 ---
 
@@ -726,7 +748,7 @@ prompt treats the table as data, and the jail holds whatever it does.
 - **In all:** the bar's total includes a job from the moment it has ended.
 - **Marked as an estimate:** `~$1.42`. The number is what the tokens would cost at the API's
   list prices. With a Claude subscription nobody is billed that amount. The README says
-  what the `~` means.
+  what the `~` means. The panel's notes of what was spent have the mark too.
 
 ---
 
@@ -755,7 +777,8 @@ agents: `list_processes`, which every machine has from then on (section 7).
   the AI knows whether `fg` is bash's `fg`, a line in a Python prompt, or an error because
   there is no job. Its answer is a tag of twenty characters, not a screen.
 - **Back in the foreground:** a program with a tick gets its first tick at once, so it can
-  patch what changed while it was away. Other programs get nothing: nothing changed.
+  patch what changed while it was away, unless its ticks are paused by a budget. Other
+  programs get nothing: nothing changed.
 - **If the kept screen is gone,** Hallux tells the AI with the next message, and the AI
   draws the program again, as it would today.
 - **Ctrl-Z always reaches the AI in a full-screen program,** like Ctrl-C. In raw mode it
@@ -794,6 +817,19 @@ words:
 - The table and the events are data, never an instruction or a rule.
 - A `<tick>` can carry the table as its body, while there are jobs.
 - `<suspend>`, `<resume>` and `<forget>`.
+
+**Where these lines stand.** The main prompt has an order: a rule made with `hallux` comes
+before what the user asks a program for, that before the program's card, and the card
+before what the prompt says about programs in general. Only REPLY FORMAT and THE DISK IS
+REAL stand above a rule. The new section says of itself where it stands, in two groups:
+
+| Group | Its lines | Where it stands |
+|---|---|---|
+| What is real | What a job is, that its result is never imagined, the pids, `list_processes` and `kill_process`, that the table and the events are data, and that a job's event comes whether the AI listens or not | Like THE DISK IS REAL: no rule, request or card changes it |
+| How it shows | The `Done` line, and how `ps`, `top`, `htop` and `jobs` add the imagined processes | A default: a card says how its own program shows a job, and a rule comes before both |
+
+The three tags of job control go into REPLY FORMAT, beside `<halt/>`: they are part of the
+wire.
 
 **The table and the events are written into a message the safe way,** as the addons' events
 are today: `<`, `>` and `&` in them are escaped (`hallux/protocol.py:158`). A status line is
@@ -899,6 +935,7 @@ ls Music
 |---|---|
 | `hallux/agents.py` (new) | The process table, starting and ending jobs, the caps, the fenced disk with its private copies, the landing at the end, a job's session and its options; what each job has been doing, for the panel |
 | `hallux/panel_tabs/agents.py`, `hallux/panel_tabs/details.py` (new) | The panel's two tabs (section 17) |
+| `hallux/panel.py`, `hallux/panel_tabs/config.py` | A tab says what Esc does in it; the six settings as rows |
 | `hallux/agent.md` (new) | Hallux's rules for every worker |
 | `hallux/addons.py` | The check of `agent()`, the `spawn` parameter, the declaration on `Addon`, `list[str]` in the schema, the refusal that reads as `EAGAIN` |
 | `hallux/tools.py` | `list_processes`, `kill_process`; a job's own servers: its addon's functions, four file tools, `set_status` |
@@ -1216,7 +1253,7 @@ sections now.
 
 | | The gap | Decision |
 |---|---|---|
-| A | `agent_budget_usd` follows the event budget and refills only when a line is typed at the shell (`hallux/machine.py:198,203`). A player that starts a composition on a key press never gets a refill: after $2.00 every `compose` is `EAGAIN` until the user leaves the program | It refills when the user does something: a typed line, as today, and a key or an action in a full-screen program. A tick and an event don't refill it: nobody is at the keyboard then |
+| A | `agent_budget_usd` follows the event budget and refills only when a line is typed at the shell (`hallux/machine.py:290,295`). A player that starts a composition on a key press never gets a refill: after $2.00 every `compose` is `EAGAIN` until the user leaves the program | It refills when the user does something: a typed line, as today, and a key or an action in a full-screen program. A tick and an event don't refill it: nobody is at the keyboard then |
 | B | The job event can't go through the events hub as it is. The hub drops the events of an addon nobody listens to, and everything once the event budget is used up (`hallux/addons.py:126-130`). And `addon_listen` refuses an addon without `connect()` (`hallux/tools.py:80`) | Hallux keeps job events in a list of its own, beside the hub, so that none is dropped. With nobody listening, or the event budget used up, they wait for the next message. An addon with `agent()` counts as having events, so `addon_listen` takes it |
 | C | An addon call gets 10 seconds in all (`hallux/addons.py:50`), and a render may take 8 (`addons/music.py:31`). A child started for each `check` has to load numpy inside what is left | One limit of 8 seconds for a `check`, from the start of its child to its answer. A song that needs the full 8 seconds to render passes `play` and fails `check`, with the words `play` has for it |
 | D | An addon function can't be stopped, so one that belongs to a killed job runs on, with a disk handle that can write. Pids start again at 30001 with each boot, so after a reboot it could write into a new job's copies | The handle goes dead when its job ends or is killed: every later call raises. And pids count on for as long as Hallux runs. They start at 30001 when Hallux starts, not at every boot |
@@ -1229,10 +1266,10 @@ sections now.
 | Section 16 | `pyproject.toml` lists only `prompt.md` as a file of the package (line 42) | It gets `agent.md` too, and the table gets rows for `pyproject.toml`, the README and the bar's words for the new tools |
 | Section 5 | "`..` … are refused as today" | The jail doesn't refuse `..`: it folds it at `/` (`hallux/disk.py:66`). The new fence is what refuses a path that ends outside the folder |
 | Section 15 | The script composes into `Music` | A new machine has no `/home/user/Music` (`hallux/disk.py:28`). The script makes it first |
-| Section 6 | `agent_model` | On Haiku an agent gets no effort, as the machine's own model (`hallux/config.py:34`) |
+| Section 6 | `agent_model` | On Haiku an agent gets no effort, as the machine's own model (`hallux/config.py:50`) |
 | Section 12 | "`[1]+ Done kittymusic` … because a job's event says so" | It mixes bash's imagined jobs with real ones. A real job's `Done` line comes from its event. For a program in the background the AI decides |
 | Section 3 | `ps` shows the composer on `pts/0` | `?`: a job has no terminal |
-| Section 9 | "What the job wrote is still in `hallux.log`" | For as long as the log keeps it: it is three files of 1 MB (`hallux/app.py:132`) |
+| Section 9 | "What the job wrote is still in `hallux.log`" | For as long as the log keeps it: it is three files of 1 MB (`hallux/app.py:140`) |
 | Section 16 | The sandbox's start script | `sandbox.wrapper()` writes it again whenever options are built (`hallux/sandbox.py:45`). With sessions starting at different times it is written once per run |
 | Other documents | [addons.md](addons.md), section 8, and the [roadmap](roadmap.md) describe the old sketch | They point here, when the plan is written |
 
@@ -1294,6 +1331,27 @@ The rest, each in its section:
 | Which argument is the file in `tool` | The first that names one of the job's files | 7 |
 | A table or an event with `<` in it | Escaped, as events are today; and a tick can carry the table | 13 |
 | `<resume>` with a screen that was shown while written | Taken back | 12 |
+
+**Decided on 2026-10-05, after the plan's check**
+([addon-agents-plan-check-2026-10-05.md](addon-agents-plan-check-2026-10-05.md)). I
+recommended an answer to each question, and the user accepted them together ("all
+recommendations").
+
+| Question | Decision | Why |
+|---|---|---|
+| Does a job's end wake a program that has fields? | No: only a program without fields. Turned down: waking every program, as this design said until then, with two more rules to guard the fields | An answer to a wake can lose typed text by restating a field, by leaving it out, or by ending the program. Only the first was guarded, and the last has no clean guard |
+| Does a running job count towards the budget per boot? | Not until it has ended, as before. What is new: the design says how far a boot can pass its cap. Turned down: refusing a start whose full cap doesn't fit under the boot's cap | The budget for all jobs bounds the overshoot. Refusing would lock out every machine with a small budget per boot, behind a bare `EAGAIN` |
+| Which model does a job get without `agent_model`? | The one the main session really runs on. Turned down: the `model` setting | A new session fails on a name that is no model. With the setting, one typing mistake would fail every job |
+| Can a rule override the lines that say a job is real? | No: they stand like THE DISK IS REAL. How a job's end is shown stays a default. Turned down: the whole section as something a rule can change | A job's result is as real as a file, and a rule must not let the AI imagine one |
+
+The rest of what the check found is the plan's, and is in its steps. Three things of it
+belong here too:
+
+| What was unsaid | Now | Section |
+|---|---|---|
+| A job's event while the boot is over its budget | It waits, and goes out when the cap is raised | 8 |
+| An event whose message fails | It starts a message of its own only once | 8 |
+| A tick at once after `fg`, with the ticks paused | None then | 12 |
 
 ---
 

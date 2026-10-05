@@ -4,8 +4,9 @@
 and 15
 
 **Needs:** step 10. **Changes:** `hallux/statusbar.py`, `hallux/terminal.py`,
-`hallux/machine.py`, `hallux/script.py`, `tests/test_statusbar.py`,
-`tests/test_terminal.py`, `tests/test_script.py`.
+`hallux/machine.py`, `hallux/script.py`, `hallux/app.py`, `hallux/panel_tabs/config.py`,
+`tests/test_statusbar.py`, `tests/test_terminal.py`, `tests/test_script.py`,
+`tests/test_panel_config.py`.
 
 A job spends money while nobody looks at it. The bar is where Hallux says so: which job
 runs, for how long, with how many tokens, and what everything has cost. This step also
@@ -27,21 +28,31 @@ gives scripts a way to wait for a job, which the scripted run of step 13 needs.
 | Working | Its own activity, then `· 1 job` |
 
 - An error and a note still come first, as today.
+- **A job's line comes before `listening: …`,** which the bar shows today when nothing
+  else is to say (`hallux/statusbar.py:95-96`). The AI often listens to an addon just to
+  hear its job end, and the job's line says more.
+- **When the line is too long, the status is cut.** The time and the tokens stay: they are
+  what moves. The bar's own shortening cuts from the end (`hallux/statusbar.py:139-148`),
+  which would take them first.
 - **The bar's words for the new tools:** `list_processes` and `kill_process` get verbs, as
-  the other tools have (`hallux/statusbar.py:25`). A verb isn't enough for the kill: the bar
-  shows a tool's `path`, `src` or `name` after the verb (`hallux/statusbar.py:41`), and a
+  the other tools have (`hallux/statusbar.py:29`). A verb isn't enough for the kill: the bar
+  shows a tool's `path`, `src` or `name` after the verb (`hallux/statusbar.py:45`), and a
   kill has a `pid`. It is shown as `killing 30001`.
 
 **The `~`.** The cost becomes `~$1.42`. The number is what the tokens would cost at the
 API's list prices; with a Claude subscription nobody is billed that amount. The README
 says what the `~` means, in step 17.
 
+- **The Config tab's notes of what was spent get it too:** `spent in this boot: ~$0.12`.
+  They are the same kind of number, and the Agents tab beside them shows `~$0.19`
+  (step 16). A limit the user typed stays without it: `$2.00`.
+
 **The total** on the bar is the main session's sum plus the jobs' sum, which the machine
 keeps apart (step 8). A job is in it from the moment it has ended; a job that was killed
 counts too.
 
-- **Three tests pin `$0.00` without the `~`** (`tests/test_statusbar.py:17,25,33`) and
-  change with it.
+- **Three tests pin the cost without the `~`** (`tests/test_statusbar.py:17,44,52`) and
+  change with it. So do the tests of the Config tab's notes.
 
 **The bar moves while the prompt waits.** Today it is drawn while the AI works, or when
 something is printed. A job's time and tokens change while the user sits at the prompt.
@@ -51,6 +62,13 @@ something is printed. A job's time and tokens change while the user sits at the 
 - **One timer, in the terminal.** The panel's two tabs (step 16) need the same beat for
   their times. Whichever of the two steps is built first makes the timer, and the other uses
   it.
+- **Drawing again goes through one function of the terminal.** It has it already, for the
+  bar's light: it draws the bar at the shell, block mode's screen in a full-screen program,
+  and the panel while one is open at the shell (`hallux/terminal.py:319-325`). It becomes a
+  method that others may call. The timer calls it, and so does the machine when `Jobs`
+  says that a job reported (step 7). `Panel.invalidate()` alone isn't enough: over a
+  full-screen program the panel is a layer in block mode's app and has none of its own
+  (`hallux/panel.py:139-142`). Tried on 2026-10-05: it drew nothing again there.
 - Whether that disturbs typing is one of the design's open measurements. It is tried in
   the live run of step 13. If it does, the bar is drawn only when a job's status line or
   state changes.
@@ -63,8 +81,10 @@ something is printed. A job's time and tokens change while the user sits at the 
 - **The summary** at the end of a scripted run counts the jobs: how many, and their cost in
   the total. The cost comes from the jobs' own sum. It isn't booked to a line of the script:
   the scripted terminal books every rise of the bar's cost to the line that was typed last
-  (`hallux/script.py:124-126`), and a job's cost would land on whatever that was. So the
+  (`hallux/script.py:128-130`), and a job's cost would land on whatever that was. So the
   bar's cost that the scripted terminal is told stays the main session's.
+- **`run_script` gives the jobs' numbers back with the records.** Today it returns the
+  records alone, and `app.py` makes the summary from them (`hallux/app.py:123-130`).
 
 ## Tests
 
@@ -72,16 +92,23 @@ In `tests/test_statusbar.py`:
 
 - idle with one job: the addon, the status, `0:48`, `21k tok`;
 - idle with two jobs; working with one job;
-- an error and a note win over a job;
+- an error and a note win over a job, and a job wins over `listening`;
 - the cost has the `~`, with and without jobs;
-- a job's line that is too long for the bar is cut, and the hardware on the right stays;
+- a job's line that is too long for the bar: the status is cut, the time and the tokens are
+  there, and the hardware on the right stays;
 - the two new tools have their words.
 
-In `tests/test_terminal.py`:
+In `tests/test_terminal.py`. A terminal on a pipe pins no bar and writes none
+(`hallux/terminal.py:433-437`), so these tests pin it by hand, as the panel's tests of the
+bar do.
 
 - with a job running, the bar is written again within two seconds while the prompt waits,
   and what was typed is still the line;
 - with no job, nothing is written while the prompt waits.
+
+In `tests/test_panel_config.py`:
+
+- the notes of what was spent have the `~`, and the limits don't.
 
 In `tests/test_script.py` and `tests/test_machine.py`:
 
@@ -90,6 +117,15 @@ In `tests/test_script.py` and `tests/test_machine.py`:
 - the summary counts the job's cost;
 - the bar's total grows when a job ends, by what the job cost.
 
+## Before the user tries it
+
+A check on a pseudo-terminal, with a terminal emulator drawing the screen, as for the
+panel's steps 6 and 7: the real terminal with the bar pinned, half a line typed at the
+prompt, a stand-in job running for a few seconds. The bar is on the last row only, its time
+has moved, and the typed line and the cursor are where they were. The one bug of the panel
+was of this kind, and no test on a pipe saw it.
+
 ## Done when
 
-The tests pass, and a scripted run with a stand-in job waits for it and reports its cost.
+The tests pass, the check on the pseudo-terminal holds, and a scripted run with a stand-in
+job waits for it and reports its cost.
