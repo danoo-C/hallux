@@ -1135,7 +1135,8 @@ Each needs a run or a measurement.
   counted by it. The main session gets a result after Ctrl-C today; whether it has the
   dollars in it needs a run.
 - **How long a check child takes to start** without pygame. By the music plan's measurement
-  numpy loads in 0.25 seconds here.
+  numpy loads in 0.25 seconds here. **Answered in step 2:** 0.15 seconds from its start to
+  its answer for the smallest song, and 0.17 for the drum beat.
 - **Whether a job's session hands over the model's thinking.** The SDK has a block for it.
   The Details tab leaves it out until a run shows what arrives.
 - **Whether redrawing the bar once a second disturbs typing** at the shell prompt.

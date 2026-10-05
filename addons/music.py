@@ -9,6 +9,10 @@ Hallux never imports numpy or pygame; it only checks that they are installed. Th
 starts with the first play(), stays for the next ones, and ends with stop(). The two exchange
 one line of JSON per message, over the child's stdin and stdout, as addons/window.py does. A
 line from the child that answers no question is an event: a song has ended by itself.
+
+check() renders a score without a sound. Each check starts a child of its own, which opens no
+sound card and ends with its answer. So a check never waits for the child that plays, never
+replaces its song, and stop() doesn't know about it.
 """
 import contextlib
 import importlib.util
@@ -30,6 +34,7 @@ CHILD = [sys.executable, "-m", "music_engine"]
 START_SECONDS = 8.0                    # for the child to load numpy and open the mixer
 RENDER_SECONDS = 8.0                   # for a song to be rendered and started: less than the
                                        # 10 seconds Hallux gives a call, so this one says why
+CHECK_SECONDS = 8.0                    # for a check, from the start of its child to its answer
 QUIT_SECONDS = 2.0                     # for the child to end by itself, before it is ended
 SCORE_KB = 64                          # the biggest score file (music_engine/limits.py)
 
@@ -42,6 +47,8 @@ song with bytebeat instruments, at 44100 Hz and 16 bits.
   returns: the sound goes on by itself. A song that is playing is replaced. loop=true starts
   the song again when it ends, until something stops it.
 - stop() stops the sound.
+- check(path) renders the score without a sound and returns what play(path) would return, or
+  the same errors. A song that is playing plays on.
 - {"event": "finished"} is reported, once you listen with addon_listen, when a song that
   plays once ended by itself: not after stop() or a new play(), and never for a loop.
 The addon defines no command: how the sound card shows inside the machine is your choice. A
@@ -209,9 +216,7 @@ class MusicError(Exception):
 def play(disk, path: str, loop: bool = False) -> dict:
     """Play the score file at this path on the machine's disk. A song that is playing is
     replaced. loop=true plays it again and again."""
-    text = disk.read_text(path)
-    if len(text.encode("utf-8")) > SCORE_KB * 1024:
-        raise MusicError(f"the score is bigger than {SCORE_KB} KB")
+    text = _score(disk, path)
     with _lock:
         link = _open()
         try:
@@ -241,7 +246,28 @@ def stop() -> dict:
     return {"ok": True}
 
 
-EXPOSED = [play, stop]
+def check(disk, path: str) -> dict:
+    """Render the score file at this path without a sound, and return what play(path) would
+    return for it. Nothing that is playing is touched."""
+    text = _score(disk, path)
+    try:                                              # a child for this one render: it never
+        done = subprocess.run(                        # waits for the one that plays
+            CHILD + ["check"], cwd=FOLDER, input=json.dumps({"text": text}).encode(),
+            capture_output=True, timeout=CHECK_SECONDS, env=_environment())
+    except subprocess.TimeoutExpired:                 # run() has ended the child by now
+        raise MusicError("the song took too long to render") from None
+    answer = None
+    if done.returncode == 0:                          # a child that crashed has no answer,
+        with contextlib.suppress(ValueError, IndexError):         # whatever it printed first
+            answer = json.loads(done.stdout.splitlines()[-1])
+    if not isinstance(answer, dict):
+        raise MusicError(f"the check stopped{_crash(done.returncode, done.stderr)}")
+    if "error" in answer:
+        raise MusicError(answer["error"])
+    return answer
+
+
+EXPOSED = [play, stop, check]
 
 
 def connect(emit) -> None:
@@ -250,9 +276,32 @@ def connect(emit) -> None:
     _emit = emit
 
 
-_lock = threading.Lock()               # one question at a time
+_lock = threading.Lock()               # one question at a time, to the child that plays
 _link = None                           # the pipe to the child, while there is one
 _emit = None                           # where events go, once Hallux has connected
+
+
+def _score(disk, path: str) -> str:
+    """The score file at this path, through the path jail."""
+    text = disk.read_text(path)
+    if len(text.encode("utf-8")) > SCORE_KB * 1024:
+        raise MusicError(f"the score is bigger than {SCORE_KB} KB")
+    return text
+
+
+def _environment() -> dict:
+    """What a child is started with. Colours are off: with FORCE_COLOR set in your shell,
+    Python colours a traceback, and its last line is what the AI is told about a crash."""
+    kept = {name: value for name, value in os.environ.items() if name != "FORCE_COLOR"}
+    return kept | {"PYGAME_HIDE_SUPPORT_PROMPT": "1", "NO_COLOR": "1", "PYTHON_COLORS": "0"}
+
+
+def _crash(returncode: int | None, printed: bytes) -> str:
+    """What follows "stopped" when a child is gone: the last thing it printed, if it crashed."""
+    lines = printed.decode("utf-8", "replace").strip().splitlines()
+    if returncode in (0, None) or not lines:
+        return ""
+    return f": it crashed ({lines[-1].strip()[:200]})"
 
 
 def _open() -> "_Link":
@@ -283,8 +332,7 @@ class _Link:
         self.ended = False                            # by us, not by a crash
         self.process = subprocess.Popen(
             CHILD, cwd=FOLDER, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=self.errors, text=True,
-            env=os.environ | {"PYGAME_HIDE_SUPPORT_PROMPT": "1"})
+            stderr=self.errors, text=True, env=_environment())
         self.answers: queue.Queue = queue.Queue()     # dictionaries; None once the child is gone
         self.asked = 0
         self.reader = threading.Thread(target=self._read, name="music answers", daemon=True)
@@ -342,10 +390,8 @@ class _Link:
         with contextlib.suppress(subprocess.TimeoutExpired):
             self.process.wait(1)
         self.errors.seek(0)
-        printed = self.errors.read().decode("utf-8", "replace").strip().splitlines()
-        if self.ended or self.process.returncode in (0, None) or not printed:
-            return "the sound card stopped"
-        return f"the sound card stopped: it crashed ({printed[-1].strip()[:200]})"
+        why = "" if self.ended else _crash(self.process.returncode, self.errors.read())
+        return f"the sound card stopped{why}"
 
     def end(self) -> None:
         """End the child at once, without asking it to."""

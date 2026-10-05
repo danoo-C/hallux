@@ -20,7 +20,7 @@ from hallux import addons, app  # noqa: E402
 
 DESIGN = Path(__file__).resolve().parent.parent / "docs" / "addon-music.md"
 SCORES = Path(__file__).parent / "scores"
-MANUAL_CHARS = 8000                           # every boot that uses the addon reads all of it
+MANUAL_CHARS = 8500                           # every boot that uses the addon reads all of it
 SECTIONS = ["A WHOLE SCORE", "THE FILE", "EVENTS", "PATTERNS AND THE SONG", "INSTRUMENTS",
             "RECIPES", "WHAT PLAY RETURNS", "WRITING WELL", "LIMITS"]
 
@@ -75,8 +75,8 @@ def test_it_has_the_parts_of_the_plan_in_their_order(manual):
     places = [manual.index(f"\n\n{title}\n") for title in SECTIONS]
     assert places == sorted(places)
     first = manual[:places[0]]
-    for part in ("play(path, loop)", "stop()", '{"event": "finished"}', "addon_listen",
-                 "The addon defines no command", "nano", "the way a player would"):
+    for part in ("play(path, loop)", "stop()", "check(path)", '{"event": "finished"}',
+                 "addon_listen", "The addon defines no command", "nano", "the way a player would"):
         assert part in first, part
 
 

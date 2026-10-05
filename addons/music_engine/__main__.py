@@ -15,6 +15,16 @@ has the same id. A line without one is an event.
 The child speaks first: {"id": 0, "ok": true} once numpy is loaded and the mixer is open, or
 {"id": 0, "error": "no sound device: ..."}. Nothing of Hallux is in it, so it can be run and
 tried by hand.
+
+Started with the word check, python -m music_engine check, it plays nothing. It reads one
+message, renders that score, gives the answer play would give, and ends:
+
+    {"text": "..."}
+        {"ok": true, "seconds": 9.6, "peak": 98}
+        {"error": "line 7: unknown name CUTOF\\nline 12: ..."}
+
+It opens no sound card for that and never loads pygame, so it works where no sound can get
+out, and beside a child that is playing.
 """
 import contextlib
 import json
@@ -34,6 +44,9 @@ def main() -> int:
     def say(message: dict) -> None:
         line_out.write(json.dumps(message) + "\n")   # ASCII only, whatever the pipe's encoding
         line_out.flush()
+
+    if sys.argv[1:] == ["check"]:
+        return check(say)
 
     # Only now: numpy and pygame take a while, and pygame may print while it starts.
     from music_engine import player, render, score, song
@@ -115,6 +128,30 @@ def main() -> int:
             sound.close()
             return 0
         say(carry_out(message) | {"id": message.get("id")})
+
+
+def check(say) -> int:
+    """Started for a check: one score comes in, its answer goes out, and that is all. The
+    player isn't loaded here. It loads pygame, and a check has to work without it."""
+    from music_engine import render, score, song          # numpy takes a while; no pygame
+
+    try:
+        message = json.loads(sys.stdin.buffer.read())     # all of it: nothing follows a check
+    except ValueError:
+        message = None
+    text = message.get("text") if isinstance(message, dict) else None
+    if not isinstance(text, str):
+        say({"error": "addon bug: check takes a text"})
+        return 0
+    try:
+        read = score.read(text)
+        say({"ok": True} | render.render(read, song.unfold(read)).report())
+    except score.ScoreError as problems:
+        say({"error": str(problems)})
+    except Exception as bug:                  # an answer, as from the child that plays
+        traceback.print_exc()
+        say({"error": f"addon bug: {type(bug).__name__}: {bug}"[:200]})
+    return 0
 
 
 if __name__ == "__main__":

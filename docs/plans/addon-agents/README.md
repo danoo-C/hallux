@@ -1,6 +1,6 @@
 # Plan: addon agents
 
-**Status:** written on 2026-10-04. **Step 1 is built,** on 2026-10-05; the table under
+**Status:** written on 2026-10-04. **Steps 1 and 2 are built,** on 2026-10-05; the table under
 [The steps](#the-steps) says how far the build is. The design it follows is
 [addon-agents.md](../../addon-agents.md), in which no question is open. The decisions this
 plan takes on its own are in a table below. They are my proposals, and the user hasn't
@@ -213,7 +213,7 @@ step of the config panel's plan.
 | Step | File | Needs | Status |
 |---|---|---|---|
 | 1. Whole-file writes | [01-whole-file-writes.md](01-whole-file-writes.md) | | Built on 2026-10-05 |
-| 2. `check` | [02-check.md](02-check.md) | | Not built |
+| 2. `check` | [02-check.md](02-check.md) | | Built on 2026-10-05 |
 | 3. The six settings | [03-settings.md](03-settings.md) | Panel 1 and 5 | Not built |
 | 4. The fenced disk | [04-fence.md](04-fence.md) | 1 | Not built |
 | 5. The landing | [05-landing.md](05-landing.md) | 4 | Not built |

@@ -4,6 +4,7 @@ the sound card into a file, and stand-in children do what a real one doesn't do 
 import asyncio
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -114,10 +115,11 @@ def beginning_of(sound_file, text):
 def test_the_file_passes_every_check_of_the_loader(addon):
     assert addon.name == "music"
     assert addon.summary == "A sound card: plays score files with bytebeat instruments."
-    assert list(addon.functions) == ["play", "stop"]
+    assert list(addon.functions) == ["play", "stop", "check"]
     assert addon.stop is addon.functions["stop"]          # the hook is the tool
     assert addon.has_events                               # it has connect(emit)
-    for part in ("play(path, loop)", "stop()", '{"event": "finished"}', "addon_listen"):
+    for part in ("play(path, loop)", "stop()", "check(path)", '{"event": "finished"}',
+                 "addon_listen"):
         assert part in addon.manual
 
 
@@ -130,15 +132,19 @@ def test_hallux_itself_never_imports_numpy_or_pygame():
     assert (done.stdout, done.stderr) == ("1 {} []\n", "")
 
 
-def test_the_tools_are_play_and_stop_and_the_ai_never_sees_the_disk(play):
-    assert list(play.tools) == ["play", "stop"]
+def test_the_tools_are_play_stop_and_check_and_the_ai_never_sees_the_disk(play):
+    assert list(play.tools) == ["play", "stop", "check"]
     assert play.tools["play"].input_schema == {
         "type": "object", "properties": {"path": {"type": "string"}, "loop": {"type": "boolean"}},
         "required": ["path"], "additionalProperties": False}
     assert play.tools["stop"].input_schema["properties"] == {}
+    assert play.tools["check"].input_schema == {
+        "type": "object", "properties": {"path": {"type": "string"}},
+        "required": ["path"], "additionalProperties": False}
     assert all(tool.description for tool in play.tools.values())
-    with pytest.raises(jsonschema.ValidationError):
-        play("play", disk="/", path="/home/user/beat.score")
+    for tool in ("play", "check"):
+        with pytest.raises(jsonschema.ValidationError):
+            play(tool, disk="/", path="/home/user/beat.score")
 
 
 def test_without_numpy_the_addon_is_skipped_with_the_reason(monkeypatch, tmp_path):
@@ -299,6 +305,141 @@ def test_a_child_that_never_starts(play, music, monkeypatch):
     assert play("play", path="/home/user/short.score") == (
         {"error": "MusicError: the sound card stopped: it crashed (no numpy for you)"}, True)
     assert music._link is None
+
+
+def test_a_crash_is_told_without_colours(play, music, monkeypatch):
+    """With FORCE_COLOR set in the shell, Python colours a child's traceback, and its last line
+    is what the AI is told. Every child is started with colours off."""
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    stand_in(music, HELLO + 'sys.stdin.readline()\nraise RuntimeError("out of notes")')
+    assert play("play", path="/home/user/short.score") == (
+        {"error": "MusicError: the sound card stopped: it crashed (RuntimeError: out of notes)"},
+        True)
+    assert play("check", path="/home/user/short.score") == (
+        {"error": "MusicError: the check stopped: it crashed (RuntimeError: out of notes)"}, True)
+
+
+# ---------------------------------------------------------------- checking
+
+def test_check_returns_what_play_returns_and_makes_no_sound(play, music, sound):
+    assert play("check", path="/home/user/beat.score") == (
+        {"ok": True, "seconds": 8.0, "peak": 98}, False)
+    assert play("check", path="/home/user/short.score") == (
+        {"ok": True, "seconds": 0.2, "peak": 78}, False)
+    assert not sound.exists()                             # the disk driver was never opened
+    assert music._link is None                            # and no child stays behind
+    assert play("play", path="/home/user/short.score") == (
+        {"ok": True, "seconds": 0.2, "peak": 78}, False)   # the same numbers, with the sound
+
+
+def test_check_needs_no_sound_device(play, monkeypatch):
+    monkeypatch.setenv("SDL_AUDIODRIVER", "nosuchdriver")
+    assert play("play", path="/home/user/beat.score")[1] is True      # no sound can get out
+    assert play("check", path="/home/user/beat.score") == (
+        {"ok": True, "seconds": 8.0, "peak": 98}, False)
+
+
+def test_check_follows_the_machines_working_directory(play, world):
+    assert play("check", path="beat.score") == ({"error": "ENOENT"}, True)
+    world.chdir("/home/user")
+    assert play("check", path="beat.score") == ({"ok": True, "seconds": 8.0, "peak": 98}, False)
+
+
+def test_check_refuses_the_files_play_refuses(play, music, world, tmp_path):
+    (tmp_path / "secret.score").write_text(SHORT)
+    (world.root / "out.score").symlink_to(tmp_path / "secret.score")
+    (world.root / "big.score").write_text(SHORT + "#" * (64 * 1024))
+    (world.root / "huge.score").write_text("#" * (1024 * 1024 + 1))
+    (world.root / "fits.score").write_text(SHORT + "#" * (64 * 1024 - len(SHORT)))
+    started = []
+    monkeypatch_run, music.subprocess.run = music.subprocess.run, (
+        lambda *args, **more: started.append(args) or monkeypatch_run(*args, **more))
+    try:
+        for path, error in [("/nowhere.score", "ENOENT"), ("/out.score", "EACCES"),
+                            ("/home", "EISDIR"), ("/.hallux/memory.md", "ENOENT"),
+                            ("/big.score", "MusicError: the score is bigger than 64 KB"),
+                            ("/huge.score", "EFBIG")]:
+            assert play("check", path=path) == ({"error": error}, True), path
+        assert started == []                              # no child was started for those
+        assert play("check", path="/fits.score")[1] is False     # exactly 64 KB is fine
+        assert len(started) == 1
+    finally:
+        music.subprocess.run = monkeypatch_run
+
+
+def test_check_of_a_score_with_mistakes_has_every_line(play, world):
+    (world.root / "bad.score").write_text(
+        "BPM = 120\nINSTRUMENT lead:\n    sin(p) * CUTOF >> 8\nSONG:\n    (0, 8, H4, lead)\n")
+    told = ({"error": "MusicError: line 3: unknown name CUTOF\n"
+                      "line 5: lead is an instrument: its value is a note such as A4, not H4"}, True)
+    assert play("check", path="/bad.score") == told
+    assert play("play", path="/bad.score") == told        # word for word what play says
+
+
+def test_the_loudness_report_of_a_check(play, world):
+    (world.root / "loud.score").write_text(
+        "BPM = 300\nINSTRUMENT loud:\n    sin(p) * 2\nSONG:\n    (0, 4, A4 C5, loud)\n")
+    assert play("check", path="/loud.score") == (
+        {"ok": True, "seconds": 0.1, "peak": 200, "turned_down_to": 49, "clipped": ["loud"]},
+        False)
+
+
+def test_check_leaves_a_song_that_plays_alone(play, music, sound):
+    play("play", path="/home/user/beat.score", loop=True)
+    child = music._link.process
+    assert play("check", path="/home/user/short.score") == (
+        {"ok": True, "seconds": 0.2, "peak": 78}, False)
+    assert music._link.process is child and child.poll() is None     # the same child, alive
+    time.sleep(0.3)
+    play("stop")
+    assert beginning_of(sound, BEAT) > 5000               # and the beat went on meanwhile
+
+
+def test_check_doesnt_wait_for_a_play_that_is_rendering(music, world):
+    """A play holds the lock of the child that plays for as long as its render takes."""
+    with music._lock:
+        started = time.monotonic()
+        assert music.check(addons.DiskHandle(world), "/home/user/short.score") == {
+            "ok": True, "seconds": 0.2, "peak": 78}
+        assert time.monotonic() - started < 5
+
+
+def test_stop_during_a_check_doesnt_end_it(music, world):
+    stand_in(music, 'sys.stdin.read()\ntime.sleep(0.6)\n'
+                    'print(json.dumps({"ok": True, "seconds": 1.5, "peak": 50}), flush=True)')
+    answers = []
+    checking = threading.Thread(target=lambda: answers.append(
+        music.check(addons.DiskHandle(world), "/home/user/short.score")))
+    checking.start()
+    time.sleep(0.2)                                       # the check's child is running
+    assert music.stop() == {"ok": True}
+    checking.join(5)
+    assert answers == [{"ok": True, "seconds": 1.5, "peak": 50}]
+
+
+def test_a_check_that_takes_too_long(play, music, monkeypatch, tmp_path):
+    monkeypatch.setattr(music, "CHECK_SECONDS", 0.5)
+    monkeypatch.setenv("CHILD_SAYS_WHO", str(tmp_path / "pid"))
+    stand_in(music, 'import os\nopen(os.environ["CHILD_SAYS_WHO"], "w").write(str(os.getpid()))\n'
+                    'time.sleep(30)')
+    started = time.monotonic()
+    assert play("check", path="/home/user/beat.score") == (
+        {"error": "MusicError: the song took too long to render"}, True)     # play's words
+    assert time.monotonic() - started < 4
+    with pytest.raises(ProcessLookupError):               # the child is gone
+        os.kill(int((tmp_path / "pid").read_text()), 0)
+
+
+def test_a_check_child_that_ends_without_an_answer(play, music):
+    stand_in(music, "sys.exit(0)")
+    assert play("check", path="/home/user/short.score") == (
+        {"error": "MusicError: the check stopped"}, True)
+    stand_in(music, 'print("not an answer")\nsys.exit("no numpy for you")')
+    assert play("check", path="/home/user/short.score") == (
+        {"error": "MusicError: the check stopped: it crashed (no numpy for you)"}, True)
+    stand_in(music, 'print(json.dumps([1, 2]))')          # a line of JSON, and no answer
+    assert play("check", path="/home/user/short.score") == (
+        {"error": "MusicError: the check stopped"}, True)
 
 
 # ---------------------------------------------------------------- the event
