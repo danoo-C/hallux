@@ -15,6 +15,7 @@ from pathlib import Path
 from hallux.addons import ADDON_NAME
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5")     # for the panel to offer
 CONFIG_FILE = Path(".hallux") / "config.toml"
 
 WHEN = {                                      # when a change of each setting takes effect

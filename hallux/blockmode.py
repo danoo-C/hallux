@@ -32,7 +32,8 @@ from prompt_toolkit.widgets import TextArea
 from hallux.protocol import Action, Field, FieldState, Form, plain
 from hallux.statusbar import StatusBar
 
-POWER_CUT_KEY = "c-s-delete"
+POWER_CUT_KEY = "c-s-delete"                   # the hard exit: Ctrl+Shift+Del
+OPEN_KEY = "c-f12"                             # opens and closes hallux's own panel (hallux.panel)
 
 SPECIAL_KEYS = {
     "Enter": "enter", "Escape": "escape", "Tab": "tab", "Backspace": "backspace",
