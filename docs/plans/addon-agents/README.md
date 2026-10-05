@@ -1,6 +1,6 @@
 # Plan: addon agents
 
-**Status:** written on 2026-10-04. **Steps 1 to 5 are built,** on 2026-10-05; the table under
+**Status:** written on 2026-10-04. **Steps 1 to 6 are built,** on 2026-10-05; the table under
 [The steps](#the-steps) says how far the build is. The design it follows is
 [addon-agents.md](../../addon-agents.md), in which no question is open. The decisions this
 plan takes on its own are in a table below. They are my proposals, and the user hasn't
@@ -217,7 +217,7 @@ step of the config panel's plan.
 | 3. The six settings | [03-settings.md](03-settings.md) | Panel 1 and 5 | Built on 2026-10-05 |
 | 4. The fenced disk | [04-fence.md](04-fence.md) | 1 | Built on 2026-10-05 |
 | 5. The landing | [05-landing.md](05-landing.md) | 4 | Built on 2026-10-05 |
-| 6. The declaration | [06-declaration.md](06-declaration.md) | | Not built |
+| 6. The declaration | [06-declaration.md](06-declaration.md) | | Built on 2026-10-05 |
 | 7. The jobs | [07-jobs.md](07-jobs.md) | 3, 5, 6 | Not built |
 | 8. The caps | [08-caps.md](08-caps.md) | 7, panel 3 | Not built |
 | 9. A job's real session | [09-session.md](09-session.md) | 6, 7 | Not built |

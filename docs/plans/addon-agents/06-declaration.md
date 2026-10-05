@@ -96,3 +96,43 @@ In `tests/test_addons.py`, with fake addons in a temporary folder, as the others
 
 A fake addon with `agent()` and a `compose(spawn, request, folder, edit)` loads, and a call
 through its tool reaches a stand-in `spawn` with the request, the folder and the list.
+
+## As built
+
+Built on 2026-10-05, on the branch `addon-agents`. 52 new tests, 1319 in all. One old test
+changed, the one this file names: its message now ends with `bool or list[str]`. Decided
+while building:
+
+- **The loaded addon holds an `Agent`:** `addon.agent` has the name, the prompt, the tools
+  by name, the effort and the status. Effort and status are `None` when the declaration
+  leaves them out. An addon without `agent()` has `None` there.
+- **`agent` has to be a function that works without arguments.** Anything else skips the
+  addon, as a `stop()` that needs arguments does.
+- **A status is one line of 1 to 80 characters.** An empty one is refused.
+- **A tool of the agent needn't be in `EXPOSED`.** `EXPOSED` and `tools` are checked by the
+  same code, and a refusal names the list it found the problem in.
+- **A `spawn` that is dead raises `Refused("ESTALE")`.** The plan named no code. It is the
+  name the fenced disk has for a handle that outlived its job.
+- **The `spawn` of a call ends twice over:** in the function's own thread as soon as the
+  function returns, and in the event loop when Hallux stops waiting. Ending it takes a lock
+  that a start also takes. So once the AI has been told `timed out`, no job can start, not
+  even one that was being started in that moment.
+- **A function that takes `spawn`, called without one, fails loudly:**
+  `compose starts a job, and this call can't start one`, with a line in the log. That is
+  what every machine says until step 10 wires `spawn` up.
+- **`build_addon_tools` takes the `spawn`.** The machine doesn't pass one before step 10,
+  and `build_addon_servers` is as it was.
+- **A hint is compared by `==`,** and each schema gets a copy of its own. `list[int]`, a
+  bare `list` and `list[list[str]]` are refused.
+- **`hallux/config.py` takes the five effort names from `hallux/addons.py`.** `app.py` and
+  the Config tab read `config.EFFORTS` as before.
+
+**The "Done when" is a test:** a fake addon with `agent()` and
+`compose(spawn, request, folder, edit)` loads, and a call through its tool reaches a
+stand-in `spawn` with the request, the folder and the list, as a list.
+
+**Nothing here needs a terminal or a model.** No real addon has an agent before step 13:
+the last test loads the real addons folder and finds none.
+
+**The lines of `addons.py` moved.** The design's references into the file, and step 10's
+one into its tests, are set again.

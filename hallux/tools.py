@@ -164,12 +164,14 @@ def build_server(disk: Disk, fields: Fields | None = None, addons: Sequence[Addo
     return create_sdk_mcp_server(SERVER, tools=tools), [f"mcp__{SERVER}__{t.name}" for t in tools]
 
 
-def build_addon_tools(addon: Addon, disk: Disk | None = None) -> list[SdkMcpTool]:
+def build_addon_tools(addon: Addon, disk: Disk | None = None,
+                      spawn: Callable | None = None) -> list[SdkMcpTool]:
     """An addon's exposed functions as tools. A function's docstring is its description.
-    `disk` is the machine's disk, for the functions that take the handle."""
+    `disk` is the machine's disk, for the functions that take the handle, and `spawn` is what
+    starts a job of this addon's agent, for the functions that ask for it."""
     def make(name: str, function: Callable) -> SdkMcpTool:
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
-            return await call(function, args, disk)
+            return await call(function, args, disk, spawn)
         return tool(name, description_for(function), schema_for(function))(handler)
 
     return [make(name, function) for name, function in addon.functions.items()]

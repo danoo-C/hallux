@@ -120,7 +120,7 @@ it says of itself where its lines stand. It has two groups:
   rule changes in three places. It can't name a third that some machines don't have.
 - **One line names an exception to the main prompt.** ADDONS says of events "They reach you
   only after addon_listen(name)" (`hallux/prompt.md:276-277`), and a test pins those words
-  (`tests/test_addons.py:1413`). The section says: a job's event reaches you whether you
+  (`tests/test_addons.py:1417`). The section says: a job's event reaches you whether you
   listen or not. Listening decides when it comes.
 - **A file a job wrote** needs no line. PROGRAMS lets a program correct only a file "it
   wrote itself in this run, and that is still as it wrote it" (`hallux/prompt.md:249-254`).

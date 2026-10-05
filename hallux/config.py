@@ -12,9 +12,8 @@ import tomllib
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
-from hallux.addons import ADDON_NAME
+from hallux.addons import ADDON_NAME, EFFORTS     # the loader checks an agent's effort too
 
-EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5")     # for the panel to offer
 CONFIG_FILE = Path(".hallux") / "config.toml"
 

@@ -258,7 +258,7 @@ EXPOSED = [play, stop, check, compose]
   `edit` that Hallux refuses is an error too, with the file named.
 - **The refusal is an error of its own kind.** Hallux's call wrapper answers it as
   `{"error": "EAGAIN"}`, the way it answers what the disk handle refuses
-  (`hallux/addons.py:436`). Without that, the AI would get the name of a Python error.
+  (`hallux/addons.py:571`). Without that, the AI would get the name of a Python error.
 - **It is called in the addon's own thread,** where every addon function runs. So it only
   notes the job in the table, under a lock, and hands the start of the session to Hallux's
   event loop, the way an addon's `emit` hands over an event.
@@ -297,7 +297,7 @@ its child.
   check child ends by itself when its render is done, so stopping the sound never ends a
   job's `check`, and nothing is left running after a boot.
 - **One limit of 8 seconds for a `check`,** from the start of its child to its answer.
-  Hallux cuts every addon call at 10 seconds (`hallux/addons.py:50`), and `play` allows a
+  Hallux cuts every addon call at 10 seconds (`hallux/addons.py:60`), and `play` allows a
   render 8 (`addons/music.py:31`). So the child's start comes out of the same 8 seconds: a
   song that needs all of them to render passes `play` and fails `check`, with the words
   `play` has for a render that takes too long.
@@ -624,7 +624,7 @@ prompt treats the table as data, and the jail holds whatever it does.
   first, then the jobs', each oldest first.
 - **Job events have a list of their own,** beside the hub that holds the addons' events.
   The hub drops the events of an addon nobody listens to, and everything once the event
-  budget is used up (`hallux/addons.py:126-130`). A job's event waits for the next message
+  budget is used up (`hallux/addons.py:159-163`). A job's event waits for the next message
   in both cases.
 - **Any addon with an agent can be listened to,** also one without `connect()` (section 4).
 - **In front of the next message** means the message starts with an `<events>` block, and
@@ -1242,7 +1242,7 @@ sections now.
 | 7 | The job's folder can be deleted, moved or replaced by a link while the job runs | At the landing Hallux resolves the folder through the jail again. If it is gone, or isn't the same place any more, nothing lands: the job ends as `failed` with `why: folder`, and its copies are dropped |
 | 8 | `agent_budget_usd` only stops new jobs. Running ones spend on, so it isn't "what all jobs together may cost" | A running job counts with its full cap, `agent_job_budget_usd`, until it ends, and then with what it cost. A new job starts only if its full cap still fits. The budget is then never passed. With the defaults, a second job fits only while nothing was spent yet |
 | 9 | `spawn` runs in the addon's own thread, not in the event loop | `spawn` only notes the job in the table, under a lock, and hands the start of its session to the event loop, the way an addon's `emit` hands over an event |
-| 9 | A refusal would reach the AI as `OSError: [Errno 11] …`, not as `{"error": "EAGAIN"}` | A refusal is an error of its own kind, and the call wrapper answers it as `{"error": "EAGAIN"}`, as it does for what the disk handle refuses (`hallux/addons.py:436`) |
+| 9 | A refusal would reach the AI as `OSError: [Errno 11] …`, not as `{"error": "EAGAIN"}` | A refusal is an error of its own kind, and the call wrapper answers it as `{"error": "EAGAIN"}`, as it does for what the disk handle refuses (`hallux/addons.py:571`) |
 | 9 | It isn't said where `spawn` goes when a function also takes `disk` | `disk` first, `spawn` second. A function with only `spawn` has it first. Anything else skips the addon, with the reason |
 | 10 | A job's file names are limited to letters, digits, `.`, `-` and `_`, but it isn't said where. A file it was given may be `My Song.score` | The rule holds for names a job creates, and is checked when it writes. A file it was given keeps its name: the main agent chose it. In the table, `tool` shows the function and, for one of the job's own files, that file's name. No other argument |
 | 11 | Hallux's `write_file` can create folders. May a job? | No. A job's `write_file` has no `parents`: a new file goes into a folder that exists. A job reads everything in its folder, subfolders included |
@@ -1255,8 +1255,8 @@ sections now.
 | | The gap | Decision |
 |---|---|---|
 | A | `agent_budget_usd` follows the event budget and refills only when a line is typed at the shell (`hallux/machine.py:290,295`). A player that starts a composition on a key press never gets a refill: after $2.00 every `compose` is `EAGAIN` until the user leaves the program | It refills when the user does something: a typed line, as today, and a key or an action in a full-screen program. A tick and an event don't refill it: nobody is at the keyboard then |
-| B | The job event can't go through the events hub as it is. The hub drops the events of an addon nobody listens to, and everything once the event budget is used up (`hallux/addons.py:126-130`). And `addon_listen` refuses an addon without `connect()` (`hallux/tools.py:80`) | Hallux keeps job events in a list of its own, beside the hub, so that none is dropped. With nobody listening, or the event budget used up, they wait for the next message. An addon with `agent()` counts as having events, so `addon_listen` takes it |
-| C | An addon call gets 10 seconds in all (`hallux/addons.py:50`), and a render may take 8 (`addons/music.py:31`). A child started for each `check` has to load numpy inside what is left | One limit of 8 seconds for a `check`, from the start of its child to its answer. A song that needs the full 8 seconds to render passes `play` and fails `check`, with the words `play` has for it |
+| B | The job event can't go through the events hub as it is. The hub drops the events of an addon nobody listens to, and everything once the event budget is used up (`hallux/addons.py:159-163`). And `addon_listen` refuses an addon without `connect()` (`hallux/tools.py:80`) | Hallux keeps job events in a list of its own, beside the hub, so that none is dropped. With nobody listening, or the event budget used up, they wait for the next message. An addon with `agent()` counts as having events, so `addon_listen` takes it |
+| C | An addon call gets 10 seconds in all (`hallux/addons.py:60`), and a render may take 8 (`addons/music.py:31`). A child started for each `check` has to load numpy inside what is left | One limit of 8 seconds for a `check`, from the start of its child to its answer. A song that needs the full 8 seconds to render passes `play` and fails `check`, with the words `play` has for it |
 | D | An addon function can't be stopped, so one that belongs to a killed job runs on, with a disk handle that can write. Pids start again at 30001 with each boot, so after a reboot it could write into a new job's copies | The handle goes dead when its job ends or is killed: every later call raises. And pids count on for as long as Hallux runs. They start at 30001 when Hallux starts, not at every boot |
 | E | The config panel ([config-panel.md](config-panel.md), section 6) makes the budget per boot a check of Hallux's own. This design says jobs don't count towards `max_budget_usd` | They count: each job when it has ended. Over the cap no new job starts, with `EAGAIN`, as no new message goes to the AI. Then `max_budget_usd` is what a boot may cost, jobs included. It needs step 3 of the panel's plan |
 
