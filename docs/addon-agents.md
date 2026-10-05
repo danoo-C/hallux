@@ -921,7 +921,7 @@ ls Music
 ```
 
 - **The script makes `Music` first.** A new machine has no such folder
-  (`hallux/disk.py:28`), and `compose` is refused for a folder that isn't there.
+  (`hallux/disk.py:36`), and `compose` is refused for a folder that isn't there.
 - `@wait jobs` is a new script line: the script goes on when no job runs. Without it the
   script would end, the machine would halt, and the job would be killed.
 - **The proof is in `hallux.log`:** the `echo` round trip lies between the job's start and
@@ -1264,8 +1264,8 @@ sections now.
 | Where | What was wrong | The correction |
 |---|---|---|
 | Section 16 | `pyproject.toml` lists only `prompt.md` as a file of the package (line 42) | It gets `agent.md` too, and the table gets rows for `pyproject.toml`, the README and the bar's words for the new tools |
-| Section 5 | "`..` … are refused as today" | The jail doesn't refuse `..`: it folds it at `/` (`hallux/disk.py:66`). The new fence is what refuses a path that ends outside the folder |
-| Section 15 | The script composes into `Music` | A new machine has no `/home/user/Music` (`hallux/disk.py:28`). The script makes it first |
+| Section 5 | "`..` … are refused as today" | The jail doesn't refuse `..`: it folds it at `/` (`hallux/disk.py:130`). The new fence is what refuses a path that ends outside the folder |
+| Section 15 | The script composes into `Music` | A new machine has no `/home/user/Music` (`hallux/disk.py:36`). The script makes it first |
 | Section 6 | `agent_model` | On Haiku an agent gets no effort, as the machine's own model (`hallux/config.py:50`) |
 | Section 12 | "`[1]+ Done kittymusic` … because a job's event says so" | It mixes bash's imagined jobs with real ones. A real job's `Done` line comes from its event. For a program in the background the AI decides |
 | Section 3 | `ps` shows the composer on `pts/0` | `?`: a job has no terminal |

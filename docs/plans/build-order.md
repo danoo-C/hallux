@@ -54,8 +54,8 @@ These are the user's rules for this project. They hold for every step.
 - **Make a mistake loud.** Where something an author left out would get a quiet fallback,
   make it a failed check with a readable reason.
 
-**The tests:** `env -u FORCE_COLOR .venv/bin/python -m pytest -q`. There are 1066 today,
-2026-10-05. With `FORCE_COLOR` set in the shell two of them fail, because Python then
+**The tests:** `env -u FORCE_COLOR .venv/bin/python -m pytest -q`. There are 1080 today,
+2026-10-05, after step 1 of addon agents. With `FORCE_COLOR` set in the shell two of them fail, because Python then
 colours a child's traceback; step 2 of the agents plan mends the music addon's.
 
 **The plans' own decisions.** Each README has a table of decisions the plan took by itself.

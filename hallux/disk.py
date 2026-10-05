@@ -7,11 +7,16 @@ the memory methods reach it.
 
 Methods return plain JSON-able data. They fail by raising OSError (always with an
 errno) or ValueError; hallux.tools turns those into tool results for the AI.
+
+A whole file is never seen half-written: write_whole() writes it beside the old one and
+renames it over it. An addon function reads in a thread of its own, while a tool writes.
 """
 from __future__ import annotations
 
+import contextlib
 import errno
 import fnmatch
+import logging
 import os
 import posixpath
 import shutil
@@ -19,7 +24,10 @@ import stat
 from datetime import datetime
 from pathlib import Path
 
+log = logging.getLogger("hallux")
+
 HIDDEN_NAME = ".hallux"
+TEMP_MARK = ".hallux-"        # in the name of a file that exists only while another is written
 READ_LIMIT = 64 * 1024        # bytes returned per read_file call
 FIND_LIMIT = 1000             # entries returned per find call
 EDIT_LIMIT = 1024 * 1024      # biggest file a block-mode editor loads
@@ -50,6 +58,62 @@ def _utf8_cut(data: bytes) -> int:
             needed = 1 if byte < 0xC0 else 2 if byte < 0xE0 else 3 if byte < 0xF0 else 4
             return len(data) if back >= needed else len(data) - back
     return len(data)
+
+
+def write_whole(real: Path, data: str | bytes) -> None:
+    """Write a whole file at a real path, so that nobody ever reads it half-written: the data
+    goes into a new file beside it, and that is renamed over it. A reader that has the old
+    file open reads the old text to its end. The new file gets the old one's mode.
+
+    What could be written before can still be written. Where the folder takes no new file,
+    and for what is no regular file, the write goes in place, as it always did."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")               # first: it can fail, and nothing is touched yet
+    try:
+        old = real.stat()
+    except FileNotFoundError:
+        old = None
+    if old is not None:
+        if not stat.S_ISREG(old.st_mode):         # a directory fails here, with what it always said
+            return _write_in_place(real, data)
+        os.close(os.open(real, os.O_WRONLY))      # a file hallux may not write stays refused:
+                                                  # a rename would get around its mode
+    made = _new_beside(real)
+    if made is None:
+        _write_in_place(real, data)
+        log.info("%s was written in place: no file can be made beside it", real)
+        return
+    handle, temp = made
+    try:
+        with os.fdopen(handle, "wb") as f:
+            if old is not None:                   # the mode first: a private file's new text
+                os.chmod(temp, stat.S_IMODE(old.st_mode))     # is never open to others
+            f.write(data)
+        os.replace(temp, real)                    # atomic: the old file or the new, never half
+    except BaseException:
+        with contextlib.suppress(OSError):
+            temp.unlink()                         # nothing is left behind, and the old file stands
+        raise
+
+
+def _new_beside(real: Path) -> tuple[int, Path] | None:
+    """A new, empty file in the folder of `real`, open for writing, with the mode a new file
+    gets. None if the folder takes none: it isn't there, it isn't ours to write, the name
+    is too long."""
+    for _ in range(4):
+        temp = real.with_name(f".{real.name}{TEMP_MARK}{os.urandom(4).hex()}")
+        try:
+            return os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666), temp
+        except FileExistsError:
+            continue                              # taken, by whatever chance: another name
+        except OSError:
+            return None
+    return None
+
+
+def _write_in_place(real: Path, data: bytes) -> None:
+    with real.open("wb") as f:
+        f.write(data)
 
 
 class Disk:
@@ -166,16 +230,18 @@ class Disk:
         real = self.real(path)
         if parents:
             real.parent.mkdir(parents=True, exist_ok=True)
-        with real.open("a" if append else "w", encoding="utf-8", newline="") as f:
-            f.write(content)
+        if append:                                # in place: a reader sees the old text or more
+            with real.open("a", encoding="utf-8", newline="") as f:
+                f.write(content)
+        else:
+            write_whole(real, content)
         return {"ok": True, "size": real.stat().st_size}
 
     def edit_file(self, path: str, old: str, new: str) -> dict:
         real = self.real(path)
         with real.open(encoding="utf-8", newline="") as f:
             text = _replace_once(f.read(), old, new)
-        with real.open("w", encoding="utf-8", newline="") as f:
-            f.write(text)
+        write_whole(real, text)
         return {"ok": True}
 
     def make_dir(self, path: str, parents: bool = False) -> dict:
