@@ -2,6 +2,7 @@
 table: a Disk, a folder, a list of files and a number."""
 import errno
 import os
+import stat
 import threading
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 import hallux.jobdisk
 from hallux import addons
 from hallux.disk import Disk
-from hallux.jobdisk import BYTES_MAX, FILES_MAX, JobDisk, sweep
+from hallux.jobdisk import BYTES_MAX, FILES_MAX, FolderGone, JobDisk, sweep
 
 BEAT, NEON = "BPM = 120\nSONG:\n", "BPM = 90\n# neon\nSONG:\n"
 
@@ -404,3 +405,236 @@ def test_done_when_a_job_writes_and_the_users_folder_is_what_it_was(disk, root, 
     assert {path: path.stat().st_mtime_ns for path in music.rglob("*")} == times
     assert copies(root, 30007) == {"midnight-cello.score": b"BPM = 60\nSONG:\n",
                                    "neon.score": NEON.replace("90", "140").encode()}
+
+
+# ---------------------------------------------------------------- the landing
+
+HERE = "/home/user/Music"
+
+
+def times(folder):
+    return {str(path.relative_to(folder)): path.stat().st_mtime_ns for path in folder.rglob("*")}
+
+
+def test_a_new_file_and_a_changed_one_land(job, root, music):
+    job.write_file("neon.score", "the job's neon\n")
+    job.write_file("midnight-cello.score", BEAT)
+    job.write_file("old/second.score", "in a subfolder\n")
+    untouched = (music / "beat.score").stat().st_mtime_ns
+    assert job.land() == {"files": [f"{HERE}/midnight-cello.score", f"{HERE}/neon.score",
+                                    f"{HERE}/old/second.score"]}      # in the order of the names
+    assert (music / "neon.score").read_text() == "the job's neon\n"
+    assert (music / "midnight-cello.score").read_text() == BEAT
+    assert (music / "old" / "second.score").read_text() == "in a subfolder\n"
+    assert (music / "beat.score").stat().st_mtime_ns == untouched
+    assert os.listdir(root / ".hallux" / "jobs") == []       # the copies are deleted
+    assert not [path for path in music.rglob("*") if ".hallux-" in path.name or ".new" in path.name]
+
+
+def test_a_given_file_the_job_never_wrote_isnt_touched(disk, root, music):
+    job = JobDisk(disk, HERE, [f"{HERE}/neon.score", f"{HERE}/beat.score"], 30001)
+    job.write_file("beat.score", "changed\n")
+    before = (music / "neon.score").stat()
+    assert job.land() == {"files": [f"{HERE}/beat.score"]}   # and it isn't in the list
+    after = (music / "neon.score").stat()
+    assert (after.st_mtime_ns, after.st_ino) == (before.st_mtime_ns, before.st_ino)
+    assert (music / "neon.score").read_text() == NEON
+
+
+def test_a_job_that_wrote_nothing_lands_nothing(job, root, music):
+    before, when = tree(music), times(music)
+    assert job.written() == 0 and job.land() == {"files": []}
+    assert tree(music) == before and times(music) == when
+    assert not (root / ".hallux" / "jobs").exists()
+
+
+def test_a_file_that_was_changed_meanwhile_is_never_replaced(job, music):
+    job.write_file("neon.score", "the job's neon\n")
+    (music / "neon.score").write_text("the user's edit\n")   # saved in nano while the job ran
+    assert job.land() == {"files": [f"{HERE}/neon.score.new"], "conflict": [f"{HERE}/neon.score"]}
+    assert (music / "neon.score").read_text() == "the user's edit\n"
+    assert (music / "neon.score.new").read_text() == "the job's neon\n"
+
+
+def test_a_file_that_was_deleted_meanwhile_isnt_put_back(job, music):
+    job.write_file("neon.score", "the job's neon\n")
+    (music / "neon.score").unlink()
+    assert job.land() == {"files": [f"{HERE}/neon.score.new"], "conflict": [f"{HERE}/neon.score"]}
+    assert not (music / "neon.score").exists()
+    assert (music / "neon.score.new").read_text() == "the job's neon\n"
+
+
+def test_a_new_name_that_was_taken_meanwhile(job, music):
+    job.write_file("midnight.score", "the job's song\n")
+    (music / "midnight.score").write_text("the user had the same idea\n")
+    assert job.land() == {"files": [f"{HERE}/midnight.score.new"],
+                          "conflict": [f"{HERE}/midnight.score"]}
+    assert (music / "midnight.score").read_text() == "the user had the same idea\n"
+    assert (music / "midnight.score.new").read_text() == "the job's song\n"
+
+
+def test_one_conflict_and_no_file_takes_its_place(disk, music):
+    """The job wrote its files as a set, from the versions it read."""
+    job = JobDisk(disk, HERE, [f"{HERE}/neon.score", f"{HERE}/beat.score"], 30001)
+    job.write_file("neon.score", "neon 2\n")
+    job.write_file("beat.score", "beat 2\n")
+    job.write_file("new.score", "new\n")
+    (music / "beat.score").write_text("changed by someone else\n")
+    assert job.land() == {
+        "files": [f"{HERE}/beat.score.new", f"{HERE}/neon.score.new", f"{HERE}/new.score.new"],
+        "conflict": [f"{HERE}/beat.score"]}
+    assert (music / "neon.score").read_text() == NEON        # it had no conflict, and still
+    assert (music / "beat.score").read_text() == "changed by someone else\n"
+    assert not (music / "new.score").exists()
+    assert [(music / f"{name}.score.new").read_text() for name in ("beat", "neon", "new")] == [
+        "beat 2\n", "neon 2\n", "new\n"]
+
+
+def test_the_first_free_name_is_taken(job, music):
+    job.write_file("neon.score", "the job's neon\n")
+    (music / "neon.score").write_text("the user's edit\n")
+    (music / "neon.score.new").write_text("from an earlier conflict\n")
+    (music / "neon.score.new.2").symlink_to("nowhere")       # a name that is taken, too
+    assert job.land() == {"files": [f"{HERE}/neon.score.new.3"], "conflict": [f"{HERE}/neon.score"]}
+    assert (music / "neon.score.new.3").read_text() == "the job's neon\n"
+    assert (music / "neon.score.new").read_text() == "from an earlier conflict\n"
+    assert os.readlink(music / "neon.score.new.2") == "nowhere"
+
+
+@pytest.mark.parametrize("what", ["deleted", "moved", "a link to another folder", "made again"])
+def test_nothing_lands_when_the_folder_isnt_the_place_it_was(job, root, music, what):
+    job.write_file("neon.score", "the job's neon\n")
+    job.write_file("new.score", "new\n")
+    elsewhere = root / "home" / "user" / "Elsewhere"
+    if what == "deleted":
+        for path in sorted(music.rglob("*"), reverse=True):
+            path.rmdir() if path.is_dir() else path.unlink()
+        music.rmdir()
+    else:
+        music.rename(elsewhere)
+        if what == "a link to another folder":
+            music.symlink_to(elsewhere)
+        elif what == "made again":
+            music.mkdir()
+    before = tree(root / "home")
+    with pytest.raises(FolderGone, match="^/home/user/Music$"):
+        job.land()
+    assert tree(root / "home") == before                     # nothing was written anywhere
+    assert os.listdir(root / ".hallux" / "jobs") == []       # and the copies are gone
+
+
+@pytest.mark.parametrize("what", ["a link that leads out", "a link inside", "deleted"])
+def test_nothing_lands_when_a_place_in_the_folder_isnt_what_it_was(job, root, music, tmp_path, what):
+    job.write_file("a-first.score", "would land first\n")
+    job.write_file("old/second.score", "into the subfolder\n")
+    (music / "old" / "first.score").unlink()
+    (music / "old").rmdir()
+    (tmp_path / "outside").mkdir()                           # not in the machine at all
+    if what == "a link that leads out":
+        (music / "old").symlink_to(tmp_path / "outside")
+    elif what == "a link inside":
+        (music / "takes").mkdir()
+        (music / "old").symlink_to("takes")
+    before = tree(music)
+    with pytest.raises(FolderGone, match="^/home/user/Music/old/second.score$"):
+        job.land()
+    assert tree(music) == before and tree(tmp_path / "outside") == {}        # neither landed
+    assert not (music / "a-first.score").exists()            # every place is checked first
+
+
+def test_a_given_file_that_became_a_link_is_a_conflict(job, root, music):
+    job.write_file("neon.score", "the job's neon\n")
+    (music / "neon.score").unlink()
+    (music / "neon.score").symlink_to(root / "etc" / "passwd")
+    assert job.land() == {"files": [f"{HERE}/neon.score.new"], "conflict": [f"{HERE}/neon.score"]}
+    assert (root / "etc" / "passwd").read_text() == "user:x:1000\n"     # nothing went through it
+    assert (music / "neon.score").is_symlink()
+
+
+def test_a_file_given_under_a_links_name_lands_in_the_file(disk, music):
+    (music / "latest").symlink_to("neon.score")
+    job = JobDisk(disk, HERE, [f"{HERE}/latest"], 30001)
+    job.edit_file("latest", "# neon", "# midnight")
+    assert job.land() == {"files": [f"{HERE}/neon.score"]}
+    assert (music / "neon.score").read_text() == NEON.replace("neon", "midnight")
+    assert os.readlink(music / "latest") == "neon.score"     # the link stays a link
+
+
+def test_bytes_that_arent_text_land_as_they_are(disk, music):
+    (music / "odd.score").write_bytes(b"caf\xe9 \xff\xfe\r\n")
+    job = JobDisk(disk, HERE, [f"{HERE}/odd.score"], 30001)
+    job.write_file("odd.score", "added\n", append=True)
+    job.land()
+    assert (music / "odd.score").read_bytes() == b"caf\xe9 \xff\xfe\r\nadded\n"
+
+
+def test_a_landed_file_has_the_mode_the_real_file_had(job, music):
+    (music / "neon.score").chmod(0o640)
+    job.write_file("neon.score", "the job's neon\n")
+    job.write_file("new.score", "new\n")
+    (music / "plain.score").write_text("x")                  # what a new file gets here
+    job.land()
+    assert stat.S_IMODE((music / "neon.score").stat().st_mode) == 0o640
+    assert (music / "new.score").stat().st_mode == (music / "plain.score").stat().st_mode
+
+
+def test_written_counts_each_file_the_job_wrote_once(job):
+    assert job.written() == 0
+    job.write_file("new.score", "x")
+    job.write_file("new.score", "y")                         # twice: one file
+    job.write_file("neon.score", "z", append=True)           # a given one it changed
+    with pytest.raises(OSError):
+        job.write_file("beat.score", "refused")
+    job.read_text("beat.score")
+    assert job.written() == 2
+    job.close(), job.drop()
+    assert job.written() == 2                                # for the event of a job that was killed
+
+
+def test_a_job_that_was_killed_never_lands(job, root, music):
+    before = tree(music)
+    job.write_file("new.score", "x")
+    job.drop()                                               # what a kill does
+    refused(errno.ESTALE, job.land)
+    refused(errno.ESTALE, job.read_text, "beat.score")       # a dropped disk is dead
+    assert tree(music) == before
+
+
+def test_after_the_landing_the_disk_is_dead(job, root, music):
+    handle = addons.DiskHandle(job)
+    job.write_file("new.score", "x")
+    assert job.land() == {"files": [f"{HERE}/new.score"]}
+    refused(errno.ESTALE, job.write_file, "late.score", "after the landing")
+    refused(errno.ESTALE, handle.write_text, "late.score", "through a handle")
+    refused(errno.ESTALE, job.land)                          # and it lands once
+    assert (music / "new.score").read_text() == "x" and not (music / "late.score").exists()
+    assert os.listdir(root / ".hallux" / "jobs") == []
+
+
+def test_a_landing_that_fails_halfway_leaves_what_had_landed(job, root, music, monkeypatch):
+    """Each file lands in one step, the set doesn't. The order is the order of the names."""
+    write_whole, landed = hallux.jobdisk.write_whole, []
+
+    def gives_up_at_the_second(target, data):
+        if landed:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        landed.append(target.name)
+        write_whole(target, data)
+
+    job.write_file("b.score", "second\n")
+    job.write_file("a.score", "first\n")
+    monkeypatch.setattr(hallux.jobdisk, "write_whole", gives_up_at_the_second)
+    refused(errno.ENOSPC, job.land)
+    assert landed == ["a.score"] and (music / "a.score").read_text() == "first\n"
+    assert not (music / "b.score").exists()
+    assert os.listdir(root / ".hallux" / "jobs") == []       # the rest is gone with the copies
+
+
+def test_done_when_the_users_change_stays_and_the_jobs_lands_beside_it(job, music):
+    job.edit_file("neon.score", "BPM = 90", "BPM = 140")     # the job changes a score
+    (music / "neon.score").write_text(NEON + "    (0, 4, A4, lead)\n")     # and so does the test
+    landed = job.land()
+    assert landed == {"files": [f"{HERE}/neon.score.new"], "conflict": [f"{HERE}/neon.score"]}
+    assert (music / "neon.score").read_text() == NEON + "    (0, 4, A4, lead)\n"
+    assert (music / "neon.score.new").read_text() == NEON.replace("90", "140")
+

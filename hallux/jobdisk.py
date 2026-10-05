@@ -3,7 +3,8 @@
 The job of an addon agent (docs/addon-agents.md, section 5) sees one folder. It reads all of
 it, creates files there, and changes only the files it was given. What it writes goes into
 private copies in <root>/.hallux/jobs/<pid>/, a place the machine can't see. Nobody else
-sees them, and the real folder stays as it was, until the job ends well and they land.
+sees them, and the real folder stays as it was, until the job ends well and they land:
+land() puts them into the folder, and never over a change someone else made meanwhile.
 
 A JobDisk has the methods of Disk that a job needs, with the same names and the same
 answers, so a job's file tools and an addon function's disk handle work on it as they are.
@@ -35,6 +36,11 @@ HOMES = ("/", "/home", "/root")               # refused themselves, and a folder
 SYSTEM = ("/etc", "/usr", "/bin", "/sbin", "/lib", "/boot")     # refused with all that is in them
 # A name the job makes up: letters, digits, . - and _, and no dot in front, so no .bashrc.
 NEW_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
+
+
+class FolderGone(Exception):
+    """Nothing of a job landed: its folder, or a place in it that the job wrote to, isn't
+    there any more or isn't what it was. The message is the path of the machine."""
 
 
 def refusal(code: int, path: str | None = None) -> OSError:
@@ -71,6 +77,7 @@ class JobDisk:
                 or any(where == folder or where.startswith(f"{folder}/") for folder in SYSTEM)):
             raise refusal(errno.EACCES, self.folder)
 
+        self.same_folder = _identity(self.real_folder)    # to know it again at the landing
         self.inside = Disk(self.real_folder)          # the folder's real files, behind its fence
         self.copy_root = disk.hidden / JOBS / str(pid)
         self.copies = Disk(self.copy_root)            # the job's own versions; made when written
@@ -78,6 +85,7 @@ class JobDisk:
         self._given: dict[str, str] = {}              # place -> what the file held at the start
         self.edit: list[str] = []                     # the given files, as paths of the machine
         self._closed = False
+        self._dropped = False                         # the copies are deleted
         self._lock = threading.RLock()
         if len(edit) > GIVEN_MAX:
             raise refusal(errno.E2BIG)
@@ -217,7 +225,92 @@ class JobDisk:
             self._closed = True
 
     def drop(self) -> None:
-        """Delete the job's copies."""
+        """Delete the job's copies. The disk is dead after that: it has nothing to show."""
         with self._lock:
+            self._closed = self._dropped = True
             shutil.rmtree(self.copy_root, ignore_errors=True)
-            self._sizes = {}
+
+    def written(self) -> int:
+        """How many files the job has written: created or changed, each counted once. It
+        still says so when the copies are gone, for the event of a job that didn't land."""
+        with self._lock:
+            return len(self._sizes)
+
+    def land(self) -> dict:
+        """Put what the job wrote into its folder. Returns {"files": [...]}, the paths of the
+        machine that were written, in the order of their names.
+
+        Nothing is written over someone else's change. If a given file isn't what it was when
+        the job started, or a name the job created is taken by now, nothing takes its place:
+        every file of the job lands beside it, with .new added to its name, and the result
+        also has "conflict", the files that were in the way. The job wrote its files as a
+        set, from the versions it read.
+
+        Raises FolderGone, and nothing lands, when the folder or a place the job wrote to
+        isn't what it was. Every place is checked before anything is written. Each file
+        lands in one step; the set doesn't. The disk is dead afterwards and the copies are
+        gone, whatever happened."""
+        with self._lock:                              # no addon function writes in between
+            try:
+                if self._dropped:                     # a job that was killed never lands
+                    raise refusal(errno.ESTALE)
+                return self._land()
+            finally:
+                self.drop()
+
+    def _land(self) -> dict:
+        try:                                          # the folder, again
+            folder = self.disk.real(self.folder)
+        except OSError:
+            raise FolderGone(self.folder) from None
+        if folder != self.real_folder or _identity(folder) != self.same_folder:
+            raise FolderGone(self.folder)
+        places = sorted(self._sizes)
+        in_the_way = [place for place in places if self._conflict(self._target(place), place)]
+        files = []
+        for place in places:
+            target = self._target(place) if not in_the_way else _beside(self._target(place))
+            write_whole(target, self.copies.real(place).read_bytes())
+            files.append(self._virtual(target.relative_to(self.real_folder).as_posix()))
+        if not in_the_way:
+            return {"files": files}
+        return {"files": files, "conflict": [self._virtual(place) for place in in_the_way]}
+
+    def _target(self, place: str) -> Path:
+        """Where in the real folder a file of the job belongs. Its folder has to be what it
+        was: still there, and no link, which could lead anywhere."""
+        target = self.real_folder / place
+        try:
+            parent = self.inside.real(posixpath.dirname(place) or ".")
+        except OSError:
+            raise FolderGone(self._virtual(place)) from None
+        if parent != target.parent or not parent.is_dir():
+            raise FolderGone(self._virtual(place))
+        return target
+
+    def _conflict(self, target: Path, place: str) -> bool:
+        """Did someone else change this place while the job worked?"""
+        if place not in self._given:                  # the job created it: the name must be free
+            return target.exists() or target.is_symlink()
+        if target.is_symlink() or not target.is_file():       # gone, or something else by now
+            return True
+        return hashlib.sha256(target.read_bytes()).hexdigest() != self._given[place]
+
+
+def _identity(folder: Path) -> tuple[int, int] | None:
+    """What tells a folder from another one at the same path. None if it isn't a folder."""
+    try:
+        found = folder.stat()
+    except OSError:
+        return None
+    return (found.st_dev, found.st_ino) if folder.is_dir() else None
+
+
+def _beside(target: Path) -> Path:
+    """The first free name for a file that lands beside another: neon.score.new, and if that
+    is taken neon.score.new.2, and so on."""
+    beside, number = target.with_name(f"{target.name}.new"), 1
+    while beside.exists() or beside.is_symlink():
+        number += 1
+        beside = target.with_name(f"{target.name}.new.{number}")
+    return beside

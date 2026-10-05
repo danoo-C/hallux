@@ -82,3 +82,42 @@ In `tests/test_jobdisk.py`:
 
 A test job changes a score, the test changes the same score meanwhile, and after the
 landing the folder holds the test's version under its name and the job's as `.new`.
+
+## As built
+
+Built on 2026-10-05, on the branch `addon-agents`. 24 new tests, 1267 in all; no old test
+changed. Decided while building:
+
+- **`land()` returns what the event needs, as it is:** `{"files": [...]}`, and with a
+  conflict also `"conflict": [...]`. The paths are the machine's.
+- **When nothing lands it raises `FolderGone`,** an error of the fenced disk's own. Its
+  message is the path: the folder, or the place in it that isn't what it was.
+- **The landing ends the disk, whatever happened.** Afterwards the disk is dead and the
+  copies are gone: after a clean landing, after a conflict, after `FolderGone`, and after a
+  write that failed. `Jobs` needn't remember to do either.
+- **`drop()` makes the disk dead too.** A disk without its copies has nothing true to
+  show. `written()` still answers after it, for the event of a job that was killed.
+- **A job lands once.** A second `land()`, and a `land()` after `drop()`, raise `ESTALE`.
+  So a job that was killed can't land by mistake.
+- **"The same place" is more than the same path.** The folder is known again by what the
+  file system tells it by, so a folder that was deleted and made again under its old name
+  isn't the same place, and nothing lands in it. The plan had only the path.
+- **A place whose folder has become a link is refused,** also when the link leads to
+  somewhere inside the job's folder. It isn't what it was.
+- **A given file that has become a link is a conflict.** Nothing is read or written
+  through it.
+- **A name counts as taken** also when it is a link that leads nowhere.
+- **A file that lands beside another has a new file's mode.** A file that takes its place
+  keeps the mode the real file had, by the whole-file write of step 1.
+- **With its folder gone, a job that wrote nothing raises `FolderGone` too.** The folder is
+  looked at first.
+
+**For step 7:** a write can fail in the middle of a landing, when the disk is full, say.
+`land()` then raises that `OSError`. What had landed stays, as this file says of a crash,
+and the copies are gone. The plan doesn't say how such a job ends; it isn't `why: folder`.
+
+**The "Done when" is a test:** a job changes a score, the test changes the same score
+meanwhile, and after the landing the folder holds the test's version under its name and
+the job's as `.new`.
+
+**Nothing here needs a terminal or a model.** Nothing calls `land()` before step 7.
