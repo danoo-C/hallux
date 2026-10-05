@@ -179,3 +179,69 @@ well, fail.
 
 A stand-in worker writes a score into a test world, ends, and the test reads the event:
 `done`, the file's path, and the file is in the folder.
+
+## As built
+
+Built on 2026-10-05, on the branch `addon-agents`. 41 new tests, 1360 in all; no old test
+changed. Decided while building:
+
+**The shapes**
+
+- **`Jobs(disk, settings, make_worker, on_report, on_event)`,** and `start()` to learn the
+  loop. Two functions are called, not one: `on_report` when a job reports or ends, for the
+  bar and the panel, and `on_event` when an event starts to wait, for the prompt.
+- **A worker has two methods:** `run()`, which comes back with an `Outcome`, and `stop()`.
+  It reports through the `Job` it was made for: `set_status`, `tool_began`, `tool_ended`,
+  `tokens_so_far`. The maker is called with that job, which carries the addon, the brief,
+  the fenced disk and the limits.
+- **For the main agent:** `table()`, `waiting()` and `told(events)`, and `kill(pid)`.
+  `kept` holds the last 32 ended jobs for the panel, each with its lines.
+
+**A job's end**
+
+- **A kill is final at once.** The row is marked, the event is made and the copies are
+  dropped in the same moment, so a job that was killed can't write any more. Only its cost
+  comes later.
+- **A job's cost has one way in.** `stop()` only asks. `run()` comes back with the
+  `Outcome`, also after a stop. If it hasn't come back five seconds after it was asked,
+  its task is ended and the cost stays unknown.
+- **The timeout is a timer that kills.** So what a job cost that ran out of time is read
+  like any kill's.
+- **A cost that isn't known reads `"cost_usd": "unknown"`** in the row.
+- **A worker that breaks is a failed job,** with the error's name and words as `why`, and
+  the traceback in the log.
+- **The `why` of a job that failed is cleaned and cut at 80 characters,** like a status
+  line. It is the worker's text, and step 9 says what a real worker puts there.
+- **A job that is killed because its boot is over has `why: boot`.** It gets no event, and
+  the panel's kept rows show it.
+
+**Open from step 5, and decided here as a proposal:** when a write fails in the middle of a
+landing, the job ends as `failed` with `why: disk`. What had landed stays, the copies are
+gone, and the log says why. The design's tables don't have this `why` yet; the user hasn't
+confirmed it.
+
+**The rest**
+
+- **A refusal uses up no pid** and leaves no folder of copies. A path that is no path at
+  all, with a NUL in it, is `EINVAL`.
+- **`spawn` before `start()` raises** a plain error with those words. It can't happen in a
+  run, and shouldn't be quiet if it does.
+- **A status can't be set on a job that has ended:** `ESRCH`.
+- **`clean(text, limit)`** first turns a control picture into what it stands for, so
+  `␛[31m` goes as a whole, not only its first character.
+- **`tool` shows a new file's name from the call after the one that wrote it.** Before
+  that the file isn't the job's own, and its name is only text the job chose.
+- **A line of activity** has the kind `status`, a tool's name, or `end`. The last line
+  says what landed: `done: a.score, b.score`, or `killed: timeout`.
+- **`JobDisk.own(path)`** is new in `hallux/jobdisk.py`: the name of a file that is the
+  job's own, or nothing.
+- **A job that is kept doesn't keep its worker.**
+- **`Jobs` takes a clock,** so the tests move time by hand.
+
+**For step 8:** `job.settled` says that a job's worker has come back and its cost has
+arrived. Until then a killed job is still in `Jobs`' list of live jobs, and counts.
+
+**The "Done when" is a test:** a stand-in worker writes a score into a test world, ends,
+and the test reads the event: `done`, the file's path, and the file is in the folder.
+
+**Nothing here needs a terminal or a model.** No machine has a `Jobs` before step 8.

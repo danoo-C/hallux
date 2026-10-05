@@ -135,6 +135,18 @@ class JobDisk:
     def _virtual(self, path: str) -> str:
         return "/" + posixpath.normpath(posixpath.join(self.folder, path)).lstrip("/")
 
+    def own(self, path: object) -> str | None:
+        """The name of the file a path leads to, if that is one of the job's own: a file it
+        was given, or one it has written. None for anything else, and once the disk is dead.
+        For what the process table shows of a tool call: no other argument is shown."""
+        with self._lock:
+            try:
+                place = self._place(path) if isinstance(path, str) else None
+            except (OSError, ValueError):
+                return None
+            mine = place in self._given or place in self._sizes
+            return posixpath.basename(place) if mine else None
+
     # ------------------------------------------------------------------ reading
 
     def list_dir(self, path: str = ".") -> list[dict]:
