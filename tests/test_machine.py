@@ -1181,16 +1181,48 @@ def test_the_effort_on_the_bar_is_the_one_the_session_got(tmp_path):
     assert bar == [(HAIKU, None), (SONNET, None)]
     assert view.hardware.effort == "high" and view.running.model_effort is None
 
+
+def test_an_answers_cost_is_on_the_bar_before_the_answer_ends(tmp_path):
+    """The end of an answer may wait for the panel, and the panel shows what was spent."""
+    class Watching(FakeTerminal):
+        costs_at_the_end = ()
+
+        @contextlib.asynccontextmanager
+        async def busy(self, interrupt, activity="thinking…"):
+            try:
+                yield
+            finally:
+                costs = [status["cost"] for status in self.statuses if "cost" in status]
+                self.costs_at_the_end += (costs[-1] if costs else None,)
+
+    model = FakeModel(result(screen("boot\n"), total=0.07), result(screen("ok\n"), total=0.09),
+                      result(HALT, total=0.1))
+    terminal = Watching("ls", "exit")
+    machine = run(tmp_path, model, terminal)
+    assert terminal.costs_at_the_end == pytest.approx((0.07, 0.09, 0.1))
+    assert machine.spent == pytest.approx(0.1) and machine.last_turn_cost == pytest.approx(0.01)
+
 def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monkeypatch):
     from hallux import app, machine, terminal
     given = {}
 
     class Recorded:
+        view = change = save = refill = staticmethod(lambda *args: None)
+
         def __init__(self, root, hardware, terminal, **more):
-            given.update(more, hardware=hardware)
+            given.update(more, hardware=hardware, machine=self)
 
         async def run(self):
             pass
+
+    class Keyboard:
+        power_cut = count_ctrl_c = staticmethod(lambda: None)
+
+        def __init__(self, bar, **more):
+            given["bar"] = bar
+
+        def set_panel(self, panel):
+            given["panel"] = panel
 
     class Tty:
         isatty, write, flush = (lambda self: True), (lambda self, text: None), (lambda self: None)
@@ -1198,7 +1230,7 @@ def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monk
     (tmp_path / ".hallux").mkdir()
     (tmp_path / ".hallux" / "config.toml").write_text('addons = []\neffort = "max"\n')
     monkeypatch.setattr(machine, "Machine", Recorded)
-    monkeypatch.setattr(terminal, "Terminal", lambda bar, **more: None)
+    monkeypatch.setattr(terminal, "Terminal", Keyboard)
     monkeypatch.setattr(sys, "stdin", Tty())
     monkeypatch.setattr(sys, "stdout", Tty())
     monkeypatch.setattr(sys, "argv", ["hallux", str(tmp_path), "--model", "claude-sonnet-5-5"])
@@ -1210,3 +1242,7 @@ def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monk
             handler.close()
     assert given["from_flags"] == {"model"}                  # the effort is the file's
     assert given["hardware"] == Hardware("claude-sonnet-5-5", "max", addons=())
+    panel = given["panel"]                                   # and the terminal gets the panel:
+    assert [tab.title for tab in panel.tabs] == ["Config"]   # one tab, around the machine,
+    assert panel.tabs[0].view is Recorded.view and panel.bar is given["bar"]
+    assert panel.power_cut is Keyboard.power_cut and panel.ctrl_c is Keyboard.count_ctrl_c

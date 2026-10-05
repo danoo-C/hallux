@@ -73,9 +73,15 @@ def main() -> None:
     terminal = Terminal(bar, before_power_cut=lambda: addons.stop_all(
         attached, addons.HARD_EXIT_SECONDS))
     from_flags = {name for name in ("model", "effort") if getattr(flags, name) is not None}
+    machine = Machine(root, hardware, terminal, addons=attached, events=events,
+                      from_flags=from_flags)
+    from hallux.panel import Panel              # hallux's own panel, opened with Ctrl+F12:
+    from hallux.panel_tabs.config import ConfigTab      # one tab, around the machine
+    settings = ConfigTab(machine.view, machine.change, machine.save, machine.refill)
+    terminal.set_panel(Panel([settings], bar=bar, power_cut=terminal.power_cut,
+                             ctrl_c=terminal.count_ctrl_c))
     try:
-        asyncio.run(Machine(root, hardware, terminal, addons=attached, events=events,
-                            from_flags=from_flags).run())
+        asyncio.run(machine.run())
     except Exception as e:                      # the SDK or the CLI failed: "hardware" error
         log.exception("crash")
         sys.exit(f"hallux: {e}")

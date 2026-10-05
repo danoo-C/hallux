@@ -197,7 +197,7 @@ Each step can be merged by itself. A step needs the ones named beside it.
 | 3. The budget per boot | [03-budget.md](03-budget.md) | 2 | Built on 2026-10-05 |
 | 4. Switching the model | [04-model.md](04-model.md) | 2 | Built on 2026-10-05, after step 5 |
 | 5. The panel by itself | [05-panel.md](05-panel.md) | 2 | Built on 2026-10-05 |
-| 6. The panel at the shell | [06-shell.md](06-shell.md) | 5 | Not built |
+| 6. The panel at the shell | [06-shell.md](06-shell.md) | 5 | Built on 2026-10-05, and tried by the user: "now it works perfectly" |
 | 7. The panel over a full-screen program | [07-full-screen.md](07-full-screen.md) | 3, 6 | Not built |
 | 8. The bar, the documentation and the live run | [08-live-run.md](08-live-run.md) | 4, 7 | Not built |
 

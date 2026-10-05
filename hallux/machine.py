@@ -615,15 +615,17 @@ class Machine:
                                                          tools=tools)
                     elif isinstance(msg, ResultMessage):
                         result = msg
+                        # Counted here, inside the answer: its end may wait for the panel,
+                        # and the panel shows what was spent.
+                        session_total = result.total_cost_usd or self.session_spent
+                        self.last_turn_cost = session_total - self.session_spent
+                        self.session_spent = session_total
+                        self.spent += self.last_turn_cost
+                        self.terminal.set_status(cost=self.spent,
+                                                 seconds=result.duration_ms / 1000)
         finally:
             with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
                 loop.remove_signal_handler(signal.SIGINT)
-        if result is not None:
-            session_total = result.total_cost_usd or self.session_spent
-            turn_cost = self.last_turn_cost = session_total - self.session_spent
-            self.session_spent = session_total
-            self.spent += turn_cost
-            self.terminal.set_status(cost=self.spent, seconds=result.duration_ms / 1000)
         self.show_listening()                    # the AI may just have called addon_listen
         self.check_events()
         if result is None or (result.is_error and not interrupted):
@@ -631,7 +633,8 @@ class Machine:
             return None, interrupted
         log.info("<< %s", result.result)
         log.info("   %s, %d turns, %.1fs, $%.4f (this boot $%.4f)", result.subtype,
-                 result.num_turns, result.duration_ms / 1000, turn_cost, self.session_spent)
+                 result.num_turns, result.duration_ms / 1000, self.last_turn_cost,
+                 self.session_spent)
         return result.result or "", interrupted
 
     async def switch_model(self, client: ClaudeSDKClient) -> None:
