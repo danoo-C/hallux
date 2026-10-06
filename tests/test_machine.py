@@ -1549,8 +1549,12 @@ def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monk
     from hallux import app, machine, terminal
     given = {}
 
+    class Watching:
+        watch = kill = staticmethod(lambda *args: None)
+
     class Recorded:
         view = change = save = refill = staticmethod(lambda *args: None)
+        jobs = Watching
 
         def __init__(self, root, hardware, terminal, **more):
             given.update(more, hardware=hardware, machine=self)
@@ -1586,8 +1590,11 @@ def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monk
     assert given["from_flags"] == {"model"}                  # the effort is the file's
     assert given["hardware"] == Hardware("claude-sonnet-5-5", "max", addons=())
     panel = given["panel"]                                   # and the terminal gets the panel:
-    assert [tab.title for tab in panel.tabs] == ["Config"]   # one tab, around the machine,
-    assert panel.tabs[0].view is Recorded.view and panel.bar is given["bar"]
+    agents, details, settings = panel.tabs                   # three tabs, around the machine,
+    assert [tab.title for tab in panel.tabs] == ["Agents", "Details", "Config"]
+    assert settings.view is Recorded.view and panel.bar is given["bar"]
+    for tab in (agents, details):                            # the two that watch its jobs
+        assert tab.watch is Watching.watch and tab.kill is Watching.kill
     assert panel.power_cut is Keyboard.power_cut and panel.ctrl_c is Keyboard.count_ctrl_c
 
 

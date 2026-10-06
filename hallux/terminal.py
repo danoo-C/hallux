@@ -102,6 +102,7 @@ class Terminal:
         self.over_prompt = False                         # the visit began at the shell prompt,
         self.event_waits = False                         # and an event asked the prompt to end
         self.beat: asyncio.Task | None = None            # draws again while a job runs
+        self.jobs_run = False                            # one does: the machine said so
 
         prompt_output = self._prompt_output()
         self.session: PromptSession = PromptSession(
@@ -311,12 +312,15 @@ class Terminal:
                 store_typeahead(self.input, typed)
 
     def set_status(self, **changes: object) -> None:
+        if "jobs" in changes:                            # also without a bar: the panel's
+            self.jobs_run = bool(changes["jobs"])        # tabs show the jobs, and their times
         if self.bar:
             self.bar.update(**changes)
+        if self.bar or "jobs" in changes:
             self.refresh()
-            if self.bar.status.jobs and self.beat is None:
-                with contextlib.suppress(RuntimeError):  # no loop runs: nothing draws
-                    self.beat = asyncio.get_running_loop().create_task(self._beat())
+        if self.jobs_run and self.beat is None:
+            with contextlib.suppress(RuntimeError):      # no loop runs: nothing draws
+                self.beat = asyncio.get_running_loop().create_task(self._beat())
 
     async def _animate(self) -> None:
         while True:
@@ -324,13 +328,14 @@ class Terminal:
             self.refresh()
 
     async def _beat(self) -> None:
-        """Once a second while a job runs: its time on the bar moves, also while the prompt
-        waits and nothing else is drawn. With no job nothing is drawn, as before. While the
-        AI works the bar's light draws it many times a second already."""
+        """Once a second while a job runs: its time moves, on the bar and in the panel's
+        tabs, also while the prompt waits and nothing else is drawn. With no job nothing is
+        drawn, as before. While the AI works, the bar's light draws many times a second
+        already."""
         try:
-            while self.bar.status.jobs:
+            while self.jobs_run:
                 await asyncio.sleep(BEAT_SECONDS)
-                if self.bar.status.jobs and not self.bar.status.busy:
+                if self.jobs_run and self.interrupt is None:     # the AI isn't at work
                     self.refresh()
         finally:
             self.beat = None

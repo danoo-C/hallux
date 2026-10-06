@@ -1,7 +1,7 @@
 # Plan: addon agents
 
-**Status:** written on 2026-10-04. **Steps 1 to 12 are built,** the first seven on
-2026-10-05; the table under [The steps](#the-steps) says how far the build is. The design
+**Status:** written on 2026-10-04. **Steps 1 to 12 and step 16 are built,** the first
+seven on 2026-10-05; the table under [The steps](#the-steps) says how far the build is. The design
 it follows is
 [addon-agents.md](../../addon-agents.md), in which no question is open. The decisions this
 plan takes on its own are in a table below. They are my proposals, and the user hasn't
@@ -229,7 +229,7 @@ step of the config panel's plan.
 | 13. The composer | [13-composer.md](13-composer.md) | 2, 11, 12 | Not built |
 | 14. Keeping a screen | [14-kept-screens.md](14-kept-screens.md) | | Not built |
 | 15. Job control | [15-job-control.md](15-job-control.md) | 10, 14 | Not built |
-| 16. The panel's two tabs | [16-panel-tabs.md](16-panel-tabs.md) | 10, panel 5 to 7 | Not built |
+| 16. The panel's two tabs | [16-panel-tabs.md](16-panel-tabs.md) | 10, panel 5 to 7 | Built on 2026-10-06 |
 | 17. The documentation and the live run | [17-live-run.md](17-live-run.md) | 13, 15, 16 | Not built |
 
 Steps 1, 2 and 6 need nothing and can come in any order. Step 14 needs nothing of this plan,

@@ -119,9 +119,11 @@ class World:
         self.scripts, self.workers, self.reports, self.arrivals = {}, [], 0, 0
         self.now = 100.0                                 # the clock: a test moves it
         self.boot_over = False                           # what the machine says of its budget
+        self.running = "claude-opus-5-5"                 # what the machine's own session runs on
         self.jobs = Jobs(self.disk, lambda: self.hardware, self.make, on_report=self.reported,
                          on_event=self.arrived, over_budget=lambda: self.boot_over,
-                         clock=lambda: self.now)
+                         clock=lambda: self.now, addons=(MUSIC, MAIL, GUI),
+                         running=lambda: self.running)
         self.jobs.start()
 
     def make(self, job):
@@ -945,6 +947,88 @@ def test_the_jobs_dollars_are_a_sum_of_their_own(root):
 
 
 
+# ---------------------------------------------------------------- what the panel's tabs read
+
+def test_watch_has_the_jobs_that_run_the_ended_ones_and_every_agent(root):
+    async def scenario(world):
+        first = world.spawn(("write", "night.score", "x"), ("end", WELL))
+        await world.ended(first)
+        world.jobs.table()                               # the main agent has seen it: it left
+        world.now += 5                                   # its table, and the panel keeps it
+        second = world.spawn(("status", "balancing the mix"), ("tokens", 21340),
+                             ("tool", "check", {"path": "neon.score"}),
+                             ("wait", asyncio.Event()), addon=MAIL, edit=[f"{HERE}/neon.score"])
+        await world.until(lambda: world.row(second)["state"] == "waiting")
+        world.now += 48
+        return world.jobs.watch(), world.jobs.table()
+
+    watched, table = run(root, scenario)
+    running, ended = watched.jobs                        # the one that runs comes first
+    assert (running.row["pid"], running.row["state"], running.row["tool"],
+            running.row["seconds"], running.row["tokens"], running.row["status"]) == (
+        30002, "waiting", "check neon.score", 48, 21340, "balancing the mix")
+    assert running.edit == (f"{HERE}/neon.score",) and running.ended is None
+    assert [(line.kind, line.text) for line in running.activity] == [
+        ("status", "balancing the mix"), ("check", "neon.score")]
+    assert (ended.row["pid"], ended.row["state"], ended.row["cost_usd"]) == (30001, "done", 0.21)
+    assert ended.ended == "night.score" and ended.edit == ()
+    assert ended.activity[-1].kind == "end" and ended.activity[-1].text == "done: night.score"
+    assert [row["pid"] for row in table] == [30002]      # the main agent's table hasn't got it
+    assert [(agent.addon, agent.name, agent.why_not) for agent in watched.agents] == [
+        ("music", "composer", None), ("mail", "sorter", "already running"),
+        ("gui", "designer", None)]                       # in the addons' order, ready or not
+    music = watched.agents[0]
+    assert (music.prompt, music.tools, music.asks, music.model, music.effort) == (
+        "You compose one song.", (), "high", "claude-opus-5-5", "high")
+    assert watched.spent_boot == 0.21
+
+
+@pytest.mark.parametrize("hardware, why", [
+    (Hardware(agent_max_running=0), "agents are off"),
+    (Hardware(agent_max_running=1), "too many jobs"),
+    (Hardware(agent_budget_usd=1.5), "jobs budget used"),
+    (Hardware(), None),
+])
+def test_watch_says_why_an_agent_cant_start(root, hardware, why):
+    async def scenario(world):
+        world.hardware = Hardware()                      # one job of another addon runs
+        world.tries(("wait", asyncio.Event()))
+        world.hardware = hardware
+        return {agent.addon: agent.why_not for agent in world.jobs.watch().agents}
+
+    reasons = run(root, scenario)
+    assert reasons["gui"] == reasons["mail"] == why
+    assert reasons["music"] == ("agents are off" if why == "agents are off" else "already running")
+
+
+def test_watch_says_what_a_job_of_each_agent_would_get(root):
+    async def scenario(world):
+        seen = [[(agent.asks, agent.model, agent.effort) for agent in world.jobs.watch().agents]]
+        world.hardware = Hardware(agent_model="claude-haiku-4-5")
+        world.running = "claude-sonnet-5-5"
+        seen.append([(agent.model, agent.effort) for agent in world.jobs.watch().agents])
+        world.hardware = Hardware(model="claude-banana-9", agent_max_effort="medium")
+        return seen + [[(agent.model, agent.effort) for agent in world.jobs.watch().agents]]
+
+    as_set, on_haiku, on_what_runs = run(root, scenario, Hardware(effort="max"))
+    assert as_set == [("high", "claude-opus-5-5", "high"),           # what it asks for,
+                      (None, "claude-opus-5-5", "high"),             # the machine's, capped
+                      (None, "claude-opus-5-5", "high")]
+    assert on_haiku == [("claude-haiku-4-5", None)] * 3              # which has no effort
+    assert on_what_runs == [("claude-sonnet-5-5", "medium"), ("claude-sonnet-5-5", "low"),
+                            ("claude-sonnet-5-5", "low")]            # not the setting's name
+
+
+def test_the_33rd_ended_job_pushes_the_oldest_out_of_what_the_panel_keeps(root):
+    async def scenario(world):
+        for _ in range(33):
+            await world.ended(world.spawn(("end", CHEAP), folder="/tmp/work"))
+        return [seen.row["pid"] for seen in world.jobs.watch().jobs]
+
+    pids = run(root, scenario, Hardware(agent_budget_usd=1000))
+    assert pids == list(range(30033, 30001, -1))         # the newest on top; 30001 is gone
+
+
 # ---------------------------------------------------------------- the main agent's two tools
 
 def test_the_main_agent_reads_the_table_and_kills_a_job_with_its_two_tools(root):
@@ -1137,7 +1221,6 @@ class Shop(World):
 
     def __init__(self, root, hardware=ROOMY):
         super().__init__(root, hardware)
-        self.running = "claude-opus-5-5"                 # what the machine's own session runs on
         self.claude, self.claudes = Claude, []
 
     def make(self, job):

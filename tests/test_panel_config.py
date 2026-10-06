@@ -183,11 +183,14 @@ def test_the_panel_the_app_builds_shows_the_six_rows_only_with_an_agent(tmp_path
     from test_addons import agented, fake
 
     from hallux import addons, app, machine, terminal
+    from hallux.agents import Jobs
+    from hallux.disk import Disk
     given = {}
 
     class Recorded(Machine):                                # this file's stand-in, made as
         def __init__(self, root, hardware, terminal, **more):    # the app makes a machine
             super().__init__(hardware)
+            self.jobs = Jobs(Disk(root), lambda: hardware, addons=more["addons"])
 
         async def run(self):
             pass
@@ -223,7 +226,9 @@ def test_the_panel_the_app_builds_shows_the_six_rows_only_with_an_agent(tmp_path
         for name in [name for name in sys.modules if name.startswith(addons.MODULE_PREFIX)]:
             del sys.modules[name]
     panel = given["panel"]
-    tab = panel.tabs[0]
+    tab = panel.tabs[-1]                                    # Config, behind Agents and Details
+    assert [(other.title, other.disabled() is None) for other in panel.tabs[:2]] == [
+        ("Agents", has_agent), ("Details", has_agent)]      # grey without an agent
 
     async def script(press):
         before = "\n".join(drawn(panel))

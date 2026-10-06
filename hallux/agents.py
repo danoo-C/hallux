@@ -103,6 +103,37 @@ class Line:
     text: str
 
 
+@dataclass(frozen=True)
+class Seen:
+    """A job as hallux's own panel shows it: its row, and what only the user is shown."""
+    row: dict                                 # as the main agent's table has it
+    edit: tuple[str, ...]                     # the files it may change
+    activity: tuple[Line, ...]                # what it has been doing, oldest first
+    ended: str | None                         # how it ended, in words; None: it hasn't
+
+
+@dataclass(frozen=True)
+class Declared:
+    """An agent that an attached addon declares, as the panel shows it."""
+    addon: str
+    name: str
+    prompt: str                               # its own instructions
+    tools: tuple[str, ...]                    # the addon's functions it may call
+    asks: str | None                          # the effort it asks for
+    model: str                                # what a job of it would run on now,
+    effort: str | None                        # and with which effort
+    why_not: str | None                       # why it can't start now; None: it can
+
+
+@dataclass(frozen=True)
+class Watched:
+    """What the panel's tabs read: everything they show comes from here."""
+    jobs: tuple[Seen, ...]                    # those that run, newest first; then the ended
+                                              # ones that are kept, newest first
+    agents: tuple[Declared, ...]              # every declared agent, in the addons' order
+    spent_boot: float                         # what the jobs have cost in this boot
+
+
 class Worker(Protocol):
     """What runs one job."""
 
@@ -113,15 +144,15 @@ class Worker(Protocol):
         """End now: run() comes back soon, and still says what the job cost."""
 
 
-def _ended(state: str, why: str | None, landed: dict | None) -> str:
-    """How a job ended, as a line for the panel: with the files that landed, or the reason."""
+def _ended(why: str | None, landed: dict | None) -> str:
+    """How a job ended, in words for the panel: the files that landed, or the reason."""
     if landed is None:
-        return f"{state}: {why}"
+        return str(why)
     names = ", ".join(os.path.basename(path) for path in landed["files"]) or "nothing written"
     if "conflict" in landed:
         changed = ", ".join(os.path.basename(path) for path in landed["conflict"])
-        return f"{state}: {names} ({changed} was changed meanwhile)"
-    return f"{state}: {names}"
+        return f"{names} ({changed} was changed meanwhile)"
+    return names
 
 
 class NoWorker:
@@ -152,6 +183,7 @@ class Job:
         self.tokens, self.turns = 0, 0
         self.cost_usd: float | None = None
         self.why: str | None = None
+        self.ended_as: str | None = None      # how it ended, in words: for the panel
         self.started = datetime.now().astimezone().isoformat(timespec="seconds")
         self.began, self.ended = now, None    # on the clock that counts its seconds
         self.settled = False                  # its worker has come back: its cost has arrived
@@ -208,7 +240,9 @@ class Jobs:
                  on_report: Callable[[], None] = lambda: None,
                  on_event: Callable[[], None] = lambda: None,
                  over_budget: Callable[[], bool] = lambda: False,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 addons: Sequence[Addon] = (),
+                 running: Callable[[], str] | None = None) -> None:
         self.disk = disk                      # the machine's: a job's folder is a path of it
         self.settings = settings              # as they are when they are asked for
         self.make_worker = make_worker
@@ -216,6 +250,9 @@ class Jobs:
         self.on_event = on_event              # an event started to wait: the prompt
         self.over_budget = over_budget        # the machine's: has the boot used its budget
         self.clock = clock
+        self.addons = tuple(addons)           # the attached ones: the panel lists their agents
+        self.model_running = running          # the model the machine's own session runs on;
+                                              # without it, the `model` setting
         # The jobs' dollars, apart from the main session's. A job is in them when its worker
         # has come back; one whose cost isn't known counts with its full cap.
         self.spent = 0.0                      # since hallux started
@@ -371,7 +408,8 @@ class Jobs:
         job.ended = self.clock()
         written = job.disk.written()
         job.disk.drop()                       # dead from here on, also for a handle out there
-        self._line(job, "end", _ended(state, why, landed))
+        job.ended_as = _ended(why, landed)
+        self._line(job, "end", f"{state}: {job.ended_as}")
         self.kept.append(job)
         if job.silent:
             return
@@ -502,6 +540,29 @@ class Jobs:
         job.activity.append(Line(self.clock() - job.began, kind, clean(text, LINE_MAX)))
 
     # ------------------------------------------------------------------ what hallux itself shows
+
+    def watch(self) -> Watched:
+        """Everything the panel's two tabs show, as it is now. The jobs that run come first,
+        the newest on top, then the ones that have ended, the newest on top: the last 32
+        since hallux started, also after the main agent's table has let them go. Then every
+        agent an attached addon declares, with what a job of it would get and whether it
+        could start. The tabs know nothing of how this is kept."""
+        with self._lock:
+            now, hw = self.clock(), self.settings()
+            running = [job for job in self._live.values() if job.state not in ENDED]
+            jobs = tuple(Seen(job.row(now), tuple(job.disk.edit), tuple(job.activity),
+                              job.ended_as if job.state in ENDED else None)
+                         for job in [*reversed(running), *reversed(self.kept)])
+            main = self.model_running() if self.model_running else hw.model
+            agents = []
+            for addon in self.addons:
+                if (agent := addon.agent) is None:
+                    continue
+                model = config.agent_model(hw, main)
+                agents.append(Declared(
+                    addon.name, agent.name, agent.prompt, tuple(agent.tools), agent.effort,
+                    model, config.agent_effort(hw, agent.effort, model), self.why_not(addon)))
+            return Watched(jobs, tuple(agents), self.spent_boot)
 
     def running(self) -> list[Job]:
         """The jobs that haven't ended, oldest first: for the bar, and for a script that

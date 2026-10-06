@@ -159,13 +159,13 @@ class Machine:
         self.stream: ScreenStream | None = None  # what the last answer showed while written
         self.wake: Callable[[], None] | None = None     # ends the shell prompt, while one that
                                                  # an event may end is being read
-        self.jobs_shown: tuple = ((), 0.0)       # what the bar was last told of the jobs
         # The jobs of the addons' agents (hallux.agents). They read the settings as they are,
         # ask whether the boot is over its budget, and say when one of them reports or ends.
         # A job's worker is a Claude session of its own, unless a test hands in a stand-in.
         self.jobs = Jobs(self.disk, lambda: self.hardware, worker_factory or self.session,
                          on_report=self.job_reported, on_event=self.job_event_waits,
-                         over_budget=self.over_budget)
+                         over_budget=self.over_budget, addons=self.addons,
+                         running=lambda: self.running.model)
 
     # ---------------------------------------------------------------- for hallux's own panel
 
@@ -486,12 +486,12 @@ class Machine:
     def show_jobs(self) -> None:
         """Tell the bar which jobs run, and the jobs' sum. The sum goes beside the main
         session's and not into it: a scripted run books every rise of the session's cost to
-        the line that was typed last, and a job's cost would land on whatever that was."""
-        shown = (tuple(Running(job.addon.name, job.status, job.began, job.tokens)
-                       for job in self.jobs.running()), self.jobs.spent)
-        if shown != self.jobs_shown:
-            self.jobs_shown = shown
-            self.terminal.set_status(jobs=shown[0], jobs_cost=shown[1])
+        the line that was typed last, and a job's cost would land on whatever that was.
+        It is told at every report, also one that changes nothing on the bar: the terminal
+        then draws again, and the panel's tabs show what a job says and does."""
+        self.terminal.set_status(
+            jobs=tuple(Running(job.addon.name, job.status, job.began, job.tokens)
+                       for job in self.jobs.running()), jobs_cost=self.jobs.spent)
 
     def ticks_used_up(self) -> bool:
         """The program run has spent its tick budget. No tick goes to the AI, and every other

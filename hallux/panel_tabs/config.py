@@ -24,7 +24,7 @@ from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from hallux import config
 from hallux.config import EFFORTS, MODELS, View
 from hallux.panel import Tab
-from hallux.statusbar import GRAY, RED
+from hallux.statusbar import GRAY, RED, spent
 
 LABELS = {                                    # every setting, in the order of its rows
     "model": "Model", "max_budget_usd": "Budget per boot", "tick_budget_usd": "Tick budget",
@@ -102,13 +102,6 @@ def dollars(amount: float) -> str:
     if float(text) != amount:
         text = f"{amount:.10f}".rstrip("0")
     return f"${text}"
-
-
-def spent(amount: float) -> str:
-    """~$0.12: what was spent, as the bar writes it. It is what the tokens would cost at the
-    API's list prices, which nobody with a subscription is billed. A limit that the user
-    typed is an exact number and has no ~."""
-    return f"~${amount:.2f}"
 
 
 def shown(name: str, value: object) -> str:

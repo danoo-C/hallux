@@ -117,7 +117,7 @@ class StatusBar:
             light, light_color, text, text_color = "•", GRAY, None, DIM
         info = " · ".join(part for part in (
             short_model(s.model), s.effort or "",
-            f"~${s.cost + s.jobs_cost:.2f}",
+            spent(s.cost + s.jobs_cost),
             f"{now - s.started:.1f}s" if s.busy else (f"{s.seconds:.1f}s" if s.seconds else ""),
         ) if part)
         room = max(0, width - len(info) - 5)             # " x " + text + "  " + info + " "
@@ -144,6 +144,25 @@ class StatusBar:
         return "".join(out) + "\x1b[0m"
 
 
+def clock(seconds: float) -> str:
+    """0:48, and past an hour the minutes run on: 62:05."""
+    seconds = max(0, int(seconds))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def tokens(count: int) -> str:
+    """900, 21k, 1.2M: tokens, as short as hallux writes them."""
+    return (f"{count / 1_000_000:.1f}M" if count >= 1_000_000
+            else f"{count // 1000}k" if count >= 1000 else str(count))
+
+
+def spent(amount: float) -> str:
+    """~$0.12: what was spent. It is what the tokens would cost at the API's list prices,
+    which nobody with a subscription is billed. A limit that the user typed is an exact
+    number and has no ~."""
+    return f"~${amount:.2f}"
+
+
 def job_line(jobs: tuple[Running, ...], now: float, room: int) -> str:
     """What the idle bar says of the jobs that run. One job: its addon, its status line, its
     time and its tokens. When that is too long the status is cut: the time and the tokens are
@@ -152,10 +171,7 @@ def job_line(jobs: tuple[Running, ...], now: float, room: int) -> str:
     if len(jobs) > 1:
         return f"{len(jobs)} jobs: {', '.join(job.addon for job in jobs)}"
     job = jobs[0]
-    seconds = max(0, int(now - job.began))
-    tokens = (f"{job.tokens / 1_000_000:.1f}M" if job.tokens >= 1_000_000
-              else f"{job.tokens // 1000}k" if job.tokens >= 1000 else str(job.tokens))
-    head, tail = f"{job.addon}: ", f" · {seconds // 60}:{seconds % 60:02d} · {tokens} tok"
+    head, tail = f"{job.addon}: ", f" · {clock(now - job.began)} · {tokens(job.tokens)} tok"
     left = room - len(head) - len(tail)
     status = job.status if len(job.status) <= left else job.status[:max(0, left - 1)] + "…"
     return head + status + tail

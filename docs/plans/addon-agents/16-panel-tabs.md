@@ -170,3 +170,96 @@ screen under the panel is as it was.
 On a pipe, with a stand-in job running: Ctrl+F12 opens the panel on Agents, Enter shows the
 job's lines arriving, `k` and `y` kill it, and after Esc the main session's next message
 starts with the job's event, `killed`.
+
+## As built
+
+Built on 2026-10-06, on the branch `addon-agents`, before step 13, as the build order has
+it. 29 new tests, 1518 in all. Decided while building:
+
+**What `Jobs` hands out**
+
+- **`Jobs.watch()` returns a `Watched`:** the jobs, the agents, and what the jobs cost in
+  this boot. A job is a `Seen`: its row, the files it may change, its lines, and how it
+  ended. An agent is a `Declared`.
+- **`Jobs` is given the attached addons and the model that runs,** by the machine. Until
+  now it knew an addon only from the job it started.
+- **Every declared agent is in `watch()`,** also one whose job runs: its reason is
+  `already running`. The tabs list as idle the ones that aren't.
+- **`Job.ended_as` is how a job ended, in words:** the files that landed, or the reason.
+  The Agents tab shows it in the status column of an ended job.
+
+**The Agents tab**
+
+- **The columns stand close together,** so that the status has room: 21 characters on a
+  window of 80 columns. `can't start: jobs budget used` is cut there, to
+  `can't start: jobs bu…`; from about 90 columns it is whole, and the Details tab has it
+  whole at any width.
+- **A name longer than 12 characters is cut,** an addon's or an agent's.
+- **The cost column** has `·` while a job runs and `?` for a cost that isn't known.
+- **The pick is a job's pid, or an idle agent's addon.** With nothing picked, the first
+  row counts as picked, in both tabs.
+- **`k` stays in the hint on every row,** and does nothing where there is nothing to kill.
+
+**The Details tab**
+
+- **The head says `waiting in check`,** with the call's name. The file is in the lines.
+- **A long line is wrapped to the window,** under its own text. A tool's result stands
+  under its call, with `→` and no time.
+- **The view is a window that scrolls to its cursor.** While it follows, the cursor is on
+  the newest line. Scrolled up, the tab holds the first line in view.
+- **PageUp and PageDown move a screenful less one line, the wheel three lines.**
+- **An idle agent's details:** a head of two lines, its tools, and its instructions.
+
+**Shared by both tabs,** in `hallux/panel_tabs/agents.py`: the rows in their order, which
+one is picked, and the question before a kill (`Asking`). How a time, tokens and a cost are
+written is the bar's: `clock()`, `tokens()` and `spent()` in `hallux/statusbar.py`.
+
+**Drawing again**
+
+- **The machine tells the terminal at every report of a job,** also one that changes
+  nothing on the bar, such as a line the model wrote. The terminal draws again each time,
+  so the Details tab shows the line at once and not at the next beat. Step 12 told it only
+  when the bar had changed.
+- **The beat and the redraw work without a bar too.** The panel exists on a machine whose
+  `status_bar` is off.
+
+**A tab's word for Esc** is `Tab.esc`, `close` unless the tab says otherwise.
+
+**Old tests that changed:** the two that look at the panel `app.py` builds. It has three
+tabs now, and their stand-in machines have a `jobs`.
+
+**The "Done when" is a test,** with the real terminal on a pipe, the machine, the panel
+with its three tabs, a pretend model and a stand-in worker: Ctrl+F12 with half a line
+typed opens the panel on Agents, Enter shows the job's lines and two more as they arrive,
+`k` and `y` kill it, and after Esc, Esc and Enter the line's message starts with the job's
+event, `killed`.
+
+**How I checked the tests themselves:** eleven wrong versions, one at a time: a busy agent
+listed as idle too, any key killing, a click on another row keeping the question, the
+panel never opening on Agents, the tabs never grey, `k` asking on an ended job, a view
+that never follows again, Esc in Details closing the panel, the jobs oldest first, every
+tab's Esc saying `close`, and no redraw for a report that changes nothing on the bar. Each
+fails a test.
+
+**The check on a pseudo-terminal, before the user tries it.** The real machine with the
+real terminal, its bar and the panel as `app.py` builds it, 24 rows by 80 columns, with a
+pretend model and a stand-in worker that works for fifteen seconds. The bytes were replayed
+through a terminal emulator (`pyte`).
+
+| Run | What the screen showed |
+|---|---|
+| At the shell, with `ls -l` typed and no Enter | Ctrl+F12 opened the panel on Agents: the job's row, the idle agent under it, the line under the list, the foot on row 23 and the bar on row 24 only |
+| Two seconds on, no key pressed | The row's time went from `0:00` to `0:02`, and the bar's with it. When the job set a new status, the row had it and `48k` tokens |
+| Enter | The Details tab: the head, the two lines in order, and `Esc back` in the foot |
+| Esc, Esc | Every row under the panel as it was, the cursor behind `ls -l`, the bar on the last row and still showing the job |
+| The same over a full-screen program | The same rows and the same moving. After Esc, Esc the program's screen was as it was |
+| Over a program, drawing through the panel alone | The row stood still, and so did the bar. So the check can fail, and the finding of 2026-10-05 holds: the redraw has to go through the terminal |
+
+**What I couldn't check**
+
+- **A real terminal:** how the tabs look while they change, and the mouse. Clicks and the
+  wheel are tested on a pipe, with the bytes a terminal sends for them.
+- **The Details tab with a real composer.** Its lines come from a real session only from
+  step 13 on; that live run is where the tab is wanted most.
+- **A very long run:** a job's lines stop at 200, and a view that is scrolled up then
+  moves by a line with each new one.
