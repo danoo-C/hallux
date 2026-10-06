@@ -441,7 +441,8 @@ file, like the machine itself.
 - **A job's dollars are known when it ends.** The SDK reports what a session cost with its
   result, and a job is one request, so that number comes once, at the end. While a job runs,
   Hallux has its tokens. So:
-  - the cap per job is the dollar cap of the job's own session, which the SDK holds;
+  - the cap per job is the dollar cap of the job's own session, which the SDK holds. It
+    looks at the cap after each model message, so a job can pass it by one message;
   - the budget for all jobs counts a running job with its full cap,
     `agent_job_budget_usd`, and an ended one with what it cost;
   - a job that is killed is counted too: Hallux reads its result before it closes the
@@ -461,8 +462,9 @@ file, like the machine itself.
   sum. Kept in one number, a job that ends during an event's turn would be charged to the
   event budget.
 - **What `tokens` counts:** what the model has read and written for this job so far, input
-  and output together, cached input included, added up over its turns. At the end it is the
-  result's own number.
+  and output together, cached input included, added up over its turns. Hallux adds it up
+  from the session's stream. At the end the result's own number stands if it is the larger
+  one: after a kill or a used-up cap the result lacks the last model message.
 - **A backstop in code:** 60 model turns per job.
 - **`max_budget_usd` is what a boot may cost, jobs included.** The config panel makes it a
   check of Hallux's own ([config-panel.md](config-panel.md), section 6). Each job counts
@@ -691,9 +693,10 @@ prompt treats the table as data, and the jail holds whatever it does.
   budget end the expensive jobs, so those are the ones that have to be counted.
   - **Until its cost has arrived,** a killed job goes on counting with its full cap in the
     budget for all jobs.
-  - **If the result after a kill turns out not to hold the cost,** which a run has to show,
-    the job counts with its full cap for good, and its row says that the cost isn't known.
-    Hallux has no prices to work it out from tokens.
+  - **If no result follows a kill,** the job counts with its full cap for good, and its
+    row says that the cost isn't known. Hallux has no prices to work it out from tokens.
+  - **The result after a kill holds the cost,** as step 9's run showed. It can be short by
+    the one model message that the kill cut.
 - **An addon function can't be stopped,** as today: it runs in a thread. A `check` that is
   rendering when its job is killed finishes, and nobody reads its answer. Its disk handle is
   dead by then, so it can't write any more (section 5).
@@ -1129,16 +1132,21 @@ Each needs a run or a measurement.
 - **How much memory a Claude Code process takes.** It decides how many jobs can run.
 - **Where the live token count comes from.** In my run each model message reported its
   input tokens when it started, and the whole turn's tokens came at its end. The count
-  during a long turn has to come from the stream.
+  during a long turn has to come from the stream. **Answered in step 9:** from the stream.
+  The usage on a model message has its output wrong, and comes several times.
 - **Whether a session's dollar cap stops a job in the middle of a turn** or after it.
+  **Answered in step 9:** after each model message, never inside one. One long answer under
+  a cap of $0.006 was written to its end and cost $0.0122.
 - **Whether the result that follows `interrupt()` holds the job's cost.** A killed job is
   counted by it. The main session gets a result after Ctrl-C today; whether it has the
-  dollars in it needs a run.
+  dollars in it needs a run. **Answered in step 9:** it does, 0.01 seconds after the
+  interrupt. The model message that the kill cut can be missing from it.
 - **How long a check child takes to start** without pygame. By the music plan's measurement
   numpy loads in 0.25 seconds here. **Answered in step 2:** 0.15 seconds from its start to
   its answer for the smallest song, and 0.17 for the drum beat.
 - **Whether a job's session hands over the model's thinking.** The SDK has a block for it.
-  The Details tab leaves it out until a run shows what arrives.
+  The Details tab leaves it out until a run shows what arrives. **Answered in step 9:** a
+  thinking block arrives in front of each answer, on Haiku too. The worker passes it over.
 - **Whether redrawing the bar once a second disturbs typing** at the shell prompt.
 - **Whether a form comes back exactly,** with an editor's unsaved text and after the window
   was resized.

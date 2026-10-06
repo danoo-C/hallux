@@ -1,18 +1,31 @@
 """The jobs of addon agents, hallux/agents.py: the process table, a job's life from spawn to
 its end, and the event of that end. No model: a job is run by a stand-in worker that follows
-a script."""
+a script, and at the end of the file by its real session on a fake Claude."""
 import asyncio
 import errno
+import json
 import logging
+import shutil
+import sys
 import threading
+from pathlib import Path
 
+import jsonschema
 import pytest
+from claude_agent_sdk import (
+    AssistantMessage, ResultMessage, StreamEvent, SystemMessage, TextBlock, ThinkingBlock,
+    ToolUseBlock,
+)
 
 import hallux.agents
 from hallux import addons
-from hallux.agents import ACTIVITY_MAX, FIRST_PID, TURNS, Jobs, Outcome, clean
+from hallux.agents import (
+    ACTIVITY_MAX, FIRST_PID, RESULT_SHOWN, TURNS, Jobs, Outcome, Session, clean,
+)
 from hallux.config import Hardware
 from hallux.disk import Disk
+from hallux.jobdisk import JobDisk
+from hallux.tools import build_job_servers
 
 NEON = "BPM = 90\n# neon\nSONG:\n"
 HERE = "/home/user/Music"
@@ -930,3 +943,615 @@ def test_the_jobs_dollars_are_a_sum_of_their_own(root):
     assert [round(amount, 2) for amount in ended] == [0.67, 0.67]
     assert round(next_boot[0], 2) == 0.67 and next_boot[1:] == (0.0, 0.0)
 
+
+
+# ---------------------------------------------------------------- a job's real session
+
+NIGHT = "BPM = 70\n# night\nSONG:\n"
+LIST, READ, WRITE, EDIT, STATUS = (f"mcp__hallux__{name}" for name in (
+    "list_dir", "read_file", "write_file", "edit_file", "set_status"))
+CHECK = "mcp__music__check"
+
+
+def check(disk, path: str) -> dict:
+    """Says what a score holds."""
+    return {"text": disk.read_text(path)}
+
+
+def play(path: str) -> dict:
+    """Plays a score: the main agent's, and no tool of the composer."""
+    return {"playing": path}
+
+
+COMPOSER = addons.Addon("music", "A sound card.", "the manual", {"play": play, "check": check},
+                        agent=addons.Agent("composer", "You compose one song.", {"check": check},
+                                           "high", "composing…"))
+
+
+def over(subtype="success", *, error=False, cost=0.21, turns=3, text="", **more):
+    """The result a session ends with."""
+    return ResultMessage(subtype=subtype, duration_ms=1500, duration_api_ms=1, is_error=error,
+                         num_turns=turns, session_id="s", result=text, total_cost_usd=cost, **more)
+
+
+CUT = over("error_during_execution", error=True, cost=0.05, turns=2,
+           terminal_reason="aborted_tools", errors=["[ede_diagnostic] result_type=user"])
+
+
+def stream(event):
+    return StreamEvent(uuid="u", session_id="s", event=event)
+
+
+class Claude:
+    """A fake Claude for one job's session. It follows a script, step by step, and calls the
+    job's real tools:
+
+        ("reads", count)        a model message starts: it has read so many tokens
+        ("wrote", count)        and ends: it wrote so many
+        ("says", text)          the model writes text
+        ("call", tool, args)    it calls a tool, by the name the session allows it under;
+                                what came back is in .answers
+        ("wait", gate)          nothing comes until the test opens the gate, or until the
+                                session is interrupted
+        ("sends", message)      any message of the SDK's
+        ("raise", error)        the session breaks
+
+    A script that runs out ends with `result`. After an interrupt comes `cut`; None there
+    means that nothing comes at all. With `opens`, the session isn't open before that gate
+    is; with `opening`, opening it fails with that error; `as_it_opens` happens in the
+    moment it is open. With `closes`, closing it waits for that gate."""
+
+    def __init__(self, script, result=None, cut=CUT, opens=None, opening=None,
+                 as_it_opens=None, closes=None):
+        self.script, self.result, self.cut = list(script), result or over(), cut
+        self.opens, self.opening, self.as_it_opens, self.closes = opens, opening, as_it_opens, closes
+        self.options = self.session = None
+        self.state = "new"                               # opening, open, closed
+        self.asked, self.answers, self.interrupts, self.waits = [], [], 0, 0
+        self.interrupted = asyncio.Event()
+
+    def __call__(self, options):                         # the session's client_factory
+        self.options = options
+        return self
+
+    async def __aenter__(self):
+        self.state = "opening"
+        try:
+            if self.opening is not None:
+                raise self.opening
+            if self.opens is not None:
+                await self.opens.wait()
+        except BaseException:                            # the SDK closes what it had opened
+            self.state = "closed"
+            raise
+        self.state = "open"
+        if self.as_it_opens is not None:
+            self.as_it_opens(self.session)
+        return self
+
+    async def __aexit__(self, *exc):
+        if self.closes is not None:
+            await self.closes.wait()
+        self.state = "closed"
+        return False
+
+    async def query(self, message):
+        self.asked.append(message)
+
+    async def interrupt(self):
+        self.interrupts += 1
+        self.interrupted.set()
+
+    async def call(self, name, args):
+        """As the SDK calls a tool: the arguments are checked, then the handler runs."""
+        tool = self.session.tools[name]
+        jsonschema.validate(args, tool.input_schema)
+        result = await tool.handler(args)
+        return json.loads(result["content"][0]["text"]), result.get("is_error", False)
+
+    async def receive_response(self):
+        for kind, *more in self.script:
+            if self.interrupted.is_set():
+                break
+            if kind == "reads":                          # mostly from the cache, as it is
+                yield stream({"type": "message_start", "message": {"usage": {
+                    "input_tokens": 8, "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": more[0] - 8, "output_tokens": 1}}})
+            elif kind == "wrote":
+                yield stream({"type": "message_delta", "delta": {"stop_reason": "tool_use"},
+                              "usage": {"input_tokens": 8, "output_tokens": more[0]}})
+            elif kind == "says":
+                yield AssistantMessage(content=[TextBlock(text=more[0])], model="m",
+                                       usage={"input_tokens": 999_999, "output_tokens": 1})
+            elif kind == "call":
+                yield AssistantMessage(content=[ToolUseBlock(id="t", name=more[0], input=more[1])],
+                                       model="m", usage={"input_tokens": 999_999})
+                self.answers.append(await self.call(*more))
+            elif kind == "wait":
+                self.waits += 1
+                opened = asyncio.ensure_future(more[0].wait())
+                asked = asyncio.ensure_future(self.interrupted.wait())
+                await asyncio.wait({opened, asked}, return_when=asyncio.FIRST_COMPLETED)
+                opened.cancel(), asked.cancel()
+            elif kind == "sends":
+                yield more[0]
+            elif kind == "raise":
+                raise more[0]
+        if not self.interrupted.is_set():
+            yield self.result
+        elif self.cut is None:
+            await asyncio.sleep(3600)                    # it never answers
+        else:
+            yield self.cut
+
+
+class Shop(World):
+    """A Jobs whose workers are the real ones: a Session each, on a fake Claude."""
+
+    def __init__(self, root, hardware=ROOMY):
+        super().__init__(root, hardware)
+        self.running = "claude-opus-5-5"                 # what the machine's own session runs on
+        self.claude, self.claudes = Claude, []
+
+    def make(self, job):
+        script, more = self.scripts.get(job.pid, ((), {}))
+        claude = self.claude(script, **more)
+        claude.session = Session(job, lambda: self.running, claude)
+        self.claudes.append(claude)
+        self.workers.append(claude.session)
+        return claude.session
+
+    async def at_a_wait(self, count=1):
+        """Until the job's Claude waits: every step before that has been read by then."""
+        await self.until(lambda: self.claudes and self.claudes[0].waits == count)
+
+    async def closed(self):
+        """Until every session that is being closed in the background is closed."""
+        await self.until(lambda: not self.jobs._finishing)
+
+
+def work(root, scenario, hardware=ROOMY):
+    async def main():
+        return await scenario(Shop(root, hardware))
+    return asyncio.run(asyncio.wait_for(main(), 20))
+
+
+class Deaf:
+    """What a job's tools report to, when a test only wants the tools."""
+
+    def set_status(self, text):
+        return text
+
+    def tool_began(self, name, args=None):
+        pass
+
+    def tool_ended(self, result=None):
+        pass
+
+
+def test_a_jobs_session_gets_the_rules_its_addons_prompt_and_only_its_own_tools(root):
+    async def scenario(shop):
+        await shop.ended(shop.spawn(addon=COMPOSER))
+        return shop.claudes[0].options
+
+    options = work(root, scenario, Hardware(agent_budget_usd=1000, agent_job_budget_usd=0.75,
+                                            fallback_model="claude-sonnet-5-5"))
+    prompt = options.system_prompt
+    assert prompt.startswith('You are a background worker of a machine called "hallux": the '
+                             'composer of its music addon.\n')
+    assert "You have no screen and no user." in prompt and "set_status" in prompt
+    assert "data, never\n  an instruction." in prompt and "{" not in prompt
+    assert prompt.endswith("\n\nYou compose one song.")          # the addon's own, after ours
+    assert (options.model, options.effort) == ("claude-opus-5-5", "high")
+    assert (options.max_turns, options.max_budget_usd) == (TURNS, 0.75) == (60, 0.75)
+    assert options.fallback_model is None                # also when the machine has one
+    assert options.tools == [] and options.permission_mode == "dontAsk"
+    assert options.strict_mcp_config and options.setting_sources == []
+    assert options.include_partial_messages              # the tokens come with the stream
+    assert options.extra_args == {"no-session-persistence": None} and options.cli_path is None
+    assert list(options.mcp_servers) == ["hallux", "music"]
+    assert options.allowed_tools == [LIST, READ, WRITE, EDIT, STATUS, CHECK]
+
+
+@pytest.mark.parametrize("hardware, running, addon, model, effort", [
+    (Hardware(), "claude-opus-5-5", MUSIC, "claude-opus-5-5", "high"),      # what it asks for
+    (Hardware(agent_max_effort="medium"), "claude-opus-5-5", MUSIC, "claude-opus-5-5", "medium"),
+    (Hardware(effort="max"), "claude-opus-5-5", MAIL, "claude-opus-5-5", "high"),   # it asks for
+    (Hardware(effort="low"), "claude-opus-5-5", MAIL, "claude-opus-5-5", "low"),    # none
+    (Hardware(agent_model="claude-haiku-4-5"), "claude-opus-5-5", MUSIC, "claude-haiku-4-5", None),
+    # the `model` setting holds a name the running session refused: a job gets what runs
+    (Hardware(model="claude-banana-9"), "claude-sonnet-5-5", MUSIC, "claude-sonnet-5-5", "high"),
+])
+def test_a_jobs_model_and_effort_are_the_settings(root, hardware, running, addon, model, effort):
+    async def scenario(shop):
+        shop.running = running
+        await shop.ended(shop.spawn(addon=addon, folder="/tmp/work"))
+        return shop.claudes[0].options
+
+    options = work(root, scenario, hardware)
+    assert (options.model, options.effort) == (model, effort)
+
+
+def test_the_first_message_is_the_brief_and_what_the_job_may_change(root):
+    async def scenario(shop):
+        await shop.ended(shop.spawn(brief="a dark techno song", edit=[f"{HERE}/neon.score"]))
+        await shop.ended(shop.spawn(brief="sort it", addon=MAIL, folder="/tmp/work"))
+        return [claude.asked for claude in shop.claudes]
+
+    given, nothing = work(root, scenario)
+    assert given == [
+        "a dark techno song\n\nYour folder is /home/user/Music. You may change these files: "
+        "/home/user/Music/neon.score. Every other file that is there is read-only for you, "
+        "and you can create new ones."]
+    assert nothing == ["sort it\n\nYour folder is /tmp/work. You were given no file to "
+                       "change: you can only create new files."]
+
+
+def test_done_when_a_job_writes_a_score_ends_and_its_file_lands(root, music, caplog):
+    """The step's "Done when", with the fake Claude."""
+    caplog.set_level(logging.INFO, logger="hallux")
+    seen = {}
+
+    async def scenario(shop):
+        gate = asyncio.Event()
+        pid = shop.spawn(
+            ("reads", 3500), ("call", WRITE, {"path": "night.score", "content": NIGHT}),
+            ("wrote", 90),
+            ("reads", 3700), ("call", STATUS, {"text": "balancing the mix"}), ("wrote", 40),
+            ("wait", gate),
+            ("reads", 3800), ("says", "The song is written."), ("wrote", 12),
+            result=over(cost=0.21, turns=3, text="The song is written.",
+                        usage={"input_tokens": 24, "cache_read_input_tokens": 10976,
+                               "output_tokens": 142}))
+        await shop.at_a_wait()
+        seen["copy"] = (root / ".hallux" / "jobs" / str(pid) / "night.score").read_text()
+        seen["in the folder"] = (music / "night.score").exists()
+        seen["row"] = shop.row(pid)
+        gate.set()
+        row = await shop.ended(pid)
+        await shop.closed()
+        return row, shop.events(), shop.claudes[0]
+
+    row, [(addon, event)], claude = work(root, scenario)
+    assert seen["copy"] == NIGHT and not seen["in the folder"]       # the job's own, until its end
+    assert claude.answers == [({"ok": True, "size": len(NIGHT)}, False),
+                              ({"status": "balancing the mix"}, False)]
+    assert seen["row"]["state"] == "running" and seen["row"]["status"] == "balancing the mix"
+    assert seen["row"]["tokens"] == 3500 + 90 + 3700 + 40 and "cost_usd" not in seen["row"]
+    assert (row["state"], row["cost_usd"], row["tokens"]) == ("done", 0.21, 11142)
+    assert addon == "music" and event == {
+        "event": "job", "pid": 30001, "agent": "composer", "state": "done",
+        "files": [f"{HERE}/night.score"], "seconds": 0}
+    assert (music / "night.score").read_text() == NIGHT
+    assert claude.state == "closed" and claude.interrupts == 0
+    assert "job 30001: tool write_file {'path': 'night.score', 'content': " in caplog.text
+    assert "job 30001: tool set_status {'text': 'balancing the mix'}" in caplog.text
+    assert "job 30001 done: 3 turns, 0s, 11142 tokens, $0.2100" in caplog.text
+    assert caplog.text.count("The song is written.") == 1            # in the log, and once
+
+
+def test_a_jobs_tools_are_five_of_halluxs_and_what_its_agent_lists(root):
+    disk = JobDisk(Disk(root), HERE, pid=1)
+    servers, tools = build_job_servers(COMPOSER, disk, Deaf())
+    assert list(servers) == ["hallux", "music"] and servers["music"]["type"] == "sdk"
+    assert list(tools) == [LIST, READ, WRITE, EDIT, STATUS, CHECK]   # no play: it isn't listed
+    for name in (LIST, READ, WRITE, EDIT, STATUS):
+        schema = tools[name].input_schema
+        assert schema["type"] == "object" and schema["additionalProperties"] is False
+        jsonschema.Draft202012Validator.check_schema(schema)
+    write = tools[WRITE].input_schema
+    assert list(write["properties"]) == ["path", "content", "append"]    # a job makes no folder
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"path": "a/b.score", "content": "x", "parents": True}, write)
+    servers, tools = build_job_servers(MAIL, disk, Deaf())           # an agent without tools
+    assert list(servers) == ["hallux"] and list(tools) == [LIST, READ, WRITE, EDIT, STATUS]
+
+
+def test_a_jobs_file_tools_stay_behind_its_fence(root, music):
+    async def scenario(shop):
+        pid = shop.spawn(("call", LIST, {}), ("call", READ, {"path": "/etc/passwd"}),
+                         ("call", WRITE, {"path": "/etc/passwd", "content": "x"}),
+                         ("call", WRITE, {"path": ".bashrc", "content": "x"}),
+                         ("call", EDIT, {"path": "neon.score", "old": "90", "new": "120"}),
+                         ("call", STATUS, {"text": "x" * 100}), edit=[f"{HERE}/neon.score"])
+        await shop.ended(pid)
+        return shop.claudes[0].answers
+
+    listed, read, outside, dotfile, edited, status = work(root, scenario)
+    assert [entry["name"] for entry in listed[0]] == ["neon.score"] and listed[1] is False
+    assert read == outside == dotfile == ({"error": "EACCES"}, True)
+    assert edited == ({"ok": True}, False) and status == ({"status": "x" * 80}, False)
+    assert (music / "neon.score").read_text() == NEON.replace("90", "120")       # it landed
+    assert (root / "etc" / "passwd").read_text() == "user:x:1000\n"
+
+
+def test_an_addon_function_reads_the_jobs_own_version_through_its_handle(root, music):
+    async def scenario(shop):
+        gate = asyncio.Event()
+        pid = shop.spawn(("call", EDIT, {"path": "neon.score", "old": "90", "new": "120"}),
+                         ("call", CHECK, {"path": "neon.score"}),
+                         ("call", CHECK, {"path": "/etc/passwd"}), ("wait", gate),
+                         addon=COMPOSER, edit=[f"{HERE}/neon.score"])
+        await shop.at_a_wait()
+        real = (music / "neon.score").read_text()
+        gate.set()
+        await shop.ended(pid)
+        return real, shop.claudes[0].answers[1:]
+
+    real, (own, outside) = work(root, scenario)
+    assert real == NEON                                  # nobody else sees the change yet,
+    assert own == ({"text": NEON.replace("90", "120")}, False)       # and check does
+    assert outside == ({"error": "EACCES"}, True)        # the fence holds through the addon
+
+
+def test_a_tool_call_shows_in_the_row_while_it_lasts(root):
+    gate = threading.Event()
+
+    def render(disk, path: str) -> dict:
+        """Renders a score, which takes a while."""
+        gate.wait(5)
+        return {"characters": len(disk.read_text(path))}
+
+    studio = addons.Addon("music", "A sound card.", "the manual", {}, agent=addons.Agent(
+        "composer", "You compose one song.", {"render": render}))
+
+    async def scenario(shop):
+        pid = shop.spawn(("call", WRITE, {"path": "night.score", "content": NIGHT}),
+                         ("call", "mcp__music__render", {"path": "night.score"}),
+                         ("wait", after := asyncio.Event()), addon=studio)
+        await shop.until(lambda: shop.row(pid)["state"] == "waiting")
+        during = shop.row(pid)
+        gate.set()
+        await shop.at_a_wait()
+        between = shop.row(pid)
+        after.set()
+        await shop.ended(pid)
+        return during, between, shop.claudes[0].answers[-1]
+
+    during, between, answer = work(root, scenario)
+    assert (during["state"], during["tool"]) == ("waiting", "render night.score")
+    assert between["state"] == "running" and "tool" not in between
+    assert answer == ({"characters": len(NIGHT)}, False)
+
+
+def test_the_activity_has_what_the_model_says_and_each_tools_short_answer(root):
+    thinking = AssistantMessage(content=[ThinkingBlock(thinking="hm", signature="s")], model="m")
+
+    async def scenario(shop):
+        pid = shop.spawn(
+            ("sends", SystemMessage(subtype="status", data={"status": "requesting"})),
+            ("sends", thinking), ("says", "I'll read the old score first."),
+            ("call", READ, {"path": "neon.score"}),
+            ("call", WRITE, {"path": "/etc/passwd", "content": "x"}),
+            ("call", WRITE, {"path": "long.score", "content": "x" * 5000}),
+            ("call", READ, {"path": "long.score"}), ("says", " \n"),
+            ("call", STATUS, {"text": "done"}), ("says", "Written.\x1b[31m\nAll of it."),
+            edit=[f"{HERE}/neon.score"])
+        await shop.ended(pid)
+        return [(line.kind, line.text) for line in shop.jobs.kept[0].activity]
+
+    lines = work(root, scenario)
+    assert [kind for kind, _ in lines] == [
+        "says", "read_file", "→", "write_file", "→", "write_file", "→", "read_file", "→",
+        "status", "says", "end"]                         # no thinking, and no empty line
+    assert lines[0] == ("says", "I'll read the old score first.")
+    assert lines[1:3] == [("read_file", "neon.score"), (
+        "→", '{"text": "BPM = 90\\n# neon\\nSONG:\\n", "size": 22, "truncated": false}')]
+    assert lines[3:5] == [("write_file", ""), ("→", '{"error": "EACCES"}')]
+    assert lines[6] == ("→", '{"ok": true, "size": 5000}')
+    long = lines[8][1]                                   # a whole file came back: it is cut
+    assert lines[7] == ("read_file", "long.score") and len(long) == RESULT_SHOWN == 160
+    assert long.startswith('{"text": "xxxx')
+    assert lines[9:11] == [("status", "done"), ("says", "Written. All of it.")]     # and clean
+
+
+@pytest.mark.parametrize("usage, tokens", [
+    (None, 7330),                                        # after a cap the result has none:
+    ({"input_tokens": 3500, "output_tokens": 90}, 7330),     # or lacks the last message
+    ({"input_tokens": 16, "cache_creation_input_tokens": 4000, "cache_read_input_tokens": 3184,
+      "output_tokens": 300}, 7500),                      # the result's own, when it has more
+])
+def test_the_tokens_come_from_the_stream_and_the_larger_number_stands(root, usage, tokens):
+    async def scenario(shop):
+        gate = asyncio.Event()
+        pid = shop.spawn(("reads", 3500), ("says", "one"), ("wrote", 90), ("reads", 3700),
+                         ("wait", gate), ("wrote", 40), result=over(usage=usage))
+        await shop.at_a_wait()
+        meanwhile = shop.row(pid)["tokens"]              # a message under way counts with
+        gate.set()                                       # what it has read
+        return meanwhile, (await shop.ended(pid))["tokens"]
+
+    assert work(root, scenario) == (3500 + 90 + 3700, tokens)
+
+
+@pytest.mark.parametrize("subtype, why", [("error_max_turns", "turns"),
+                                          ("error_max_budget_usd", "budget")])
+def test_a_job_that_used_up_its_turns_or_its_dollars_is_killed(root, music, subtype, why):
+    async def scenario(shop):
+        pid = shop.spawn(("call", WRITE, {"path": "night.score", "content": NIGHT}),
+                         result=over(subtype, error=True, cost=1.04, turns=60,
+                                     terminal_reason="budget_exhausted",
+                                     errors=["Reached maximum budget ($1)"]))
+        return await shop.ended(pid), shop.events()
+
+    row, [(_, event)] = work(root, scenario)
+    assert (row["state"], row["why"], row["cost_usd"]) == ("killed", why, 1.04)
+    assert (event["state"], event["why"], event["written"]) == ("killed", why, 1)
+    assert not (music / "night.score").exists()          # and nothing of it lands
+
+
+def test_a_success_that_carries_an_error_is_a_failed_job_and_nothing_lands(root, music):
+    async def scenario(shop):
+        pid = shop.spawn(("call", WRITE, {"path": "night.score", "content": NIGHT}),
+                         result=over("success", error=True, cost=0.02,
+                                     text="API Error: Overloaded", api_error_status=529))
+        return await shop.ended(pid), shop.events()
+
+    row, [(_, event)] = work(root, scenario)
+    assert (row["state"], row["cost_usd"]) == ("failed", 0.02)
+    assert row["why"] == event["why"] == "API Error: Overloaded (HTTP 529)"
+    assert not (music / "night.score").exists()
+    assert not list((root / ".hallux" / "jobs").iterdir())
+
+
+def test_a_session_that_breaks_is_a_failed_job_with_the_reason(root, music, caplog):
+    async def scenario(shop):
+        first = shop.spawn(opening=RuntimeError("Claude Code not found"))
+        second = shop.spawn(("call", WRITE, {"path": "a.txt", "content": "x"}), ("reads", 3500),
+                            ("raise", ConnectionError("Command failed with exit code 1")),
+                            addon=MAIL, folder="/tmp/work")
+        rows = await shop.ended(first), await shop.ended(second)
+        await shop.closed()
+        return rows, [claude.state for claude in shop.claudes], shop.jobs.spent
+
+    (never_open, broke), states, spent = work(root, scenario, Hardware(agent_budget_usd=1000))
+    assert (never_open["state"], never_open["why"]) == (
+        "failed", "RuntimeError: Claude Code not found")
+    assert never_open["cost_usd"] == 0.0                 # nothing was asked of the model
+    assert (broke["state"], broke["why"]) == (
+        "failed", "ConnectionError: Command failed with exit code 1")
+    assert broke["cost_usd"] == "unknown" and broke["tokens"] == 3500    # it counts with its cap
+    assert spent == 1.0 and states == ["closed", "closed"]
+    assert not (root / "tmp" / "work" / "a.txt").exists()
+    assert "job 30001: its session didn't open" in caplog.text
+    assert "job 30002: its session failed" in caplog.text
+
+
+def test_the_row_has_a_jobs_dollars_to_a_hundredth_of_a_cent(root):
+    async def scenario(shop):
+        row = await shop.ended(shop.spawn(result=over(cost=0.012790900000000001)))
+        return row["cost_usd"], shop.jobs.spent          # the sums keep what it really cost
+
+    assert work(root, scenario) == (0.0128, 0.012790900000000001)
+
+
+def test_a_session_that_ends_without_a_result_is_a_failed_job(root):
+    class Silent(Claude):
+        async def receive_response(self):
+            return
+            yield
+
+    async def scenario(shop):
+        shop.claude = Silent
+        return await shop.ended(shop.spawn())
+
+    row = work(root, scenario)
+    assert (row["state"], row["why"]) == ("failed", "its session ended without a result")
+    assert row["cost_usd"] == "unknown"
+
+
+def test_a_kill_interrupts_the_session_and_reads_what_it_cost_from_the_result(root, music):
+    async def scenario(shop):
+        pid = shop.spawn(("call", WRITE, {"path": "night.score", "content": NIGHT}),
+                         ("reads", 3500), ("wait", asyncio.Event()))
+        await shop.at_a_wait()
+        shop.jobs.kill(pid)
+        at_once = shop.row(pid)
+        row = await shop.ended(pid)
+        await shop.closed()
+        return at_once, row, shop.claudes[0]
+
+    at_once, row, claude = work(root, scenario)
+    assert at_once["state"] == "killed" and "cost_usd" not in at_once
+    assert (row["state"], row["why"], row["cost_usd"]) == ("killed", "kill", 0.05)
+    assert row["tokens"] == 3500                         # the message that was cut: what it read
+    assert claude.interrupts == 1 and claude.state == "closed"
+    assert not (music / "night.score").exists()
+
+
+def test_a_session_that_never_answers_an_interrupt_doesnt_hold_its_worker(root, monkeypatch,
+                                                                          caplog):
+    monkeypatch.setattr(hallux.agents, "RESULT_SECONDS", 0.05)
+
+    async def scenario(shop):
+        pid = shop.spawn(("reads", 3500), ("wait", asyncio.Event()), cut=None)
+        await shop.at_a_wait()
+        began = asyncio.get_running_loop().time()
+        shop.jobs.kill(pid)
+        row = await shop.ended(pid)
+        took = asyncio.get_running_loop().time() - began
+        await shop.closed()
+        return row, took, shop.claudes[0]
+
+    row, took, claude = work(root, scenario)
+    assert (row["state"], row["cost_usd"], row["tokens"]) == ("killed", "unknown", 3500)
+    assert took < 2 and claude.interrupts == 1 and claude.state == "closed"
+    assert "job 30001: no result came after it was stopped" in caplog.text
+
+
+def test_a_kill_while_the_session_opens_ends_the_opening_and_costs_nothing(root):
+    async def scenario(shop):
+        pid = shop.spawn(("says", "never"), opens=asyncio.Event())
+        await shop.until(lambda: shop.claudes and shop.claudes[0].state == "opening")
+        shop.jobs.kill(pid)
+        row = await shop.ended(pid)
+        return row, shop.claudes[0], len(shop.jobs._finishing)
+
+    row, claude, closing = work(root, scenario)
+    assert (row["state"], row["why"], row["cost_usd"]) == ("killed", "kill", 0.0)
+    assert claude.interrupts == 0 and claude.asked == []         # nothing to interrupt, and
+    assert claude.state == "closed" and closing == 0             # nothing left open
+
+
+def test_a_stop_in_the_moment_the_session_is_open_asks_the_model_nothing(root):
+    def stop_now(session):                               # too late to end the opening
+        session.stopped = True
+
+    async def scenario(shop):
+        pid = shop.spawn(("says", "never"), as_it_opens=stop_now)
+        row = await shop.ended(pid)
+        await shop.closed()
+        return row, shop.claudes[0]
+
+    row, claude = work(root, scenario)
+    assert row["cost_usd"] == 0.0 and row["state"] == "failed"   # no kill marked the row here
+    assert claude.asked == [] and claude.interrupts == 0 and claude.state == "closed"
+
+
+def test_a_worker_that_is_stopped_before_it_ran_opens_no_session(root):
+    async def scenario(shop):
+        pid = shop.spawn(("wait", asyncio.Event()), addon=MAIL, folder="/tmp/work")
+        await shop.at_a_wait()
+        idle = Claude(())
+        session = Session(shop.jobs._live[pid], lambda: "claude-opus-5-5", idle)
+        await session.stop()
+        outcome = await session.run()
+        await session.stop()                             # and once more after it came back
+        return outcome, idle.state
+
+    outcome, state = work(root, scenario)
+    assert outcome == Outcome(ok=False, cost_usd=0.0) and state == "new"
+
+
+def test_a_jobs_end_doesnt_wait_for_its_session_to_close_and_a_boots_end_does(root):
+    async def scenario(shop):
+        closes = asyncio.Event()
+        pid = shop.spawn(closes=closes)
+        row = await shop.ended(pid)
+        still = shop.claudes[0].state, len(shop.jobs._finishing)
+        asyncio.get_running_loop().call_later(0.05, closes.set)
+        await shop.jobs.end_boot()
+        return row["state"], still, shop.claudes[0].state, len(shop.jobs._finishing)
+
+    assert work(root, scenario) == ("done", ("open", 1), "closed", 0)
+
+
+def test_the_sandboxs_start_script_is_written_once_for_two_sessions(root, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(sys, "platform", "linux")
+    written, write_text = [], Path.write_text
+
+    def counted(path, *args, **more):
+        written.append(path.name)
+        return write_text(path, *args, **more)
+
+    monkeypatch.setattr(Path, "write_text", counted)
+
+    async def scenario(shop):
+        for addon in (MUSIC, MAIL):
+            await shop.ended(shop.spawn(addon=addon, folder="/tmp/work"))
+        return [claude.options.cli_path for claude in shop.claudes]
+
+    paths = work(root, scenario, Hardware(agent_budget_usd=1000, os_sandbox=True))
+    assert paths == [root / ".hallux" / "claude-in-bwrap"] * 2
+    assert len(written) == 1 and paths[0].read_text().startswith("#!/bin/sh\n")

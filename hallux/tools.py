@@ -1,5 +1,6 @@
 """The Disk and the addons as tools for the agent, served by the Claude Agent SDK's in-process
-MCP servers: one for hallux's own tools, and one per addon."""
+MCP servers: one for hallux's own tools, and one per addon. A job of an addon's agent gets
+servers of its own, with fewer tools, on its fenced disk (build_job_servers)."""
 from __future__ import annotations
 
 import errno
@@ -11,6 +12,7 @@ from claude_agent_sdk.types import McpSdkServerConfig
 
 from hallux.addons import Addon, Events, call, description_for, schema_for
 from hallux.disk import Disk
+from hallux.jobdisk import JobDisk
 
 SERVER = "hallux"
 
@@ -19,6 +21,8 @@ SERVER = "hallux"
 READS = ToolAnnotations(readOnlyHint=True, maxResultSizeChars=200_000)
 
 PATH = {"type": "string", "description": "Path inside the machine, absolute or relative to the cwd."}
+JOB_PATH = {"type": "string",
+            "description": "Path inside your folder: relative to it, or absolute in the machine."}
 TEXT = {"type": "string"}
 FLAG = {"type": "boolean"}
 
@@ -29,6 +33,16 @@ class Fields(Protocol):
     def field_text(self, id: str) -> str: ...     # raises ValueError for an unknown field
 
     def field_saved(self, id: str) -> None: ...
+
+
+class Reports(Protocol):
+    """What a job's tools tell hallux about it (hallux.agents.Job provides it)."""
+
+    def set_status(self, text: object) -> str: ...    # raises OSError once the job has ended
+
+    def tool_began(self, name: str, args: dict | None = None) -> None: ...
+
+    def tool_ended(self, result: str | None = None) -> None: ...
 
 
 def schema(required: dict[str, dict], optional: dict[str, dict] | None = None) -> dict:
@@ -187,3 +201,75 @@ def build_addon_servers(addons: Sequence[Addon], disk: Disk | None = None
         servers[addon.name] = create_sdk_mcp_server(addon.name, tools=tools)
         allowed += [f"mcp__{addon.name}__{t.name}" for t in tools]
     return servers, allowed
+
+
+def build_job_servers(addon: Addon, disk: JobDisk, job: Reports
+                      ) -> tuple[dict[str, McpSdkServerConfig], dict[str, SdkMcpTool]]:
+    """All the tools one job of an addon's agent has: four file tools on its fenced disk and
+    set_status, in hallux's group, and the functions its addon's agent() lists, in a group of
+    the addon's name. Returns the servers by name, and the tools by the names for
+    allowed_tools.
+
+    They are the main agent's tools on another disk: the same wrapper turns an answer or an
+    error into a result. Each one says when it begins and ends, so the job's row shows the
+    call it is in without anyone guessing it from the session's messages."""
+    def reporting(name: str, handler: Callable) -> Callable:
+        async def reported(args: dict[str, Any]) -> dict[str, Any]:
+            job.tool_began(name, args)
+            answer = None                        # none: the call was cut short
+            try:
+                result = await handler(args)
+                answer = result["content"][0]["text"]
+                return result
+            finally:
+                job.tool_ended(answer)
+        return reported
+
+    def make(name: str, description: str, input_schema: dict, method: Callable,
+             annotations: ToolAnnotations | None = None) -> SdkMcpTool:
+        async def handler(args: dict[str, Any]) -> dict[str, Any]:
+            return run(lambda: method(**args))
+        return tool(name, description, input_schema, annotations)(reporting(name, handler))
+
+    def of_addon(name: str, function: Callable) -> SdkMcpTool:
+        async def handler(args: dict[str, Any]) -> dict[str, Any]:
+            return await call(function, args, disk)      # its disk handle is the job's disk
+        return tool(name, description_for(function),
+                    schema_for(function))(reporting(name, handler))
+
+    async def set_status(args: dict[str, Any]) -> dict[str, Any]:
+        return run(lambda: {"status": job.set_status(args["text"])})
+
+    groups = {SERVER: [
+        make("list_dir",
+             "List a directory in your folder, hidden entries included: name, mode "
+             "(drwxr-xr-x), size, mtime (local time) and, for symlinks, target. Without a "
+             "path: the folder itself.",
+             schema({}, {"path": JOB_PATH}), disk.list_dir, READS),
+        make("read_file",
+             "Read a file as text, 64 KB per call. Returns text, size and truncated; when "
+             "truncated, call again with offset=next_offset. Binary files return binary=true. "
+             "A file you have written reads as you wrote it.",
+             schema({"path": JOB_PATH}, {"offset": {"type": "integer", "minimum": 0}}),
+             disk.read_file, READS),
+        make("write_file",
+             "Create a file, or overwrite one you created or were given, with text; "
+             "append=true adds to the end. The directory must exist. Every other file is "
+             "read-only for you: EACCES.",
+             schema({"path": JOB_PATH, "content": TEXT}, {"append": FLAG}), disk.write_file),
+        make("edit_file",
+             "Replace exactly one occurrence of old with new in a file you created or were "
+             "given.",
+             schema({"path": JOB_PATH, "old": TEXT, "new": TEXT}), disk.edit_file),
+        # Not reported as a call: the line it sets is what the row shows of it.
+        tool("set_status",
+             "Say in one line what you are doing now: at most 80 characters, shown in the "
+             "machine's process table. Returns the line as it was kept.",
+             schema({"text": TEXT}))(set_status),
+    ]}
+    if addon.agent.tools:
+        groups[addon.name] = [of_addon(name, function)
+                              for name, function in addon.agent.tools.items()]
+    servers = {group: create_sdk_mcp_server(group, tools=tools) for group, tools in groups.items()}
+    named = {f"mcp__{group}__{t.name}": t for group, tools in groups.items() for t in tools}
+    return servers, named

@@ -23,7 +23,7 @@ action, as when nobody listens.
   typed, in three ways: it restates a field's text (`hallux/blockmode.py:432-436`), it
   leaves the field out, and the prompt says such a field disappears
   (`hallux/prompt.md:132-133`), or it is a plain screen and prompt, which ends the program
-  (`hallux/machine.py:603`). A model at low effort may well answer a job's end with bash's
+  (`hallux/machine.py:601`). A model at low effort may well answer a job's end with bash's
   `Done` line. Unsaved text in an editor must not depend on that.
 - **How the machine tells:** by the fields it knows on screen. A form has fields or is raw,
   never neither.
@@ -40,7 +40,7 @@ parts) wakes a program without fields:
 | In a program with fields | The same: in front of its next action |
 
 - **The second row is the one that is easy to miss.** The machine goes from an answer
-  straight into the wait (`hallux/machine.py:515-547`), and `wake_form()` only ends a wait
+  straight into the wait (`hallux/machine.py:513-545`), and `wake_form()` only ends a wait
   that is running. A job that ends during a tick's answer, in a program whose ticks then
   stop, would never be heard.
 - **A budget that is raised wakes too.** `settle()` asks the question again (step 10), so
@@ -72,7 +72,7 @@ when the time is up. It answers whether it did.
   answer.
 
 **If the model fails on the wake.** Today a failed message leaves the program
-(`hallux/machine.py:589`). After a wake that would take the player off the screen though
+(`hallux/machine.py:587`). After a wake that would take the player off the screen though
 nobody touched it. So the program stays: the machine uses `keep_form()`, the error is on
 the bar, and the event waits for the next message. It doesn't wake again.
 

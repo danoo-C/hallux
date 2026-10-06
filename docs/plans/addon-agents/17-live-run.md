@@ -17,7 +17,7 @@ their events and job control in one sitting.
 |---|---|
 | `README.MD`, "Features" and "Addons" | An addon can bring an agent; the composer; `check` |
 | `README.MD`, "Configuration" | The six settings, with their defaults; that jobs count towards `max_budget_usd`, each when it has ended, so a boot can pass its cap by what the running jobs spend, at most the budget for all jobs (step 8) |
-| `README.MD`, "Cost and speed" | What the `~` means, on the bar and in the panel; that a job is a second session with its own cost |
+| `README.MD`, "Cost and speed" | What the `~` means, on the bar and in the panel; that a job is a second session with its own cost. From step 9's check: a job can pass `agent_job_budget_usd` by one model message, since the cap is looked at after each; and what a killed job cost can be short by the one message that was cut |
 | `README.MD`, "Safety and privacy" | What a job can reach, and that what it reads in its folder goes to the API like everything the machine reads |
 | `README.MD`, "Keys" | Ctrl-Z and `fg` in full-screen programs; the panel's Agents and Details tabs on Ctrl+F12 |
 | `README.MD`, "Writing an addon" | `agent()`, `spawn`, and what a job can reach |

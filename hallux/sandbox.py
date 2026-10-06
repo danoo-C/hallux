@@ -10,6 +10,7 @@ The machine's disk isn't needed in there: hallux's tools run in the hallux proce
 """
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
 import stat
@@ -31,7 +32,10 @@ def claude_cli() -> Path:
 
 
 def wrapper(folder: Path, cli: Path | None = None) -> Path:
-    """Write the script that starts Claude Code inside bubblewrap; returns its path."""
+    """The script that starts Claude Code inside bubblewrap; returns its path. It is written
+    when it isn't there, or isn't what it should be, and then in one step: the sessions of a
+    run start at different times, a job's while the machine's is open, and none of them may
+    find the script half-written."""
     if not sys.platform.startswith("linux"):
         raise RuntimeError("os_sandbox needs Linux (bubblewrap)")
     bwrap = shutil.which("bwrap")
@@ -42,7 +46,7 @@ def wrapper(folder: Path, cli: Path | None = None) -> Path:
     q = lambda path: shlex.quote(str(path))               # noqa: E731
     folder.mkdir(parents=True, exist_ok=True)
     script = folder / SCRIPT
-    script.write_text(
+    text = (
         "#!/bin/sh\n"
         "# Written by hallux (os_sandbox = true): Claude Code inside bubblewrap.\n"
         f"exec {q(bwrap)} \\\n"
@@ -54,5 +58,13 @@ def wrapper(folder: Path, cli: Path | None = None) -> Path:
         "  --dev /dev --proc /proc --tmpfs /tmp --setenv TMPDIR /tmp \\\n"
         "  --unshare-pid --die-with-parent --chdir / \\\n"
         f"  -- {q(cli)} \"$@\"\n")
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    try:
+        there = script.read_text() == text and os.access(script, os.X_OK)
+    except OSError:
+        there = False
+    if not there:
+        new = folder / f".{SCRIPT}.{os.getpid()}"         # beside it, then renamed over it
+        new.write_text(text)
+        new.chmod(new.stat().st_mode | stat.S_IXUSR)
+        os.replace(new, script)
     return script

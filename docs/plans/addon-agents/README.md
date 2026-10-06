@@ -1,13 +1,13 @@
 # Plan: addon agents
 
-**Status:** written on 2026-10-04. **Steps 1 to 8 are built,** the first seven on
+**Status:** written on 2026-10-04. **Steps 1 to 9 are built,** the first seven on
 2026-10-05; the table under [The steps](#the-steps) says how far the build is. The design
 it follows is
 [addon-agents.md](../../addon-agents.md), in which no question is open. The decisions this
 plan takes on its own are in a table below. They are my proposals, and the user hasn't
 confirmed them, apart from what the review and the check settled. The
-[config panel](../config-panel/README.md), which had to come first, is built. One check
-with a real model has to happen before step 9; both are under
+[config panel](../config-panel/README.md), which had to come first, is built. The check
+with a real model that step 9 needed ran on 2026-10-06; both are under
 [Before the build](#before-the-build). The branch for the build is `addon-agents`.
 
 **Reviewed on 2026-10-04:** [plans-review-2026-10-04.md](../../plans-review-2026-10-04.md).
@@ -160,15 +160,16 @@ rows the check changed or added say so.
 | What | Who | Before | Why |
 |---|---|---|---|
 | The config panel, by [its plan](../config-panel/README.md). **Built on 2026-10-05** | | Step 3 | The settings are checked and typed the panel's way (its step 1) and become rows in its Config tab (its step 5). The budget per boot is Hallux's own check (its step 3), and jobs count towards it. A program can go on without an answer, and its wait can be started again (its steps 3 and 7), which a job's end in a full-screen program needs. The panel's tab system (its step 5) takes the two tabs of step 16 |
-| A check with a real model, a few cents | Whoever builds step 9, when the user says go | Step 9 | Three things the design leaves to a run, below |
+| A check with a real model, a few cents. **Run on 2026-10-06,** on Haiku, for $0.085 | Whoever builds step 9, when the user says go | Step 9 | Three things the design leaves to a run, below |
 
-**The check before step 9,** with a throwaway script, as for the design:
+**The check before step 9,** with a throwaway script, as for the design. What was seen for
+each answer is in [step 9's file](09-session.md), under "As built":
 
-| Question | What it decides |
-|---|---|
-| Does the result that follows `interrupt()` hold the session's cost? | Whether a killed job's dollars are read. If not, it counts with its full cap, and its row says that the cost isn't known |
-| Where do the tokens of a running turn come from: each model message, or the stream? | Whether a job's session is opened with the stream on |
-| Does the session's dollar cap end a job in the middle of a turn, or after it? | By how much a job can pass `agent_job_budget_usd` |
+| Question | What it decides | The answer |
+|---|---|---|
+| Does the result that follows `interrupt()` hold the session's cost? | Whether a killed job's dollars are read. If not, it counts with its full cap, and its row says that the cost isn't known | Yes. It can be short by the one model message that was cut |
+| Where do the tokens of a running turn come from: each model message, or the stream? | Whether a job's session is opened with the stream on | The stream. A job's session is opened with it on |
+| Does the session's dollar cap end a job in the middle of a turn, or after it? | By how much a job can pass `agent_job_budget_usd` | After each model message. A job can pass its cap by one message |
 
 ---
 
@@ -221,7 +222,7 @@ step of the config panel's plan.
 | 6. The declaration | [06-declaration.md](06-declaration.md) | | Built on 2026-10-05 |
 | 7. The jobs | [07-jobs.md](07-jobs.md) | 3, 5, 6 | Built on 2026-10-05 |
 | 8. The caps | [08-caps.md](08-caps.md) | 7, panel 3 | Built on 2026-10-06 |
-| 9. A job's real session | [09-session.md](09-session.md) | 6, 7 | Not built |
+| 9. A job's real session | [09-session.md](09-session.md) | 6, 7 | Built on 2026-10-06 |
 | 10. The main agent's side | [10-main-agent.md](10-main-agent.md) | 8, 9, panel 5 | Not built |
 | 11. A job's end in a full-screen program | [11-wake.md](11-wake.md) | 10, panel 3 and 7 | Not built |
 | 12. The status bar and the costs | [12-bar.md](12-bar.md) | 10 | Not built |
@@ -300,8 +301,9 @@ the findings, with what was run for each. The user accepted every recommendation
   step 13 says whether $2.00 is the right number.
 - **A second session may slow the first.** Both share the account's rate limits. The check
   for the design ran Haiku, where both were quick.
-- **Three things about the SDK are still unknown,** and step 9 can't be built well without
-  them. The check under "Before the build" is a few cents.
+- **A job can pass its dollar cap by one model message,** and what a killed job cost can
+  be short by one. Step 9's check showed both. The SDK looks at the cap after each
+  message, and Hallux has no prices to add what a cut message cost.
 - **The fenced disk is a second way to reach files.** A mistake in it reaches the user's
   folder. It is built first, without a model, and its tests name every way out I could
   think of: `..`, a link, a folder that is replaced while the job runs, a name with a dot.

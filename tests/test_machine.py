@@ -1636,6 +1636,65 @@ def test_a_machine_has_its_jobs_and_they_read_its_settings_as_they_are(tmp_path)
     assert scripted.jobs.settings() is scripted.hardware
 
 
+def a_job(machine, addon=MUSIC):
+    """A job of the machine's, as spawn would make it, without starting it."""
+    from hallux.agents import TURNS, Job, Limits
+    from hallux.jobdisk import JobDisk
+    (machine.disk.root / "tmp").mkdir(exist_ok=True)
+    hw = machine.hardware
+    return Job(machine.jobs, 30001, addon, "a song", JobDisk(machine.disk, "/tmp", pid=30001),
+               Limits(hw.agent_job_budget_usd, TURNS, hw.agent_timeout_seconds), 0.0)
+
+
+def test_a_machine_makes_real_workers_unless_it_is_handed_others(tmp_path):
+    from claude_agent_sdk import ClaudeSDKClient
+
+    from hallux.agents import Session
+    from hallux.script import ScriptTerminal
+    machine, _ = idle(tmp_path)
+    worker = machine.jobs.make_worker(a_job(machine))
+    assert isinstance(worker, Session) and worker.client_factory is machine.client_factory
+    scripted = Machine(tmp_path, Hardware(), ScriptTerminal([]))    # as a scripted run makes it
+    worker = scripted.jobs.make_worker(a_job(scripted))
+    assert isinstance(worker, Session) and worker.client_factory is ClaudeSDKClient
+    bench = Bench(tmp_path, FakeModel())                            # and a test's stand-ins
+    assert isinstance(bench.jobs.make_worker(a_job(bench.machine)), StandIn)
+
+
+def test_a_job_runs_on_the_model_the_boot_really_runs_on(tmp_path):
+    """The `model` setting holds a name the running session refused. A job is a new session,
+    and would fail on it."""
+    model = FakeModel(screen("boot\n"), screen("one\n"), HALT)
+    model.refuses["claude-banana-9"] = "Model 'claude-banana-9' not found"
+    seen = []
+
+    def look():
+        options = machine.jobs.make_worker(a_job(machine)).options()
+        seen.append((machine.hardware.model, machine.running.model, options.model))
+        assert machine.change("agent_model", SONNET) is None        # set: that one, whatever runs
+        seen.append(machine.jobs.make_worker(a_job(machine)).options().model)
+
+    terminal = FakeTerminal(lambda: machine.change("model", "claude-banana-9"), "one", look,
+                            "exit")
+    machine = Machine(tmp_path, Hardware(), terminal, client_factory=model)
+    asyncio.run(machine.run())
+    assert seen == [("claude-banana-9", OPUS, OPUS), SONNET]
+
+
+def test_the_machines_own_options_are_what_they_were_and_share_a_jobs(tmp_path):
+    machine, _ = idle(tmp_path, Hardware(fallback_model=SONNET, effort="high"))
+    own, jobs = machine.options(), machine.jobs.make_worker(a_job(machine)).options()
+    assert (own.model, own.effort, own.fallback_model) == (OPUS, "high", SONNET)
+    assert own.max_budget_usd is None and own.max_turns is None     # hallux checks its budget
+    assert own.system_prompt == SYSTEM_PROMPT and list(own.mcp_servers) == ["hallux"]
+    shared = ("strict_mcp_config", "tools", "permission_mode", "setting_sources",
+              "include_partial_messages", "extra_args", "cli_path")
+    assert [getattr(own, name) for name in shared] == [
+        True, [], "dontAsk", [], True, {"no-session-persistence": None}, None]
+    assert [getattr(jobs, name) for name in shared] == [getattr(own, name) for name in shared]
+    assert (jobs.max_budget_usd, jobs.max_turns, jobs.fallback_model) == (1.0, 60, None)
+
+
 def test_done_when_jobs_start_until_one_is_refused_and_a_typed_line_lets_the_next_start(tmp_path):
     """The step's "Done when", with the default settings: $1.00 a job, $2.00 for all jobs."""
     bench = Bench(tmp_path, FakeModel(screen(""), screen("notes.md\n"), HALT), Hardware())

@@ -57,11 +57,11 @@ addon: it calls `Jobs.spawn` with the loaded addon in front.
 |---|---|
 | Its addon is listened to | Listening decides whether a job's end is worth a model call |
 | Event budget is left | Its turn is paid from that budget |
-| The boot isn't over its budget | Nothing is sent then (the panel's step 3). The addons' own events never get this far: `hold()` pauses the hub, and a paused hub drops what waits (`hallux/machine.py:433`). A job's event is never dropped, so it has to be asked |
+| The boot isn't over its budget | Nothing is sent then (the panel's step 3). The addons' own events never get this far: `hold()` pauses the hub, and a paused hub drops what waits (`hallux/machine.py:431`). A job's event is never dropped, so it has to be asked |
 | It hasn't had a message of its own yet | See "once on its own" |
 
 - **Why one question.** Today the prompt is woken when anything is pending
-  (`hallux/machine.py:333-334`). If a waiting event that may *not* go out counted as
+  (`hallux/machine.py:331-332`). If a waiting event that may *not* go out counted as
   pending, the prompt would be ended again and again. Tried on 2026-10-05 with a stand-in
   list on the machine's loop, the boot over its cap and the event held back: the prompt was
   ended 15 times of 15 with nobody pressing a key. Sent instead, the message went out over
@@ -70,19 +70,19 @@ addon: it calls `Jobs.spawn` with the loaded addon in front.
   wake (step 11). If the model fails on that message, the event waits, and goes in front of
   the next message of any kind. Without this a model that is down is called in a loop: the
   failed message leaves the event waiting, the loop comes round and sends it again
-  (`hallux/machine.py:269,282`). Tried the same way: the model failed 20 times, 21 messages
+  (`hallux/machine.py:267,280`). Tried the same way: the model failed 20 times, 21 messages
   went out, and the keyboard was read once. The machine sets the event's mark (step 7)
   when the message is sent.
-- **`settle()` asks the question again** (`hallux/machine.py:375`). It runs when a setting
+- **`settle()` asks the question again** (`hallux/machine.py:373`). It runs when a setting
   changes in the panel, when the budgets are refilled and when a line is typed. An event
   that waited for a budget may go out then: the prompt is ended, or the program is woken.
   At the prompt with the panel open, the terminal remembers it until the panel closes, as
   it does for an addon's event (`hallux/terminal.py:163-165`).
 - **An event is told when its message has really gone out.** It leaves the list after the
   answer has come back. A message that is held back because the boot is over its budget
-  (the panel's step 3), or one the model fails on (`hallux/machine.py:586-590`), leaves it
+  (the panel's step 3), or one the model fails on (`hallux/machine.py:584-588`), leaves it
   waiting. The addons' own events are lost in that case today
-  (`hallux/machine.py:269,282`); the jobs' aren't.
+  (`hallux/machine.py:267,280`); the jobs' aren't.
 - **Ctrl-C during the answer.** The machine then sends a second message, with
   `interrupted="yes"`, and nothing of the first answer was shown. The event goes in front
   of that message again, and is told when its answer has come back.
@@ -97,7 +97,7 @@ addon: it calls `Jobs.spawn` with the loaded addon in front.
 body, so a program that shows them needs no tool call.
 
 **Written the safe way.** The rows on a tick and the job events go through `json_body`
-(`hallux/protocol.py:158-162`), as the addons' events do (`hallux/machine.py:343`). A
+(`hallux/protocol.py:158-162`), as the addons' events do (`hallux/machine.py:341`). A
 status line is free text: without that, one that holds `</tick>` could end the message and
 start another.
 

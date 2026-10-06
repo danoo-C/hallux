@@ -24,9 +24,9 @@ from claude_agent_sdk import (
     AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent, ToolUseBlock,
 )
 
-from hallux import config, sandbox
+from hallux import config
 from hallux.addons import Addon, Events, stop_all
-from hallux.agents import Job, Jobs, NoWorker, Worker
+from hallux.agents import Job, Jobs, Session, Worker, shared_options
 from hallux.config import Hardware
 from hallux.disk import Disk
 from hallux.passwords import Passwords
@@ -114,7 +114,7 @@ class Machine:
                  client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient,
                  addons: Sequence[Addon] = (), events: Events | None = None,
                  from_flags: Iterable[str] = (),
-                 worker_factory: Callable[[Job], Worker] = NoWorker):
+                 worker_factory: Callable[[Job], Worker] | None = None):
         self.disk = Disk(root)
         self.hardware = hardware                 # the settings as they are now
         self.running = hardware                  # what this boot's session runs on: see power_on
@@ -142,7 +142,8 @@ class Machine:
         self.stream: ScreenStream | None = None  # what the last answer showed while written
         # The jobs of the addons' agents (hallux.agents). They read the settings as they are,
         # ask whether the boot is over its budget, and say when one of them reports or ends.
-        self.jobs = Jobs(self.disk, lambda: self.hardware, worker_factory,
+        # A job's worker is a Claude session of its own, unless a test hands in a stand-in.
+        self.jobs = Jobs(self.disk, lambda: self.hardware, worker_factory or self.session,
                          on_report=self.job_reported, over_budget=self.over_budget)
 
     # ---------------------------------------------------------------- for hallux's own panel
@@ -217,17 +218,14 @@ class Machine:
             effort=hw.model_effort,
             fallback_model=hw.fallback_model,     # no max_budget_usd: hallux checks that itself
             mcp_servers={SERVER: server} | addon_servers,
-            strict_mcp_config=True,             # no MCP servers from your own Claude config
-            tools=[],                           # no built-in Bash/Read/Write/... at all
             allowed_tools=allowed + addon_tools,
-            permission_mode="dontAsk",          # anything not allowed above is denied
-            setting_sources=[],                 # ignore your CLAUDE.md and settings
-            include_partial_messages=True,      # the answer as it's written, for streaming
-            # hallux.log has everything; Claude Code needn't keep its own transcript, which
-            # would also show hallux sessions in your `claude --resume` list
-            extra_args={} if hw.keep_transcripts else {"no-session-persistence": None},
-            cli_path=sandbox.wrapper(self.disk.hidden) if hw.os_sandbox else None,
+            **shared_options(hw, self.disk.hidden),     # what a job's session gets too
         )
+
+    def session(self, job: Job) -> Worker:
+        """The worker of a job: a Claude session of its own, made as the machine's own is. It
+        is told the model this boot really runs on, for a machine without agent_model."""
+        return Session(job, lambda: self.running.model, self.client_factory)
 
     async def run(self) -> None:
         """Power on, reboot as often as the machine asks, return when it halts."""

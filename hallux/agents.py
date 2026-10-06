@@ -5,13 +5,15 @@ its end, and makes the event of that end from facts: the pid, how it ended, the 
 landed. Nothing a job says reaches the main agent, except a status line of 80 clean
 characters and the names of its files.
 
-A job is run by a worker. Jobs is handed what makes one: a stand-in in the tests, and for
-the real thing a Claude session of its own. It asks three things of a worker: run, stop,
-and to report while it runs, which a worker does through the Job it was made for.
+A job is run by a worker. Jobs is handed what makes one, and asks three things of it: run,
+stop, and to report while it runs, which a worker does through the Job it was made for. The
+real worker is Session, at the end of this file: a Claude session of its own for each job.
+The tests have a stand-in that follows a script.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
 import logging
 import os
@@ -21,15 +23,25 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Protocol, Sequence
+from importlib.resources import files
+from pathlib import Path
+from typing import Callable, Coroutine, Protocol, Sequence
 
+from claude_agent_sdk import (
+    AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, SdkMcpTool, StreamEvent,
+    TextBlock, ToolUseBlock,
+)
+
+from hallux import config, sandbox
 from hallux.addons import STATUS_MAX, Addon, Refused
 from hallux.config import Hardware
 from hallux.disk import Disk
 from hallux.jobdisk import FolderGone, JobDisk
 from hallux.protocol import CONTROL_PICTURES, SEQUENCE
+from hallux.tools import SERVER, build_job_servers
 
 log = logging.getLogger("hallux")
+RULES = (files("hallux") / "agent.md").read_text(encoding="utf-8")     # for every worker
 
 FIRST_PID = 30001                             # pids count up from here for as long as hallux runs
 BRIEF_MAX = 2000                              # characters of a job's one message
@@ -38,7 +50,9 @@ TABLE_MAX = 32                                # rows of the main agent's table
 KEPT_MAX = 32                                 # ended jobs kept for hallux's own panel
 ACTIVITY_MAX = 200                            # lines of what a job has been doing
 LINE_MAX = 500                                # characters of one such line
+RESULT_SHOWN = 160                            # of a tool's result among them: about two lines
 STOP_SECONDS = 5.0                            # for a stopped worker to come back with the cost
+RESULT_SECONDS = 3.0                          # of those, for the result that follows an interrupt
 BOOT_SECONDS = 5.0                            # for all of them together, at the end of a boot
 ENDED = ("done", "failed", "killed")
 ROUNDING = 1e-9                               # dollars added up aren't exact: 0.1 + 0.2
@@ -84,7 +98,8 @@ class JobEvent:
 class Line:
     """One line of what a job has been doing, for hallux's own panel."""
     at: float                                 # seconds from the job's start
-    kind: str                                 # status, a tool's name, end
+    kind: str                                 # status, a tool's name, → for what it answered,
+                                              # says for what the model wrote, end
     text: str
 
 
@@ -110,8 +125,8 @@ def _ended(state: str, why: str | None, landed: dict | None) -> str:
 
 
 class NoWorker:
-    """What a machine has in place of a worker until it is given one that can run a job: its
-    jobs fail at once, and say so."""
+    """What a Jobs has in place of a worker when it is handed nothing that makes one: its jobs
+    fail at once, and say so. A machine hands its Jobs the real one, Session."""
 
     def __init__(self, job: Job) -> None:
         self.job = job
@@ -157,11 +172,16 @@ class Job:
         """The job is inside a tool call. Of the arguments only a file of its own is shown."""
         self.jobs.report(self, state="waiting", tool=name, args=args or {})
 
-    def tool_ended(self) -> None:
-        self.jobs.report(self, state="running")
+    def tool_ended(self, result: str | None = None) -> None:
+        """The call is over. With what it answered, for the panel: its result or its error."""
+        self.jobs.report(self, state="running", result=result)
 
     def tokens_so_far(self, tokens: int) -> None:
         self.jobs.report(self, tokens=tokens)
+
+    def says(self, text: str) -> None:
+        """What the model wrote between two tool calls. For the panel, and nobody else."""
+        self.jobs.said(self, text)
 
     # What the table shows.
 
@@ -178,7 +198,7 @@ class Job:
         if self.why:
             row["why"] = self.why
         if self.settled:                      # a job's dollars are known when it has ended
-            row["cost_usd"] = "unknown" if self.cost_usd is None else self.cost_usd
+            row["cost_usd"] = "unknown" if self.cost_usd is None else round(self.cost_usd, 4)
         return row
 
 
@@ -208,6 +228,7 @@ class Jobs:
         self._table: dict[int, Job] = {}      # what the main agent sees: those that run, and
                                               # those that ended and weren't seen yet
         self._events: list[JobEvent] = []     # oldest first; never dropped while the boot lasts
+        self._finishing: set[asyncio.Task] = set()    # what goes on after a job's end
         self.kept: deque[Job] = deque(maxlen=KEPT_MAX)    # ended, for the panel: they stay
 
     def start(self) -> None:
@@ -380,9 +401,19 @@ class Jobs:
                 task.cancel()
             if late:
                 await asyncio.wait(late, timeout=1)
+        if self._finishing:                   # and for their sessions to be closed
+            await asyncio.wait(set(self._finishing), timeout=BOOT_SECONDS)
         with self._lock:
             self._table.clear()
             self._events.clear()
+
+    def finish_later(self, work: Coroutine) -> None:
+        """Let something of a job's go on after the job has ended: the closing of its session,
+        which takes a second or more. It is held here, since a loop holds a task only weakly,
+        and the end of a boot waits for it."""
+        task = self.loop.create_task(work)
+        self._finishing.add(task)
+        task.add_done_callback(self._finishing.discard)
 
     # ------------------------------------------------------------------ the caps
 
@@ -434,8 +465,10 @@ class Jobs:
         return kept
 
     def report(self, job: Job, state: str | None = None, tool: str | None = None,
-               args: dict | None = None, tokens: int | None = None) -> None:
-        """A worker says where its job is: inside a tool call, out of it, at so many tokens."""
+               args: dict | None = None, tokens: int | None = None,
+               result: str | None = None) -> None:
+        """A worker says where its job is: inside a tool call, out of it and with what answer,
+        at so many tokens."""
         with self._lock:
             if job.state in ENDED:            # killed meanwhile: the row stays as it is
                 return
@@ -452,6 +485,17 @@ class Jobs:
                     job.tool = f"{job.tool} {file}"
             elif state == "running":
                 job.state, job.tool = "running", None
+                if result is not None:        # short: a whole file can come back from a read
+                    self._line(job, "→", clean(result, RESULT_SHOWN))
+        self.on_report()
+
+    def said(self, job: Job, text: str) -> None:
+        """What a job's model wrote, as a line for the panel. Nothing of it goes anywhere
+        else: not into the row, and not into the event."""
+        with self._lock:
+            if job.state in ENDED or not text.strip():
+                return
+            self._line(job, "says", text)
         self.on_report()
 
     def _line(self, job: Job, kind: str, text: str) -> None:
@@ -488,3 +532,204 @@ class Jobs:
         ended = [pid for pid, job in self._table.items() if job.state in ENDED]
         while len(self._table) > TABLE_MAX and ended:
             del self._table[ended.pop(0)]
+
+
+# ---------------------------------------------------------------------- a job's real session
+
+def shared_options(hw: Hardware, hidden: Path) -> dict:
+    """What every Claude session of hallux gets, the machine's own and a job's: nothing of
+    Claude Code's and nothing of yours, and the OS sandbox if it is set. `hidden` is the
+    world's .hallux folder, where the sandbox's start script lives."""
+    return {
+        "strict_mcp_config": True,            # no MCP servers from your own Claude config
+        "tools": [],                          # no built-in Bash/Read/Write/... at all
+        "permission_mode": "dontAsk",         # anything that isn't allowed by name is denied
+        "setting_sources": [],                # ignore your CLAUDE.md and settings
+        "include_partial_messages": True,     # the stream: an answer as it's written, and a
+                                              # job's tokens
+        # hallux.log has everything; Claude Code needn't keep its own transcript, which
+        # would also show hallux sessions in your `claude --resume` list
+        "extra_args": {} if hw.keep_transcripts else {"no-session-persistence": None},
+        "cli_path": sandbox.wrapper(hidden) if hw.os_sandbox else None,
+    }
+
+
+def rules(addon: Addon) -> str:
+    """A job's system prompt: hallux's rules for every worker, then its addon's own."""
+    ours = RULES.replace("{agent}", addon.agent.name).replace("{addon}", addon.name)
+    return f"{ours.rstrip()}\n\n{addon.agent.prompt}"
+
+
+def task(job: Job) -> str:
+    """A job's one message: the brief, and under it what the job may change."""
+    if job.disk.edit:
+        may = (f"You may change these files: {', '.join(job.disk.edit)}. Every other file "
+               f"that is there is read-only for you, and you can create new ones.")
+    else:
+        may = "You were given no file to change: you can only create new files."
+    return f"{job.brief}\n\nYour folder is {job.disk.folder}. {may}"
+
+
+def _tokens(usage: dict | None, written: bool = True) -> int:
+    """What a model message read, cached input included, and with `written` what it wrote."""
+    usage = usage or {}
+    kinds = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+    return sum(usage.get(kind) or 0 for kind in kinds + (("output_tokens",) if written else ()))
+
+
+def _reason(error: BaseException) -> str:
+    return f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
+
+
+class Session:
+    """The real worker: a Claude session of its own for one job, opened when the job starts
+    and closed when it ends. It gets hallux's rules for a worker, its addon's prompt and the
+    job's tools, and nothing else. `running` says which model the machine's own session
+    really runs on, and `client_factory` makes the SDK's client, as for the machine."""
+
+    def __init__(self, job: Job, running: Callable[[], str],
+                 client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient) -> None:
+        self.job, self.running, self.client_factory = job, running, client_factory
+        self.tools: dict[str, SdkMcpTool] = {}        # the job's, by the names it calls them
+        self.client: ClaudeSDKClient | None = None    # while its session is open
+        self.opening: asyncio.Future | None = None
+        self.patience: asyncio.Timeout | None = None  # how long its result may still take
+        self.stopped = False                  # stop() was called
+        self.over = False                     # run() has come back
+        # The tokens: of the model messages that have ended, and of the one under way what it
+        # read and what it wrote.
+        self.before = self.read = self.written = 0
+        self.said = ""                        # the last text the model wrote
+
+    def options(self) -> ClaudeAgentOptions:
+        job, hw, agent = self.job, self.job.jobs.settings(), self.job.addon.agent
+        model = config.agent_model(hw, self.running())
+        servers, self.tools = build_job_servers(job.addon, job.disk, job)
+        return ClaudeAgentOptions(
+            system_prompt=rules(job.addon),
+            model=model,
+            effort=config.agent_effort(hw, agent.effort, model),
+            # No fallback model: a job fails before it runs on a model nobody chose for it.
+            max_turns=job.limits.turns,
+            max_budget_usd=job.limits.budget_usd,     # the SDK's own cap, for this session
+            mcp_servers=servers,
+            allowed_tools=list(self.tools),
+            **shared_options(hw, job.jobs.disk.hidden),
+        )
+
+    async def run(self) -> Outcome:
+        session = contextlib.AsyncExitStack()         # what was opened, to close at the end
+        try:
+            return await self._run(session)
+        finally:
+            if self.client is not None:       # closed in the background: nobody waits for it
+                self.job.jobs.finish_later(self._close(session))
+            self.over, self.client = True, None
+
+    async def _run(self, session: contextlib.AsyncExitStack) -> Outcome:
+        job = self.job
+        if self.stopped:                      # before it began
+            return Outcome(ok=False, cost_usd=0.0)
+        try:
+            self.opening = asyncio.ensure_future(
+                session.enter_async_context(self.client_factory(options=self.options())))
+            self.client = await self.opening
+        except asyncio.CancelledError:
+            if not self.stopped:              # not a stop: this task itself is being ended
+                raise
+            return Outcome(ok=False, cost_usd=0.0)    # nothing was asked of the model
+        except Exception as e:
+            log.warning("job %d: its session didn't open", job.pid, exc_info=True)
+            return Outcome(ok=False, why=_reason(e), cost_usd=0.0)
+        if self.stopped:                      # while it opened, too late to end the opening
+            return Outcome(ok=False, cost_usd=0.0)
+        try:
+            async with asyncio.timeout(None) as self.patience:   # stop() sets how long
+                await self.client.query(task(job))
+                return self._outcome(await self._read())
+        except Exception as e:
+            if self.stopped and isinstance(e, TimeoutError):     # nothing followed the interrupt
+                log.warning("job %d: no result came after it was stopped", job.pid)
+                return Outcome(ok=False, tokens=self._so_far())
+            log.warning("job %d: its session failed", job.pid, exc_info=True)     # Claude Code
+            return Outcome(ok=False, why=_reason(e), tokens=self._so_far())       # died, say
+
+    async def _read(self) -> ResultMessage | None:
+        """Read the session to its result. Each tool call goes to the log with the pid in
+        front, and so does what the model says, which the panel gets too. Whatever else the
+        session sends is passed over: its thinking, its states, the rate limit."""
+        job, result = self.job, None
+        async for message in self.client.receive_response():
+            if isinstance(message, StreamEvent):
+                self._count(message.event)
+            elif isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, ToolUseBlock):
+                        log.info("job %d: tool %s %s", job.pid,
+                                 block.name.removeprefix(f"mcp__{SERVER}__"), block.input)
+                    elif isinstance(block, TextBlock) and block.text.strip():
+                        log.info("job %d says: %s", job.pid, block.text)
+                        self.said = block.text
+                        job.says(block.text)
+            elif isinstance(message, ResultMessage):
+                result = message
+        return result
+
+    def _count(self, event: dict) -> None:
+        """The tokens, from the stream: what a model message read when it starts, what it
+        wrote when it ends. A message that is cut by a kill still counts with what it read.
+        The usage on the session's own messages can't be added up: a model message arrives
+        as several of them, each with the same numbers and the output of its first moment."""
+        kind = event.get("type")
+        if kind == "message_start":
+            usage = (event.get("message") or {}).get("usage")
+            self.before += self.read + self.written
+            self.read, self.written = _tokens(usage, written=False), 0
+        elif kind == "message_delta":
+            self.written = (event.get("usage") or {}).get("output_tokens") or self.written
+        else:
+            return
+        self.job.tokens_so_far(self._so_far())
+
+    def _so_far(self) -> int:
+        return self.before + self.read + self.written
+
+    def _outcome(self, result: ResultMessage | None) -> Outcome:
+        """How the job ended, from its session's result. Well is a success that carries no
+        error: a call to the API that failed arrives as a success with the error flag set."""
+        if result is None:
+            return Outcome(ok=False, why="its session ended without a result",
+                           tokens=self._so_far())
+        # The larger number stands: after a kill or a used-up cap the result's own usage
+        # lacks the last model message, or all of them.
+        facts = {"cost_usd": result.total_cost_usd, "turns": result.num_turns,
+                 "tokens": max(self._so_far(), _tokens(result.usage)),
+                 "last": "" if result.result == self.said else result.result or ""}
+        if result.subtype == "success" and not result.is_error:
+            return Outcome(ok=True, **facts)
+        why = {"error_max_turns": "turns", "error_max_budget_usd": "budget"}.get(result.subtype)
+        if why is None:                       # worded as the machine words a model error
+            why = "; ".join(result.errors or []) or result.result or result.subtype
+            if result.api_error_status:
+                why = f"{why} (HTTP {result.api_error_status})"
+        return Outcome(ok=False, why=why, **facts)
+
+    async def stop(self) -> None:
+        """End now. An open session is interrupted, and run() reads on to the result that
+        follows, which holds what the job cost. One that is still opening has nothing to
+        interrupt: its opening is ended, and it cost nothing."""
+        self.stopped = True
+        if self.over:                         # it came back by itself meanwhile
+            return
+        if self.client is None:
+            if self.opening is not None:
+                self.opening.cancel()
+            return
+        self.patience.reschedule(asyncio.get_running_loop().time() + RESULT_SECONDS)
+        await self.client.interrupt()
+
+    async def _close(self, session: contextlib.AsyncExitStack) -> None:
+        try:
+            await session.aclose()
+        except Exception:
+            log.warning("job %d: its session didn't close cleanly", self.job.pid, exc_info=True)
