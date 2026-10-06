@@ -461,6 +461,97 @@ def test_a_tick_that_isnt_sent_takes_nothing_back():
     assert second.fields[0].text == "two\n" and not second.fields[0].changed   # the AI wrote it
 
 
+# --- a wake from outside: a job's end, for a program that has no fields --------------------
+
+def test_a_wake_ends_the_wait_of_a_program_without_fields():
+    async def script(block, keys):
+        await block.show("player\n", TOP)
+        waiting = asyncio.ensure_future(block.next_action())
+        await asyncio.sleep(0.1)
+        said = block.wake()
+        return said, await asyncio.wait_for(waiting, 5), block.waiting
+
+    said, action, with_the_ai = session(script)
+    assert said is True and (action.key, action.focus, action.fields, action.events) == (
+        "wake", None, (), ())
+    assert with_the_ai                                  # as after any action
+
+
+def test_a_program_with_fields_isnt_woken_and_keeps_what_was_typed():
+    async def script(block, keys):
+        await block.show("  GNU nano 7.2   h.txt\n", Form((EDITOR,), keys=("C-o",), keymap="nano"))
+        waiting = asyncio.ensure_future(block.next_action())
+        keys("typed ")
+        await asyncio.sleep(0.2)
+        said = block.wake()
+        await asyncio.sleep(0.2)
+        still_waiting = not waiting.done()
+        keys("more " + CTRL["O"])
+        return said, still_waiting, await asyncio.wait_for(waiting, 5), block.actions.empty()
+
+    said, still_waiting, action, nothing_else = session(script)
+    assert said is False and still_waiting and nothing_else
+    assert action.key == "C-o" and action.fields[0].text == "typed more line one\nline two\n"
+
+
+def test_a_program_isnt_woken_while_an_action_is_with_the_ai():
+    async def script(block, keys):
+        await block.show("top\n", TOP)
+        keys("j")
+        first = await next_action(block)               # with the AI now
+        said = block.wake()
+        await block.show("top\n", TOP)                 # its answer
+        waiting = asyncio.ensure_future(block.next_action())
+        await asyncio.sleep(0.2)
+        nothing_came = not waiting.done()              # no wake was put behind the answer
+        then = block.wake()                            # the machine looks again, and it works
+        return first.key, said, nothing_came, then, (await asyncio.wait_for(waiting, 5)).key
+
+    assert session(script) == ("keys", False, True, True, "wake")
+
+
+def test_keys_typed_during_the_answer_to_a_wake_go_to_the_next_screen():
+    async def script(block, keys):
+        await block.show("player\n", TOP)
+        block.wake()
+        woken = await next_action(block)
+        keys("jk")                                     # typed while the AI answers the wake
+        await asyncio.sleep(0.3)
+        await block.show("player\n", TOP)
+        return woken.key, (await next_action(block)).events
+
+    assert session(script) == ("wake", ("<text>jk</text>",))
+
+
+def test_a_wake_that_isnt_sent_gives_the_keyboard_back():
+    async def script(block, keys):
+        await block.show("player\n", TOP)
+        block.wake()
+        woken = await next_action(block)
+        keys("j")
+        await asyncio.sleep(0.3)
+        block.keep_form()                              # the machine had nothing to send
+        return woken.key, (await next_action(block)).events
+
+    assert session(script) == ("wake", ("<text>j</text>",))
+
+
+def test_a_wake_and_a_tick_that_fall_together_are_one_action():
+    ticking = Form((), raw=True, tick=0.2)
+
+    async def script(block, keys):
+        await block.show("top\n", ticking)
+        tick = await next_action(block)                # the time is up: a tick, with the AI now,
+        behind_it = block.wake()                       # and a wake right behind it isn't taken
+        await block.show("top\n", ticking)
+        block.wake()                                   # a wake first, and the tick's time passes
+        await asyncio.sleep(0.4)                       # before anybody waits
+        first = await next_action(block)
+        return tick.key, behind_it, first.key, block.actions.empty()
+
+    assert session(script) == ("tick", False, "wake", True)
+
+
 # --- hallux's own panel as a layer over a full-screen program ------------------------------
 
 CTRL_F12, ESC, DOWN, CTRL_SHIFT_DEL = "\x1b[24;5~", "\x1b", "\x1b[B", "\x1b[3;6~"
@@ -628,6 +719,35 @@ def test_a_tick_waits_for_the_panel_and_the_clock_starts_again():
 
     no_tick, key, waited = with_panel(script)
     assert no_tick and key == "tick" and 0.25 < waited < 1.0
+
+
+def test_a_wake_waits_for_the_panel_to_close():
+    async def script(block, keys, panel, settings):
+        await block.show("player\n", Form((), raw=True))
+        waiting = asyncio.ensure_future(block.next_action())
+        await asyncio.sleep(0.1)
+        keys(CTRL_F12)
+        await asyncio.sleep(0.3)
+        said = block.wake()                            # yes: it will come
+        await asyncio.sleep(0.3)
+        held_back = not waiting.done()
+        keys(CTRL_F12)                                 # the panel closes
+        action = await asyncio.wait_for(waiting, 5)
+        return said, held_back, action.key, block.actions.empty()
+
+    assert with_panel(script) == (True, True, "wake", True)
+
+
+def test_a_wake_that_waited_for_the_panel_goes_with_the_program():
+    async def script(block, keys, panel, settings):
+        await block.show("player\n", Form((), raw=True))
+        keys(CTRL_F12)
+        await asyncio.sleep(0.3)
+        said = block.wake()
+        await block.end()                              # the program ends under the panel
+        return said, block.actions.empty(), block.wake_asked
+
+    assert with_panel(script) == (True, True, False)
 
 
 def test_set_tick_starts_a_wait_that_had_no_tick():

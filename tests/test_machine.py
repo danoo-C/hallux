@@ -94,6 +94,14 @@ class Typing:
         self.text, self.meanwhile, self.not_up_yet = text, meanwhile, not_up_yet
 
 
+class Sitting:
+    """A scripted action: the user sits in front of a full-screen program and presses nothing,
+    until the program is woken from outside. `meanwhile` happens while they sit."""
+
+    def __init__(self, meanwhile=lambda: None):
+        self.meanwhile = meanwhile
+
+
 class FakeTerminal:
     """Types the scripted keys; records what was shown."""
 
@@ -181,23 +189,48 @@ class FakeTerminal:
         self.forms = (self.forms or []) + [(screen, form)]
         self.patches = getattr(self, "patches", []) + [patch]
         self.texts = {f.id: f.text for f in form.fields if f.text is not None} | (self.texts or {})
+        self.at_keys = True
+
+    at_keys = False                          # a program is up and has the keyboard
+    woken = False                            # it was woken, and its wait hasn't said so yet
+    sitting = None                           # the wait of a Sitting, while it lasts
 
     async def next_action(self):
-        key = self.next_key()
-        if isinstance(key, type) and issubclass(key, BaseException):
-            raise key
-        return key
+        if not self.woken:                   # a wake that was asked for comes first
+            key = self.next_key()
+            if isinstance(key, type) and issubclass(key, BaseException):
+                raise key
+            if not isinstance(key, Sitting):
+                self.at_keys = False         # the action is with the AI now
+                return key
+            self.sitting = asyncio.Event()
+            key.meanwhile()
+            await asyncio.wait_for(self.sitting.wait(), 5)     # nobody woke it: the test fails
+            self.sitting = None
+        self.woken = self.at_keys = False
+        return Action("wake", None)
+
+    def wake_form(self):
+        """As block mode's: a program without fields, and only while it has the keyboard."""
+        if not self.at_keys or self.forms[-1][1].fields:
+            return False
+        self.woken = True
+        if self.sitting is not None:
+            self.sitting.set()
+        return True
 
     kept = None                              # the ticks keep_form was called with
     ticks = None                             # the ticks set_tick gave the program on screen
 
     def keep_form(self, tick=None):
         self.kept = (self.kept or []) + [tick]
+        self.at_keys = True
 
     def set_tick(self, seconds):
         self.ticks = (self.ticks or []) + [seconds]
 
     async def end_form(self):
+        self.at_keys = False
         if self.forms and self.ended < len(self.forms):
             self.ended = len(self.forms)
 
@@ -2234,3 +2267,196 @@ def test_a_scripted_run_starts_that_way_too(tmp_path, monkeypatch, caplog):
             handler.close()
     assert stopped.value.code == 0 and begun == [[]]        # swept before the run began
     assert "job 30007: its copies were left over, and are deleted" in caplog.text
+
+
+# --- a job's end wakes a full-screen program that has no fields ----------------------------------
+
+PLAYER = ('<form raw="yes"><footer>\nq quit\n</footer></form>'
+          '<screen>\nplayer\ncomposing…\n</screen><prompt></prompt>')
+TICKING = PLAYER.replace('raw="yes"', 'raw="yes" tick="3"')
+PLAYS = ('<form raw="yes"><footer>\nq quit\n</footer></form><patch>\n'
+         '<rows from="2">playing night.score</rows>\n</patch><prompt></prompt>')
+SHELL = screen("", prompt="$ ")
+PLAYING = ((2, ("playing night.score",)),)              # that patch, as the terminal gets it
+
+
+def wakes(terminal):
+    """Note every time the terminal is asked to wake its program, and what it answered."""
+    asked, ask = [], terminal.wake_form
+    terminal.wake_form = lambda: asked.append(ask()) or asked[-1]
+    return asked
+
+
+def test_a_jobs_end_wakes_a_program_without_fields_and_its_patch_is_shown(tmp_path):
+    hub, spent = Events(), []
+    model = FakeModel(listens(hub, "music"), PLAYER, result(PLAYS, total=0.051),
+                      result(SHELL, total=0.051), result(HALT, total=0.051))
+    bench = Bench(tmp_path, model, events=hub)
+    asked = wakes(bench.terminal)
+    bench.run("player", Sitting(meanwhile=bench.start()),
+              lambda: spent.append(round(bench.machine.event_spent, 2)), KEY["q"], "exit")
+    assert kinds(model) == ["boot", "input", "events", "keys", "input"]
+    assert re.fullmatch(events_message(("music", ended(30001))), model.sessions[0][2])
+    assert bench.terminal.patches == [None, PLAYING] and asked == [True]
+    assert bench.terminal.activities[2] == "music: event"
+    assert spent == [0.05]                                  # paid as an event, like one at the
+    assert model.sessions[0][3].startswith("<keys ")        # prompt; and told: no block again
+
+
+def test_done_when_a_job_that_ends_during_the_last_tick_still_reaches_the_program(tmp_path):
+    """The step's "Done when". The tick's own answer uses up the tick budget, so no tick
+    follows it, and the machine goes from that answer straight into a wait that nothing
+    would end. It looks for the event first."""
+    hub = Events()
+
+    async def a_job_runs_and_ends():
+        bench.start()()
+        while bench.jobs._live:
+            await asyncio.sleep(0.005)
+
+    model = FakeModel(listens(hub, "music"), TICKING,
+                      [a_job_runs_and_ends] + result(TICKING, total=0.4),
+                      result(PLAYS, total=0.4), result(SHELL, total=0.4), result(HALT, total=0.4))
+    bench = Bench(tmp_path, model, dataclasses.replace(ONE_AT_A_TIME, tick_budget_usd=0.3),
+                  events=hub)
+    asked = wakes(bench.terminal)
+    bench.run("player", Action("tick", None), KEY["q"], "exit")
+    assert kinds(model) == ["boot", "input", "tick", "events", "keys", "input"]
+    woken = model.sessions[0][3]                            # with no key pressed before it
+    assert re.fullmatch(events_message(("music", ended(30001))).replace(
+        '<events cwd="[^"]+"', '<events ticks="paused" cwd="[^"]+"'), woken)
+    assert [form.tick for _, form in bench.terminal.forms] == [3, 0, 0]     # no tick was left
+    assert bench.terminal.patches[-1] == PLAYING and asked == [False, True]
+    assert TICKS_USED in notes_of(bench.terminal)
+
+
+def test_a_job_that_ends_while_the_ai_answers_a_key_wakes_the_program_after_it(tmp_path):
+    hub = Events()
+
+    async def a_job_runs_and_ends():
+        bench.start()()
+        while bench.jobs._live:
+            await asyncio.sleep(0.005)
+
+    model = FakeModel(listens(hub, "music"), PLAYER, [a_job_runs_and_ends] + result(PLAYER),
+                      PLAYS, SHELL, HALT)
+    bench = Bench(tmp_path, model, events=hub)
+    bench.run("player", KEY["x"], KEY["q"], "exit")
+    assert kinds(model) == ["boot", "input", "keys", "events", "keys", "input"]
+    assert "<text>x</text>" in model.sessions[0][2] and "<text>q</text>" in model.sessions[0][4]
+    assert bench.terminal.patches == [None, None, PLAYING]
+
+
+@pytest.mark.parametrize("listening, hardware, note", [
+    (False, ONE_AT_A_TIME, None),                           # nobody listens to its addon
+    (True, dataclasses.replace(ONE_AT_A_TIME, event_budget_usd=0), EVENTS_OFF),
+])
+def test_a_program_isnt_woken_for_an_event_that_may_not_go_out(tmp_path, listening, hardware,
+                                                              note):
+    hub = Events()
+    model = FakeModel(listens(hub, *(["music"] if listening else [])), PLAYER, PLAYS, SHELL, HALT)
+    bench = Bench(tmp_path, model, hardware, events=hub)
+    asked = wakes(bench.terminal)
+    bench.run("player", bench.start(), bench.settled(), KEY["x"], KEY["q"], "exit")
+    assert asked == [] and kinds(model) == ["boot", "input", "keys", "keys", "input"]
+    assert model.sessions[0][2].startswith(block(("music", ended(30001))) + "<keys ")
+    assert model.sessions[0][3].startswith("<keys ")        # with the next key, and once
+    assert (note in notes_of(bench.terminal)) is (note is not None)
+
+
+def test_a_program_is_woken_when_the_event_budget_is_raised(tmp_path):
+    hub = Events()
+    model = FakeModel(listens(hub, "music"), PLAYER, PLAYS, SHELL, HALT)
+    bench = Bench(tmp_path, model, dataclasses.replace(ONE_AT_A_TIME, event_budget_usd=0),
+                  events=hub)
+    asked = wakes(bench.terminal)
+    raise_it = lambda: bench.machine.change("event_budget_usd", "0.25")     # noqa: E731
+    bench.run("player", bench.start(), bench.settled(), lambda: asked.append("so far"),
+              Sitting(meanwhile=raise_it), KEY["q"], "exit")
+    assert asked == ["so far", True]                        # by the change, and not before
+    assert kinds(model) == ["boot", "input", "events", "keys", "input"]
+    assert bench.terminal.patches[-1] == PLAYING
+
+
+def test_two_jobs_that_end_together_wake_a_program_once_with_both_events(tmp_path):
+    hub = Events()
+    model = FakeModel(listens(hub, "music", "mail"), PLAYER, PLAYS, SHELL, HALT)
+    bench = Bench(tmp_path, model, ROOMY, events=hub)
+    both = lambda: (bench.start(MUSIC)(), bench.start(MAIL)())      # noqa: E731
+    bench.run("player", Sitting(meanwhile=both), KEY["q"], "exit")
+    assert kinds(model) == ["boot", "input", "events", "keys", "input"]
+    assert re.fullmatch(events_message(("music", ended(30001)), ("mail", ended(30002, "sorter"))),
+                        model.sessions[0][2])
+    assert bench.terminal.activities[2] == "mail, music: event"
+
+
+def test_a_program_with_a_field_isnt_woken_and_hears_with_its_next_action(tmp_path):
+    hub = Events()
+    model = FakeModel(listens(hub, "music"), NANO, NANO, SHELL, HALT)
+    bench = Bench(tmp_path, model, events=hub)
+    asked = wakes(bench.terminal)
+    bench.run("nano hello.txt", bench.start(), bench.settled(), Action("C-o", "text", ()),
+              Action("C-x", "text", ()), "exit")
+    assert asked == []                                      # the AI listens, and still: a wake
+    assert kinds(model) == ["boot", "input", "action", "action", "input"]   # has no fields in it
+    assert model.sessions[0][2].startswith(block(("music", ended(30001))) + '<action key="C-o"')
+
+
+def test_a_wake_the_model_fails_on_leaves_the_program_and_isnt_tried_again(tmp_path):
+    hub = Events()
+    model = FakeModel(listens(hub, "music"), PLAYER, result("overloaded", error=True), PLAYS,
+                      SHELL, HALT)
+    bench = Bench(tmp_path, model, events=hub)
+    asked, seen = wakes(bench.terminal), []
+    look = lambda: seen.append((bench.terminal.ended, bench.machine.in_form,      # noqa: E731
+                                bench.terminal.kept, len(bench.jobs.waiting())))
+    bench.run("player", Sitting(meanwhile=bench.start()), look, KEY["x"], KEY["q"], "exit")
+    assert kinds(model) == ["boot", "input", "events", "keys", "keys", "input"]
+    assert seen == [(0, True, [None], 1)]                   # still on screen, and it waits
+    assert {"error": "overloaded"} in bench.terminal.statuses and asked == [True]
+    assert model.sessions[0][3].startswith(block(("music", ended(30001))) + "<keys ")
+    assert bench.terminal.patches == [None, PLAYING]        # the answer to that key
+
+
+def test_over_the_boots_cap_a_program_isnt_woken_until_the_cap_is_raised(tmp_path):
+    hub, seen = Events(), []
+    model = FakeModel(listens(hub, "music"), PLAYER, PLAYS, SHELL, HALT)
+    bench = Bench(tmp_path, model, dataclasses.replace(ONE_AT_A_TIME, max_budget_usd=0.25),
+                  events=hub)
+    asked = wakes(bench.terminal)
+
+    async def a_job_ends_and_then_the_cap_is_raised():
+        bench.start()()                                     # it will cost $0.30
+        while bench.jobs._live:
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.05)
+        seen.append((list(asked), len(model.sessions[0]), bench.machine.over_budget()))
+        assert bench.machine.change("max_budget_usd", "1") is None
+
+    go = lambda: asyncio.ensure_future(a_job_ends_and_then_the_cap_is_raised())     # noqa: E731
+    bench.run("player", Sitting(meanwhile=go), KEY["q"], "exit")
+    assert seen == [([], 2, True)]                          # not once, and nothing went out
+    assert asked == [True] and kinds(model) == ["boot", "input", "events", "keys", "input"]
+
+
+@pytest.mark.parametrize("program, key", [(PLAYER, KEY["q"]), (NANO, Action("C-x", "text", ()))])
+def test_a_wake_with_nothing_to_send_leaves_the_program_as_it_is(tmp_path, program, key):
+    """The event went out meanwhile, in front of a key. And a wake that reaches a program with
+    fields, however it got there, is never sent: the event waits for the next action."""
+    hub = Events()
+    model = FakeModel(listens(hub, "music"), program, SHELL, HALT)
+    bench = Bench(tmp_path, model, events=hub)
+    steps = [bench.start(), bench.settled()] if program is NANO else []
+    bench.run("run it", *steps, Action("wake", None), key, "exit")
+    assert kinds(model) == ["boot", "input", "action" if program is NANO else "keys", "input"]
+    assert bench.terminal.kept == [None] and len(bench.terminal.forms) == 1
+    assert model.sessions[0][2].startswith("<events>") is (program is NANO)
+
+
+def test_the_section_on_jobs_says_that_a_jobs_end_can_wake_a_program():
+    real, shows = JOBS_PROMPT.split("How it shows. ")
+    assert ("In a full-screen program without fields a job's event can arrive by itself, also "
+            "while\n  ticks are paused. It counts as a message that arrives, like a tick or a "
+            "key.") in real
+    assert "only a key or a click wakes you" in SYSTEM_PROMPT       # what RAW MODE says of it
+    assert "a full-screen program answers\n  as it would to a tick, with a patch" in shows

@@ -376,6 +376,9 @@ class Terminal:
     def set_tick(self, seconds: float) -> None:
         self.block.set_tick(seconds)
 
+    def wake_form(self) -> bool:
+        return self.block.wake()
+
     async def end_form(self) -> None:
         if self.block.active:
             await self.block.end()

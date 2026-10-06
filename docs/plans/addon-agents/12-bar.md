@@ -99,7 +99,7 @@ In `tests/test_statusbar.py`:
 - the two new tools have their words.
 
 In `tests/test_terminal.py`. A terminal on a pipe pins no bar and writes none
-(`hallux/terminal.py:433-437`), so these tests pin it by hand, as the panel's tests of the
+(`hallux/terminal.py:436-440`), so these tests pin it by hand, as the panel's tests of the
 bar do.
 
 - with a job running, the bar is written again within two seconds while the prompt waits,

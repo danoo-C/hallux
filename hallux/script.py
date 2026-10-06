@@ -152,6 +152,9 @@ class ScriptTerminal:
     def set_tick(self, seconds: float) -> None:
         pass
 
+    def wake_form(self) -> bool:
+        return False                                    # a script's program waits for nobody
+
     async def end_form(self) -> None:
         pass
 

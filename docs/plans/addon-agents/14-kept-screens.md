@@ -8,7 +8,7 @@ panel did, so it comes after the panel. **Changes:** `hallux/blockmode.py`,
 `tests/test_terminal.py`.
 
 When a full-screen program is suspended today, Hallux throws its form away: the screen, and
-whatever the user typed into its fields (`hallux/blockmode.py:360-363`). To come back, the
+whatever the user typed into its fields (`hallux/blockmode.py:381-384`). To come back, the
 AI has to write the whole screen again, and unsaved text in an editor is lost. This step
 lets the terminal put a form aside and put it back, exactly as it was. Nothing calls it yet:
 that is step 15. It needs nothing of the agents.
@@ -40,7 +40,7 @@ that is step 15. It needs nothing of the agents.
 - **in a program with vi keys, the mode it was in:** normal or insert.
 
 - **Why the vi mode has to be named.** A form that is put back is shown in a new app
-  (`hallux/blockmode.py:255-261`), and a new app starts in insert mode. Tried on
+  (`hallux/blockmode.py:256-262`), and a new app starts in insert mode. Tried on
   2026-10-05 with the real block mode: normal mode before, insert mode after. `:w` would
   then be typed into the text.
 - **The fields are kept as the objects they are,** not copied out. Their undo history comes
@@ -49,7 +49,7 @@ that is step 15. It needs nothing of the agents.
 **What comes back** is that, with no model call and no text from the AI.
 
 - **After a window resize** the kept screen is fitted to the new size, the way a patch
-  already refits the screen it is applied to (`hallux/blockmode.py:499-502`).
+  already refits the screen it is applied to (`hallux/blockmode.py:523-526`).
 - **Keys typed during the switch** aren't lost: they go to the form that is on screen
   afterwards.
 - **At most 8 are kept.** A ninth drops the oldest.

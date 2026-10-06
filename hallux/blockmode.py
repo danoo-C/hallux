@@ -233,6 +233,7 @@ class BlockMode:
         self.layered = False                           # it is open, as a layer over the program
         self.layer_gone = asyncio.Event()              # ... and set when it isn't
         self.layer_gone.set()
+        self.wake_asked = False                        # under it, a wake waits for it to close
         self.under: tuple = ()                         # what the program had before the layer
         self.clock = asyncio.Event()                   # set: the wait for a tick starts again
 
@@ -324,6 +325,25 @@ class BlockMode:
                 self.waiting = True                     # keys pressed now wait for the redraw
                 return Action(key="tick", focus=None)
 
+    def wake(self) -> bool:
+        """End the wait for an action from outside: next_action returns an action called wake,
+        the way it returns a tick when the time is up. Keys pressed from then on wait for the
+        next screen, as after any action. Returns whether it did.
+
+        Only a program without fields is woken, and only while it has the keyboard. In a form
+        with fields nothing happens and the answer is no: a wake reaches the AI without the
+        fields, and its answer could lose what the user typed. The same while an action is
+        with the AI. While the panel is open over the program the answer is yes, and the wake
+        comes when the panel has closed."""
+        if (self.app is None or self.form is None or self.form.fields or self.waiting
+                or self.running.done()):
+            return False
+        if self.layered:
+            self.wake_asked = True                     # it waits with everything else
+        else:
+            self._send(Action(key="wake", focus=None))
+        return True
+
     def set_tick(self, seconds: float) -> None:
         """Give the program on screen this tick. A wait that is running starts again with it."""
         if self.form is not None:
@@ -347,6 +367,7 @@ class BlockMode:
         """Leave block mode: the shell screen comes back."""
         if self.app is None:
             return
+        self.wake_asked = False                        # nothing is left to wake
         self._close_panel()                            # it can't stay open over nothing
         self._release_keys()                           # prompt_toolkit keeps unprocessed keys
         if self.app.is_running:                        # as type-ahead for the shell prompt
@@ -410,6 +431,9 @@ class BlockMode:
             self.app.invalidate()
         self.layer_gone.set()
         self.clock.set()                               # the program's clock starts again
+        if self.wake_asked:                            # asked for while the panel was open
+            self.wake_asked = False
+            self.wake()
 
     async def panel_gone(self) -> None:
         """Wait until the panel isn't open over the program: the end of an answer waits here."""

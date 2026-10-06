@@ -132,3 +132,76 @@ rows where it belongs. A test on a pipe pins no bar and can't show that.
 In a test, a full-screen program with no ticks left shows "composing…", a job ends while
 the AI answers the program's last tick, and the program's next screen arrives without a key
 being pressed.
+
+## As built
+
+Built on 2026-10-06, on the branch `addon-agents`. 21 new tests, 1465 in all; no old test
+changed. Decided while building:
+
+**The wake**
+
+- **`BlockMode.wake()` is the wake,** and `Terminal.wake_form()` calls it. The scripted
+  terminal's says no.
+- **A wake is an action in block mode's own queue,** put there the way a key's action is.
+  So what is typed after it waits for the next screen, as after any action. And a wake and
+  a tick can't both come: whichever is first is with the AI, and `wake()` says no while an
+  action is with the AI.
+- **Under the panel, block mode notes that it was asked** (`wake_asked`) and sends the wake
+  when the panel closes. A program that ends under the panel takes the note with it.
+
+**The machine**
+
+- **`job_event_waits()` wakes whoever waits for the keyboard:** the shell prompt, or a
+  program that has no fields. It is still the one place that asks `due()` for this.
+- **`block_mode()` calls it after every screen it shows.** That is the look before the
+  wait: a job that ended while the AI answered is found there.
+- **When the action `wake` comes back, the machine asks `due()` again.** With something
+  due it sends `send_events(client, [], due, stay=True)`. With nothing, or when the model
+  failed on it, it calls `keep_form()` and waits on.
+- **`send(…, stay=True)` returns nothing when the model fails,** and doesn't leave the
+  program. Only the wake uses it.
+- **A wake that reaches a program with fields is never sent,** whoever asked for it: the
+  machine looks at its fields again when the action comes back. Block mode refuses such a
+  wake already; this is the second lock.
+- **The addons' own events aren't taken into a wake.** They wait until the program ends,
+  as before this step.
+
+**The prompt's section** got one line in "What is real": in a full-screen program without
+fields a job's event can arrive by itself, also while ticks are paused, and counts as a
+message that arrives. "How it shows" says that such a program answers as it would to a
+tick, with a patch.
+
+**The tests' fake terminal** got `wake_form()` and a scripted action, `Sitting`: the user
+sits in front of a program and presses nothing until it is woken.
+
+**The "Done when" is a test:** a ticking program shows "composing…", the answer to its tick
+uses up the tick budget, a job ends during that answer, and the program's next screen
+arrives with no key pressed. Its message carries `ticks="paused"`.
+
+**How I checked the tests themselves:** six wrong versions of the machine's side, one at a
+time: no look before the wait, a program with fields woken too, a failed wake leaving the
+program, a wake sent without asking again, a wake sent in a program with fields, the shell
+prompt no longer woken. Each fails a test.
+
+**The check on a pseudo-terminal, before the user tries it.** The real machine with the
+real terminal, its bar and its panel, on a pseudo-terminal of 24 rows and 80 columns. The
+model was a pretend one and the job's worker a stand-in. The bytes were replayed through a
+terminal emulator (`pyte`), with one screen for the shell and one for the alternate screen.
+
+| Run | What the screen showed |
+|---|---|
+| A job ends while the program waits | Row 2 went from `composing…` to `playing night.score` with no key pressed. Row 1, the footer on row 23 and the bar on row 24 stayed as they were, and nothing else changed |
+| The same, with the wake switched off | Five seconds on, the program still said `composing…`. So the check can fail |
+| The panel is open over the program when the job ends | The panel stayed up and nothing of the wake showed. After Esc the patch was on row 2, and no line of the panel was left |
+| After `q`, in all three | The shell's text in order, the prompt under it, and the bar on the last row only |
+
+**What I couldn't check**
+
+- **What a real model answers to a wake:** a patch, or bash's `Done` line, which would end
+  the program. The first live run is in step 13.
+- **A real terminal.** The emulator shows where the text lands, not how it looks while it
+  changes.
+- **A wake and a tick in the very same moment.** Both orders are tested, one after the
+  other.
+
+**Nothing can be tried by hand yet:** no real addon has an agent before step 13.

@@ -104,6 +104,11 @@ class Terminal(Protocol):
     def set_tick(self, seconds: float) -> None:
         """Give the program on screen this tick; its clock starts again with it."""
 
+    def wake_form(self) -> bool:
+        """End the wait of a program without fields: next_action returns an action called
+        wake. False, and nothing happens, in a program with fields and while the AI is busy
+        with the screen."""
+
     async def end_form(self) -> None: ...
 
     def field_text(self, id: str) -> str: ...
@@ -363,11 +368,12 @@ class Machine:
             self.wake = self.events.on_arrival = None
 
     async def send_events(self, client: ClaudeSDKClient, events: list[tuple[str, dict]],
-                          due: Sequence[JobEvent] = ()) -> Reply:
+                          due: Sequence[JobEvent] = (), stay: bool = False) -> Reply | None:
         """Tell the AI what the addons it listens to have reported, oldest first, and after
         that how its jobs ended: every job event that waits, also one that couldn't have gone
         out by itself. `due` are the ones this message is sent for. Each gets its mark: an
-        event starts one message of its own, or a model that is down is called in a loop."""
+        event starts one message of its own, or a model that is down is called in a loop.
+        `stay` is send()'s."""
         for event in due:
             event.had_turn = True
         ended = self.jobs.waiting()
@@ -377,7 +383,7 @@ class Machine:
         names = ", ".join(sorted({name for name, _ in told}))
         before = self.spent
         reply = await self.send(client, "events", body, activity=f"{names}: event",
-                                carried=ended)
+                                carried=ended, stay=stay)
         self.event_spent += self.spent - before
         self.check_events()
         return reply
@@ -396,10 +402,18 @@ class Machine:
 
     def job_event_waits(self) -> None:
         """A job has ended, or something an event waited for has changed: a budget, the
-        boot's cap. If an event may go out by itself now and the user is at the shell
-        prompt, the prompt ends, as it does for an addon's event."""
-        if self.wake is not None and self.due():
+        boot's cap. If an event may go out by itself now, whoever waits for the keyboard is
+        woken. At the shell prompt the prompt ends, as it does for an addon's event. A
+        full-screen program without fields is woken: a player would otherwise sit on
+        "composing…" until a key is pressed. One with fields isn't: the wake would reach the
+        AI without the fields, and its answer could lose what the user typed there."""
+        if not self.due():
+            return
+        if self.wake is not None:
             self.wake()
+        elif self.in_form and not self.fields:
+            self.terminal.wake_form()            # no, while the AI is busy with the screen:
+                                                 # block_mode looks again when it is shown
 
     def check_events(self) -> None:
         """What the hub had to drop goes onto the bar. And events are model calls that nobody
@@ -566,7 +580,8 @@ class Machine:
         self.fields = {field.id: field for field in form.fields}
         self.in_form = True
         await self.terminal.show_form(reply.screen, form, reply.patch)
-        while True:
+        self.job_event_waits()                    # a job that ended while the AI answered: the
+        while True:                               # wait below would never hear of it
             if held and not getattr(self.terminal, "attended", True):
                 log.info("halt: the budget is used, and a script can't raise it")
                 await self.leave_block_mode()
@@ -577,6 +592,14 @@ class Machine:
                 log.error("block mode ended unexpectedly")
                 await self.leave_block_mode()
                 return await self.send(client, "key", "", name="C-c")
+            if action.key == "wake":              # a job's end, and nobody pressed a key
+                # Asked again: the event may have gone out meanwhile, in front of a key.
+                due = [] if self.fields else self.due()
+                woken = await self.send_events(client, [], due, stay=True) if due else None
+                if woken is not None:
+                    return woken                  # the program's next screen, or its patch
+                self.terminal.keep_form()         # nothing to send, or the model failed on
+                continue                          # it: the program stays, and takes keys
             held = self.hold()
             late = action.key == "tick" and self.ticks_used_up()   # its budget was lowered
             if not held and not late:
@@ -631,14 +654,19 @@ class Machine:
     async def send(self, client: ClaudeSDKClient, tag: str, body: str = "", *,
                    fatal: bool = False, halt_on_error: bool = False,
                    activity: str = "thinking…", new_machine: bool = False,
-                   carried: list[JobEvent] | None = None, **attrs: object) -> Reply:
+                   carried: list[JobEvent] | None = None, stay: bool = False,
+                   **attrs: object) -> Reply | None:
         """Send one envelope and show the reply: a screen and a prompt, or a form.
 
         Every job event that waits goes along, as an <events> block in front of the message.
         It is told when the answer has come back: a message the model fails on leaves it
         waiting, for the next message of any kind. `carried` are the job events a message
         holds in its own body, which then gets no block. A boot has none: it starts with no
-        jobs."""
+        jobs.
+
+        A message the model fails on ends a full-screen program, so that nobody is stuck in
+        it. With `stay` it doesn't, and None comes back: the message was one that nobody at
+        the keyboard asked for, and a player isn't taken off the screen for it."""
         if carried is None:
             carried = [] if tag == "boot" else self.jobs.waiting()
             front = events_block(carried)
@@ -654,6 +682,8 @@ class Machine:
         if text is None:                         # the model failed; the error is reported
             if fatal:
                 raise SystemExit(1)
+            if stay:
+                return None
             await self.leave_block_mode()        # never leave anyone stuck in a form
             return Reply(screen="", prompt=None, halt=halt_on_error)
         self.jobs.told(carried)
