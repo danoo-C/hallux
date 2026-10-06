@@ -25,7 +25,7 @@ from hallux.agents import (
 from hallux.config import Hardware
 from hallux.disk import Disk
 from hallux.jobdisk import JobDisk
-from hallux.tools import build_job_servers
+from hallux.tools import build_job_servers, build_tools
 
 NEON = "BPM = 90\n# neon\nSONG:\n"
 HERE = "/home/user/Music"
@@ -943,6 +943,53 @@ def test_the_jobs_dollars_are_a_sum_of_their_own(root):
     assert [round(amount, 2) for amount in ended] == [0.67, 0.67]
     assert round(next_boot[0], 2) == 0.67 and next_boot[1:] == (0.0, 0.0)
 
+
+
+# ---------------------------------------------------------------- the main agent's two tools
+
+def test_the_main_agent_reads_the_table_and_kills_a_job_with_its_two_tools(root):
+    async def scenario(world):
+        made = {tool.name: tool for tool in build_tools(world.disk, addons=[MUSIC],
+                                                        jobs=world.jobs)}
+
+        async def call(name, **args):
+            jsonschema.validate(args, made[name].input_schema)
+            result = await made[name].handler(args)
+            return json.loads(result["content"][0]["text"]), result["is_error"]
+
+        pid = world.spawn(("status", "balancing the mix"), ("wait", asyncio.Event()))
+        await world.until(lambda: world.workers and world.row(pid)["status"] != "composing…")
+        listed = await call("list_processes")
+        killed = await call("kill_process", pid=pid)
+        await world.ended(pid)
+        gone = await call("kill_process", pid=pid), await call("kill_process", pid=4711)
+        return listed, killed, gone, await call("list_processes"), await call("list_processes")
+
+    (listed, failed), killed, gone, ended, seen = run(root, scenario)
+    [row] = listed["jobs"]
+    assert not failed and (row["pid"], row["addon"], row["agent"], row["state"], row["status"],
+                           row["folder"]) == (30001, "music", "composer", "running",
+                                              "balancing the mix", HERE)
+    assert killed == ({"ok": True}, False)
+    assert gone == (({"error": "ESRCH"}, True),) * 2        # it has ended; it never was
+    [row] = ended[0]["jobs"]                                # an ended job is listed once
+    assert (row["state"], row["why"], row["cost_usd"]) == ("killed", "kill", 0.07)
+    assert seen == ({"jobs": []}, False)
+
+
+def test_the_two_tools_exist_only_with_an_addon_that_has_an_agent(root):
+    plain = addons.Addon("plain", "A thing.", "the manual", {})
+    jobs = Jobs(Disk(root), Hardware)
+
+    def names(**more):
+        return [tool.name for tool in build_tools(Disk(root), **more)]
+
+    assert names(addons=[plain, MUSIC], jobs=jobs)[-2:] == ["list_processes", "kill_process"]
+    for without in (dict(addons=[plain], jobs=jobs), dict(addons=[plain, MUSIC]), dict(jobs=jobs)):
+        assert not {"list_processes", "kill_process"} & set(names(**without))
+    kill = build_tools(Disk(root), addons=[MUSIC], jobs=jobs)[-1].input_schema
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"pid": "30001"}, kill)         # a number, as kill takes it
 
 
 # ---------------------------------------------------------------- a job's real session

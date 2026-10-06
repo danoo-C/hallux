@@ -116,7 +116,7 @@ when a job reports, and once a second while a job runs, for the times.
 host draws them grey: `no attached addon has an agent`.
 
 **`app.py`** builds the panel with three tabs, Agents, Details and Config, where it built it
-with one (`hallux/app.py:78-82`).
+with one (`hallux/app.py:80-85`).
 
 ## Tests
 

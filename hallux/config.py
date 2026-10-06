@@ -73,6 +73,7 @@ class View:
     from_flags: frozenset[str]                # the settings a flag set for this run
     unsaved: frozenset[str]                   # the settings changed in this run and not saved yet
     path: Path                                # where config.toml is
+    spent_jobs: float = 0.0                   # by the jobs that ended since their budget was filled
 
 
 def load(root: Path, **flags: object) -> Hardware:

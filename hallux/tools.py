@@ -4,6 +4,7 @@ servers of its own, with fewer tools, on its fenced disk (build_job_servers)."""
 from __future__ import annotations
 
 import errno
+import functools
 import json
 from typing import Any, Callable, Protocol, Sequence
 
@@ -35,6 +36,14 @@ class Fields(Protocol):
     def field_saved(self, id: str) -> None: ...
 
 
+class Processes(Protocol):
+    """The jobs of the addons' agents, as the main agent reaches them (hallux.agents.Jobs)."""
+
+    def table(self) -> list[dict]: ...
+
+    def kill(self, pid: int) -> None: ...             # raises OSError for a pid that isn't running
+
+
 class Reports(Protocol):
     """What a job's tools tell hallux about it (hallux.agents.Job provides it)."""
 
@@ -64,7 +73,7 @@ def run(op: Callable[[], Any]) -> dict[str, Any]:
 
 
 def build_tools(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon] = (),
-                events: Events | None = None) -> list[SdkMcpTool]:
+                events: Events | None = None, jobs: Processes | None = None) -> list[SdkMcpTool]:
     def make(name: str, description: str, input_schema: dict, method: Callable,
              annotations: ToolAnnotations | None = None) -> SdkMcpTool:
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
@@ -95,6 +104,10 @@ def build_tools(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon
             raise ValueError(f"the addon {name!r} has no events")
         events.listen(name, on)
         return {"listening": events.listening()}
+
+    def kill_process(pid: int) -> dict:
+        jobs.kill(pid)
+        return {"ok": True}
 
     block_mode = [] if fields is None else [
         make("save_field",
@@ -168,13 +181,25 @@ def build_tools(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon
              "Hear an addon's events from now on, for the rest of this boot: they arrive as "
              "<events>. on=false stops it. Returns the addons you listen to.",
              schema({"name": TEXT}, {"on": FLAG}), addon_listen),
+    ]) + ([] if jobs is None or not any(addon.agent for addon in addons) else [
+        make("list_processes",
+             "The machine's real background jobs, which addon functions started: pid, addon, "
+             "agent, state (running; waiting inside a tool call; done, failed or killed), "
+             "seconds, tokens, folder and a status line. For ps, top, htop and jobs. A job "
+             "that has ended is listed once.",
+             schema({}), lambda: {"jobs": jobs.table()}, READS),
+        make("kill_process",
+             "End a background job by its pid (kill). ESRCH: no job has that pid, or it has "
+             "ended already.",
+             schema({"pid": {"type": "integer"}}), kill_process),
     ])
 
 
 def build_server(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon] = (),
-                 events: Events | None = None) -> tuple[McpSdkServerConfig, list[str]]:
+                 events: Events | None = None, jobs: Processes | None = None
+                 ) -> tuple[McpSdkServerConfig, list[str]]:
     """The MCP server for ClaudeAgentOptions.mcp_servers, and the names for allowed_tools."""
-    tools = build_tools(disk, fields, addons, events)
+    tools = build_tools(disk, fields, addons, events, jobs)
     return create_sdk_mcp_server(SERVER, tools=tools), [f"mcp__{SERVER}__{t.name}" for t in tools]
 
 
@@ -191,13 +216,17 @@ def build_addon_tools(addon: Addon, disk: Disk | None = None,
     return [make(name, function) for name, function in addon.functions.items()]
 
 
-def build_addon_servers(addons: Sequence[Addon], disk: Disk | None = None
+def build_addon_servers(addons: Sequence[Addon], disk: Disk | None = None,
+                        spawn: Callable | None = None
                         ) -> tuple[dict[str, McpSdkServerConfig], list[str]]:
     """One MCP server per addon, so two addons can each have a play: the AI sees
-    mcp__music__play. Returns the servers by name, and the names for allowed_tools."""
+    mcp__music__play. Returns the servers by name, and the names for allowed_tools.
+    `spawn` is what starts a job, hallux.agents.Jobs.spawn: an addon with an agent gets it
+    tied to itself, so the job its function starts is one of its own agent's."""
     servers, allowed = {}, []
     for addon in addons:
-        tools = build_addon_tools(addon, disk)
+        own = None if spawn is None or addon.agent is None else functools.partial(spawn, addon)
+        tools = build_addon_tools(addon, disk, own)
         servers[addon.name] = create_sdk_mcp_server(addon.name, tools=tools)
         allowed += [f"mcp__{addon.name}__{t.name}" for t in tools]
     return servers, allowed

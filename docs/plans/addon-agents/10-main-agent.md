@@ -197,3 +197,100 @@ In `tests/test_panel_config.py`:
 
 In a test, a fake addon starts a job, the stand-in worker writes a file and ends, and the
 main session's next message starts with the job's event.
+
+## As built
+
+Built on 2026-10-06, on the branch `addon-agents`. 27 new tests, 1444 in all. Decided while
+building:
+
+**The one question**
+
+- **`Machine.due()` is the question:** the job events that may go out by themselves now.
+  The loop asks it before it reads the keyboard, and sends an `<events>` message if there
+  are any.
+- **`Machine.job_event_waits()` ends the prompt when the answer is yes.** `Jobs` calls it
+  when an event starts to wait, and `settle()` calls it at its end.
+- **A prompt that is read while nobody listens can't be ended at all,** as before. Nothing
+  can become due during it: who is listened to changes only inside an answer.
+
+**The messages**
+
+- **`send()` puts the block in front, and tells the events** when the answer has come
+  back. An `<events>` message hands it the job events it holds itself, and then gets no
+  block.
+- **The block in front has no attributes:** `<events>`, the events one per line,
+  `</events>`, a new line, then the message. The cwd, the time and the size are on the
+  message's own tag.
+- **An `<events>` message carries every job event that waits,** also one that couldn't
+  have gone out by itself, after the addons' own. Only the events it was sent for get
+  their mark.
+- **After Ctrl-C the block is made anew,** so a job that ended during the cut answer is in
+  front of the `interrupted="yes"` message too.
+- **A tick's body is `{"jobs": [...]}`,** the shape `list_processes` returns, and not the
+  bare rows. The AI then has one shape to know.
+- **Reading the table for a tick counts as seeing it:** a job that has ended is in one
+  tick, as it is in one `list_processes`.
+
+**The tools**
+
+- **`list_processes` returns `{"jobs": [...]}` and `kill_process(pid)` returns
+  `{"ok": true}`.** They stand last among Hallux's own tools. The bar's words for them come
+  with step 12; until then it says `list processes` and `kill process`.
+- **`build_addon_servers(addons, disk, spawn)`** takes `Jobs.spawn` and ties it to each
+  addon that has an agent. An addon without one gets none.
+
+**The start**
+
+- **`app.start_up(root, hardware, attached)`** sweeps and writes the agents' lines. It runs
+  before the two kinds of run part.
+- **An agent's line in the log:** `agent music.composer: claude-opus-5-5, effort high`, and
+  when it was capped `… effort high (it asked for max; agent_max_effort is high)`. The
+  model is the one the settings name at the start. A job gets the one that runs when it
+  starts.
+
+**The prompt**
+
+- **The section is titled JOBS.** Its two groups each begin with where they stand.
+- **Beyond the plan's table it says what an event's fields mean:** `files` are on the disk
+  now, `conflict` names files that somebody changed meanwhile, and after `failed` or
+  `killed` nothing the job wrote is on the disk. Without that the AI would have to guess
+  what `done` left behind.
+
+**The panel**
+
+- **`View.spent_jobs`** is what the jobs spent since their budget was filled. The row
+  `Budget, all jobs` shows it as `spent since you typed: $0.30`. The `~` comes in step 12.
+
+**Three old tests changed.** The stand-in for `build_addon_servers` in the addons' tests
+takes the third argument. The Config tab's test of the six rows has the new note. And the
+machine tests' `kinds()` names a message by its own tag: a job's end now stands in front of
+a message that one old test counted. The machine tests' fake model can also wait for
+something while it answers, such as a tool call.
+
+**The two tools' tests are in `tests/test_agents.py`,** where the jobs' test world is, and
+not in `tests/test_tools.py`. That `addon_listen` takes an addon with an agent and no
+`connect()` has been a test since step 6.
+
+**The lines of `machine.py`, `app.py` and `tests/test_machine.py` moved.** The references
+into them in steps 11, 12, 15 and 16 are set again.
+
+**The "Done when" is a test:** the fake AI calls the fake addon's `compose` through the
+tool the machine handed to the SDK, the stand-in worker writes a file and ends, and the
+next line's message starts with the job's event.
+
+**How I checked the tests themselves:** eight wrong versions of the event handling, one at
+a time: an event that may start many messages, the cap not asked, the event budget not
+asked, listening not asked, events never told, no block after Ctrl-C, `settle()` not asking
+again, a tick without the table. Each fails a test.
+
+**What I couldn't check**
+
+- **What a real model makes of it:** the block in front of a message, and the JOBS section.
+  No addon has an agent before step 13, where the first live run is.
+- **A real terminal.** A job's end ends the prompt through `interrupt_prompt`, the call an
+  addon's event makes, and nothing in `terminal.py` changed. I made no check on a
+  pseudo-terminal here; the plan has those for steps 11, 12, 15 and 16.
+- **The six rows on a real screen.** The tests draw them in a real panel on a pipe.
+
+**From this step on a machine can start a job,** if it has an addon with an agent. The
+music addon gets its agent in step 13.

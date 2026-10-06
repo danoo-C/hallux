@@ -900,12 +900,13 @@ def test_a_function_that_takes_the_disk_fails_loudly_without_one(folder, caplog)
 def test_a_machine_hands_its_own_disk_to_its_addons(lines, folder, world, monkeypatch):
     given = []
     monkeypatch.setattr("hallux.machine.build_addon_servers",
-                        lambda loaded, disk=None: given.append(disk) or
-                        tools.build_addon_servers(loaded, disk))
+                        lambda loaded, disk=None, spawn=None: given.append((disk, spawn)) or
+                        tools.build_addon_servers(loaded, disk, spawn))
     loaded, _ = addons.load(folder)
     machine = Machine(world, Hardware(), FakeTerminal(), addons=loaded)
     assert machine.options().allowed_tools[-2:] == ["mcp__lines__count_lines", "mcp__lines__save"]
-    assert given == [machine.disk]
+    assert given == [(machine.disk, machine.jobs.spawn)]    # and what starts a job, for those
+                                                            # of them that have an agent
 
 
 # ---------------------------------------------------------------- stop() hooks
@@ -1684,6 +1685,33 @@ def test_an_addon_with_an_agent_can_be_listened_to_without_connect(composer, fol
     assert [t.name for t in hallux_tools][-1] == "addon_listen"
     assert call_tool(hallux_tools, "addon_listen", name="music") == ({"listening": ["music"]}, False)
     assert call_tool(hallux_tools, "addon_listen", name="plain")[1] is True
+
+
+def test_an_addon_with_an_agent_gets_a_spawn_that_is_tied_to_it(folder, monkeypatch):
+    """What hallux hands in is Jobs.spawn, which takes the addon first. An addon function
+    calls spawn(brief, folder, edit), and the job is one of its own addon's agent."""
+    (folder / "music.py").write_text(agented())
+    (folder / "plain.py").write_text(fake())
+    [music, plain], _ = addons.load(folder)
+    given, calls, build = {}, [], tools.build_addon_tools
+
+    def kept(addon, disk=None, spawn=None):
+        given[addon.name] = spawn
+        return build(addon, disk, spawn)
+
+    def jobs_spawn(*args):
+        calls.append(args)
+        return 30001
+
+    monkeypatch.setattr(tools, "build_addon_tools", kept)
+    tools.build_addon_servers([music, plain], None, jobs_spawn)
+    assert given["plain"] is None                           # no agent: nothing to start
+    compose = {tool.name: tool for tool in build(music, None, given["music"])}["compose"]
+    answer = asyncio.run(compose.handler({"request": "a song", "folder": "/home/user/Music"}))
+    assert json.loads(answer["content"][0]["text"]) == {"pid": 30001}
+    assert calls == [(music, "a song", "/home/user/Music", [])]
+    tools.build_addon_servers([music, plain])               # without a spawn: nobody gets one
+    assert given == {"music": None, "plain": None}
 
 
 def test_the_ai_never_sees_spawn_and_cant_pass_one(composer):

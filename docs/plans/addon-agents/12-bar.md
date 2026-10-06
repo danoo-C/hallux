@@ -84,7 +84,7 @@ something is printed. A job's time and tokens change while the user sits at the 
   (`hallux/script.py:128-130`), and a job's cost would land on whatever that was. So the
   bar's cost that the scripted terminal is told stays the main session's.
 - **`run_script` gives the jobs' numbers back with the records.** Today it returns the
-  records alone, and `app.py` makes the summary from them (`hallux/app.py:123-130`).
+  records alone, and `app.py` makes the summary from them (`hallux/app.py:145-152`).
 
 ## Tests
 

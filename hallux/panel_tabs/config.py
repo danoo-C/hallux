@@ -154,6 +154,8 @@ def note(name: str, view: View) -> str:
         parts.append(f"spent by this program: ${view.spent_ticks:.2f}")
     elif name == "event_budget_usd":
         parts.append(f"spent since you typed: ${view.spent_events:.2f}")
+    elif name == "agent_budget_usd":
+        parts.append(f"spent since you typed: ${view.spent_jobs:.2f}")
     if name in view.paused:
         parts.append(f"{parts.pop()} (paused)" if parts else "(paused)")
     if name in view.from_flags:

@@ -133,11 +133,93 @@ def test_the_agents_rows_as_they_are_shown():
     Max agent effort   high
     Agents at once     2
     Budget per job     $1.00
-    Budget, all jobs   $2.00
+    Budget, all jobs   $2.00               spent since you typed: $0.00
     Time per job       600s"""
     shown = {line[4:23].strip(): line[23:].strip() for line in text(machine).splitlines()}
     assert [shown[LABELS[name]] for name in AGENTS] == [
-        "claude-haiku-4-5", "xhigh", "3", "$0.125", "$4.00", "90.5s"]
+        "claude-haiku-4-5", "xhigh", "3", "$0.125",
+        "$4.00               spent since you typed: $0.00", "90.5s"]
+
+
+def test_the_budget_for_all_jobs_shows_what_was_spent_since_it_was_filled():
+    machine = MachineWithAnAgent(spent_jobs=0.3)
+
+    async def script(press, panel):
+        before = drawn(panel)
+        machine.shown["spent_jobs"] = 0.61                  # a job ends while the panel is open
+        await press(DOWN)
+        return before, drawn(panel)
+
+    before, after = on(machine, script)
+    assert any(line.rstrip().endswith("Budget, all jobs   $2.00               "
+                                      "spent since you typed: $0.30") for line in before)
+    assert any("spent since you typed: $0.61" in line for line in after)
+    assert "spent since you typed: $0.30" not in text(Machine(spent_jobs=0.3))   # no agent, no row
+
+
+@pytest.mark.parametrize("has_agent", [True, False])
+def test_the_panel_the_app_builds_shows_the_six_rows_only_with_an_agent(tmp_path, monkeypatch,
+                                                                       has_agent):
+    """app.py tells the tab whether one of the attached addons has an agent."""
+    import sys
+
+    from test_addons import agented, fake
+
+    from hallux import addons, app, machine, terminal
+    given = {}
+
+    class Recorded(Machine):                                # this file's stand-in, made as
+        def __init__(self, root, hardware, terminal, **more):    # the app makes a machine
+            super().__init__(hardware)
+
+        async def run(self):
+            pass
+
+    class Keyboard:
+        power_cut = count_ctrl_c = staticmethod(lambda: None)
+
+        def __init__(self, bar, **more):
+            pass
+
+        def set_panel(self, panel):
+            given["panel"] = panel
+
+    class Tty:
+        isatty, write, flush = (lambda self: True), (lambda self, text: None), (lambda self: None)
+
+    folder = tmp_path / "addons"
+    folder.mkdir()
+    (folder / "music.py").write_text(agented() if has_agent else fake())
+    (tmp_path / "world").mkdir()
+    monkeypatch.setattr(app, "ADDONS_FOLDER", folder)
+    monkeypatch.setattr(machine, "Machine", Recorded)
+    monkeypatch.setattr(terminal, "Terminal", Keyboard)
+    monkeypatch.setattr(sys, "stdin", Tty())
+    monkeypatch.setattr(sys, "stdout", Tty())
+    monkeypatch.setattr(sys, "argv", ["hallux", str(tmp_path / "world")])
+    try:
+        app.main()
+    finally:
+        for handler in list(app.log.handlers):              # main() logs into the world's folder
+            app.log.removeHandler(handler)
+            handler.close()
+        for name in [name for name in sys.modules if name.startswith(addons.MODULE_PREFIX)]:
+            del sys.modules[name]
+    panel = given["panel"]
+    tab = panel.tabs[0]
+
+    async def script(press):
+        before = "\n".join(drawn(panel))
+        if has_agent:
+            await press(to("agent_max_running", agents=True) + ENTER + "3" + ENTER)
+        return before, "\n".join(drawn(panel))
+
+    before, after = session(panel, script)
+    assert tab.agents is has_agent
+    assert all((LABELS[name] in before) is has_agent for name in AGENTS)
+    if has_agent:                                           # and one of them can be changed
+        assert "Agents at once     2" in before and "Agents at once     3" in after
+        assert tab.view().hardware.agent_max_running == 3
 
 
 @pytest.mark.parametrize("name, opens_with, how, offered", [
