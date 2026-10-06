@@ -57,6 +57,7 @@ IN_PLACE = {("tab",): "Tab", ("c-l",): "C-l", ("c-r",): "C-r", ("c-s",): "C-s",
             ("c-x",): "C-x", ("escape", "."): "M-.",
             **{(f"f{n}",): f"F{n}" for n in range(1, 13)}}
 CTRL_C_PRESSES, CTRL_C_WINDOW = 3, 1.0          # this many Ctrl-C within a second: hard exit
+BEAT_SECONDS = 1.0                              # how often a running job's time is drawn again
 RESTORE_TERMINAL = ("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"   # mouse reporting off
                     "\x1b[?2004l\x1b[?1049l"                        # paste mode, main screen
                     "\x1b[0m\x1b[?25h")                             # plain colors, cursor on
@@ -100,6 +101,7 @@ class Terminal:
         self.kept: list[str] | None = None               # during a visit: what was written
         self.over_prompt = False                         # the visit began at the shell prompt,
         self.event_waits = False                         # and an event asked the prompt to end
+        self.beat: asyncio.Task | None = None            # draws again while a job runs
 
         prompt_output = self._prompt_output()
         self.session: PromptSession = PromptSession(
@@ -129,6 +131,8 @@ class Terminal:
                 asyncio.get_running_loop().add_signal_handler(signal.SIGWINCH, self._check_size)
 
     def stop(self) -> None:
+        if self.beat is not None:
+            self.beat.cancel()
         self.raw.close()
         if self.pinned:
             self._write(statusbar.uninstall(self.output.get_size().rows))
@@ -296,7 +300,7 @@ class Terminal:
                 animation.cancel()
                 if self.bar:                             # the bar stops when the answer ends,
                     self.bar.update(busy=False)          # not when the panel closes
-                    self._refresh()
+                    self.refresh()
                 # The answer isn't over until a visit to the panel is: the panel's app has
                 # the keyboard, and it has to give it back to the reader above before that
                 # reader lets go. All that follows an answer waits here with it.
@@ -309,14 +313,32 @@ class Terminal:
     def set_status(self, **changes: object) -> None:
         if self.bar:
             self.bar.update(**changes)
-            self._refresh()
+            self.refresh()
+            if self.bar.status.jobs and self.beat is None:
+                with contextlib.suppress(RuntimeError):  # no loop runs: nothing draws
+                    self.beat = asyncio.get_running_loop().create_task(self._beat())
 
     async def _animate(self) -> None:
         while True:
             await asyncio.sleep(statusbar.FRAME_SECONDS)
-            self._refresh()
+            self.refresh()
 
-    def _refresh(self) -> None:
+    async def _beat(self) -> None:
+        """Once a second while a job runs: its time on the bar moves, also while the prompt
+        waits and nothing else is drawn. With no job nothing is drawn, as before. While the
+        AI works the bar's light draws it many times a second already."""
+        try:
+            while self.bar.status.jobs:
+                await asyncio.sleep(BEAT_SECONDS)
+                if self.bar.status.jobs and not self.bar.status.busy:
+                    self.refresh()
+        finally:
+            self.beat = None
+
+    def refresh(self) -> None:
+        """Draw hallux's own part of the screen again, wherever it is now: the bar at the
+        shell, block mode's screen in a full-screen program, the panel while one is open at
+        the shell."""
         if self.block.active:
             self.block.invalidate()
         elif self.kept is not None:                      # the bar is the panel's last row now

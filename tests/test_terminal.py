@@ -769,3 +769,71 @@ def test_in_a_program_the_end_of_an_answer_waits_for_the_panel():
     waiting, closed, ended = with_panel(script)
     assert waiting == (True, True, [])                   # a layer, and busy() hasn't ended
     assert closed == (False, False, None) and ended == ["the answer is over"]
+
+
+# --- the bar while a job of an addon's agent runs ---------------------------------------------
+
+def test_the_bar_is_drawn_again_while_a_job_runs_and_the_prompt_waits(monkeypatch):
+    """A job's time moves while the user sits at the prompt, where nothing else draws. A
+    terminal on a pipe pins no bar and writes none, so the test pins it by hand."""
+    import time
+
+    from hallux import terminal as terminal_module
+    from hallux.statusbar import Running
+    monkeypatch.setattr(terminal_module, "BEAT_SECONDS", 0.1)       # a second, in the real thing
+    bar = StatusBar("claude-opus-5-5", "low")
+
+    async def script(terminal, type_keys, panel, written):
+        terminal.pinned = terminal.output.get_size()     # as on a real terminal: 40 rows
+        reading = asyncio.create_task(terminal.read_line("$ "))
+        type_keys("ls -l")
+        await typed_in(terminal, "ls -l")
+        del written[:]
+        await asyncio.sleep(0.35)
+        without_a_job = list(written)                    # nothing is drawn, as before
+        terminal.set_status(jobs=(Running("music", "composing", time.monotonic() - 47.5, 21340),))
+        del written[:]                                   # the draw of the change itself
+        await asyncio.sleep(0.45)
+        with_one, line = list(written), terminal.session.app.current_buffer.text
+        beating = terminal.beat is not None
+        terminal.set_status(jobs=())                     # it has ended
+        await asyncio.sleep(0.25)
+        del written[:]
+        await asyncio.sleep(0.35)
+        type_keys("a\r")
+        return without_a_job, with_one, line, beating, list(written), terminal.beat, await reading
+
+    without_a_job, with_one, line, beating, after, beat, read = with_panel(script, bar=bar)
+    assert without_a_job == []
+    assert 3 <= len(with_one) <= 5 and beating           # once a beat, and no more often
+    assert all(draw.startswith("\x1b7\x1b[1;39r\x1b[40;1H") and draw.endswith("\x1b8")
+               for draw in with_one)                     # the bar's row, and the cursor back
+    assert all("music: composing · 0:4" in draw and "21k tok" in draw for draw in with_one)
+    assert line == "ls -l" and read == "ls -la"          # what was typed is still the line
+    assert after == [] and beat is None                  # no job: nothing is drawn again
+
+
+def test_the_beat_draws_the_panel_and_a_full_screen_program_too():
+    """Drawing again goes through one function, which draws whatever is hallux's own on the
+    screen now: the panel's tabs (step 16) show the jobs' times."""
+    bar, drawn = StatusBar("claude-opus-5-5", "low"), []
+
+    async def script(terminal, type_keys, panel, written):
+        terminal.pinned = terminal.output.get_size()
+        panel.invalidate = lambda: drawn.append("panel")
+        terminal.block.invalidate = lambda: drawn.append("program")
+        async with terminal.busy(lambda: None):
+            type_keys(CTRL_F12)
+            await asyncio.sleep(0.3)
+            del drawn[:], written[:]
+            terminal.refresh()
+            at_the_panel = list(drawn), list(written)
+            type_keys(ESC)
+            await asyncio.sleep(0.3)
+        del drawn[:], written[:]
+        terminal.refresh()
+        return at_the_panel, (list(drawn), len(written))
+
+    at_the_panel, at_the_shell = with_panel(script, bar=bar)
+    assert at_the_panel == (["panel"], [])               # the bar is the panel's last row then
+    assert at_the_shell == ([], 1)                       # and at the shell it is the bar itself

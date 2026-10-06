@@ -154,3 +154,110 @@ def test_a_scripted_run_halts_at_its_cap_in_a_full_screen_program(tmp_path, caps
     assert "GNU nano 7.2" in terminal.records[1].output                  # its screen is recorded
     assert terminal.lines == ["@action C-x", "ls"] and len(model.sessions[0]) == 2
     assert capsys.readouterr().err.count("budget used") == 1
+
+
+# --- the jobs of the addons' agents in a scripted run --------------------------------------
+
+import pytest  # noqa: E402
+from test_agents import MUSIC, StandIn  # noqa: E402
+from test_machine import PLAYER, PLAYS, block, kinds, served  # noqa: E402,F401
+
+from hallux import addons  # noqa: E402
+from hallux.addons import Events  # noqa: E402
+from hallux.script import JobsRun, run_script, summary  # noqa: E402
+
+HALT = screen("", prompt="", tail="<halt/>")
+
+
+def scripted(tmp_path, served, lines, answers, ends_after=None, hear=()):
+    """Run these lines with run_script(). The AI calls the fake addon's compose while it
+    answers the first line; the job's stand-in worker ends well `ends_after` seconds after
+    it was made, or never. From its boot on the AI listens to the addons in `hear`.
+    Returns what run_script returns, the transcript and the fake model."""
+    def compose(spawn, request: str, folder: str) -> dict:
+        """Have the composer write a song."""
+        return {"pid": spawn(request, folder)}
+
+    studio = addons.Addon("music", "A sound card.", "the manual", {"compose": compose},
+                          has_events=True, agent=MUSIC.agent)
+    gate, hub = asyncio.Event(), Events()
+
+    async def the_ai_calls_compose():
+        await served["music"]["compose"].handler({"request": "a song", "folder": "/tmp"})
+
+    def worker(job):
+        if ends_after is not None:
+            asyncio.get_running_loop().call_later(ends_after, gate.set)
+        return StandIn(job, (("wait", gate),))          # it costs $0.21 when it ends well
+
+    first, *rest = answers
+    model = FakeModel([lambda: [hub.listen(name) for name in hear]]
+                      + result(screen("boot\n"), total=0.05),
+                      [the_ai_calls_compose] + result(first, total=0.05),
+                      *[result(answer, total=0.05) for answer in rest], result(HALT, total=0.05))
+    echoed = []
+    records, jobs = asyncio.run(asyncio.wait_for(run_script(
+        tmp_path, Hardware(), lines, echoed.append, addons=[studio], events=hub,
+        client_factory=model, worker_factory=worker), 20))
+    return records, jobs, "".join(echoed), model
+
+
+def test_wait_jobs_holds_a_script_until_the_job_ends_and_no_longer(tmp_path, served):
+    records, jobs, transcript, model = scripted(
+        tmp_path, served, ["compose", "@wait jobs 5", "ls"],
+        [screen("[1] 30001\n"), screen("[1]+  Done\nnotes.md\n")], ends_after=0.3)
+    assert [record.typed for record in records] == ["(boot)", "compose", "@wait jobs 5", "ls",
+                                                    "@key C-d"]
+    waited = records[2]
+    assert 0.25 < waited.seconds < 2 and waited.output == ""        # not its five seconds
+    assert "user@hallux:~$ [@wait jobs 5]\n" in transcript and "still running" not in transcript
+    done = ('{"event": "job", "pid": 30001, "agent": "composer", "state": "done", "files": [], '
+            '"seconds": 0}')
+    assert model.sessions[0][2].startswith(block(("music", done)) + "<input ")    # the next line
+    assert jobs == JobsRun(count=1, cost=0.21)
+    assert [round(record.cost, 2) for record in records] == [0.05, 0, 0, 0, 0]   # in no line
+
+
+def test_wait_jobs_gives_up_after_its_seconds_and_the_transcript_says_so(tmp_path, served):
+    records, jobs, transcript, model = scripted(
+        tmp_path, served, ["compose", "@wait jobs 0.2", "ls"],
+        [screen("[1] 30001\n"), screen("notes.md\n")])              # the job never ends
+    waited = records[2]
+    assert 0.2 <= waited.seconds < 2
+    assert waited.output == "[1 job still running after 0.2 s]\n" and waited.output in transcript
+    assert model.sessions[0][2].startswith("<input ")               # nothing has ended
+    assert jobs == JobsRun(count=1, cost=0.07)          # the halt killed it, and it is counted
+
+
+def test_after_a_wait_a_listening_ai_hears_of_the_job_before_the_next_line(tmp_path, served):
+    records, jobs, transcript, model = scripted(
+        tmp_path, served, ["compose", "@wait jobs", "ls"],          # as long as it takes
+        [screen("[1] 30001\n"), screen("[1]+  Done\n"), screen("notes.md\n")],
+        ends_after=0.2, hear=["music"])
+    assert kinds(model) == ["boot", "input", "events", "input", "key"]
+    assert records[2].typed == "@wait jobs" and records[2].output == "[1]+  Done\n"
+    assert model.sessions[0][3].startswith("<input ") and jobs.cost == 0.21
+
+
+def test_a_wait_in_a_full_screen_program_wakes_it_when_the_job_has_ended(tmp_path, served):
+    records, jobs, transcript, model = scripted(
+        tmp_path, served, ["player", "@wait jobs 5", "@action q"],
+        [PLAYER, PLAYS, screen("stopped\n")], ends_after=0.2, hear=["music"])
+    assert kinds(model) == ["boot", "input", "events", "action", "key"]
+    assert "playing night.score" in transcript and "[@wait jobs 5]\n" in transcript
+
+
+@pytest.mark.parametrize("jobs, shown", [
+    (JobsRun(), "5 round trips, 3s, $0.12"),            # no job: as it always was
+    (JobsRun(1, 0.21), "5 round trips, 3s, $0.33 (1 job: $0.21)"),
+    (JobsRun(2, 1.3), "5 round trips, 3s, $1.42 (2 jobs: $1.30)"),
+    (JobsRun(1, 0.0), "5 round trips, 3s, $0.12 (1 job: $0.00)"),
+])
+def test_the_summary_counts_the_jobs_and_their_cost(jobs, shown):
+    from hallux.script import Record
+    records = [Record("(boot)", seconds=1.0, cost=0.05), Record("compose", cost=0.04),
+               Record("@wait jobs 180", seconds=2.0), Record("ls", cost=0.03),
+               Record("(reboot)", seconds=0.2), Record("@key C-d")]
+    line = summary(records, Hardware(), jobs)
+    assert line.startswith("opus 5.5 · low — boot 1.0s (0 tool calls), reboot 0.2s (0 tool calls)")
+    assert line.endswith(f" — {shown}") and summary(records, Hardware()).endswith("$0.12")

@@ -690,7 +690,7 @@ def started(folder, world, monkeypatch, capsys):
 
     async def run_script(root, hardware, lines, echo, addons=(), events=None):
         given.update(root=root, lines=lines, addons=addons, events=events)
-        return []
+        return [], script.JobsRun()                     # the records, and the jobs' numbers
 
     def start():
         (world.parent / "cmds.txt").write_text("ls\n")

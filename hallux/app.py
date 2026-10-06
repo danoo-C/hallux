@@ -142,14 +142,14 @@ def _headless(root: Path, hardware: Hardware, flags: argparse.Namespace,
     else:
         lines = flags.script.read_text(encoding="utf-8").splitlines()
     try:
-        records = asyncio.run(run_script(root, hardware, lines,
-                                         echo=lambda text: print(text, end="", flush=True),
-                                         addons=attached, events=events))
+        records, jobs = asyncio.run(run_script(
+            root, hardware, lines, echo=lambda text: print(text, end="", flush=True),
+            addons=attached, events=events))
     except Exception as e:
         log.exception("crash")
         print(f"hallux: {e}", file=sys.stderr)
         return 1
-    print(f"\n── {summary(records, hardware)}", file=sys.stderr)
+    print(f"\n── {summary(records, hardware, jobs)}", file=sys.stderr)
     if not flags.check:
         return 0
     report, passed = reboot_report(records)

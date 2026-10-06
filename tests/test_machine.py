@@ -2460,3 +2460,28 @@ def test_the_section_on_jobs_says_that_a_jobs_end_can_wake_a_program():
             "key.") in real
     assert "only a key or a click wakes you" in SYSTEM_PROMPT       # what RAW MODE says of it
     assert "a full-screen program answers\n  as it would to a tick, with a patch" in shows
+
+
+# --- the jobs on hallux's status bar --------------------------------------------------------
+
+def test_the_bar_is_told_which_jobs_run_and_what_the_ended_ones_cost(tmp_path):
+    import time
+
+    from hallux.statusbar import StatusBar
+    bench, gate = Bench(tmp_path, FakeModel(screen(""), screen(""), HALT)), asyncio.Event()
+    script = (("status", "balancing the mix"), ("tokens", 21340), ("wait", gate), ("end", CHEAP))
+    bench.run(bench.start(script=script), Pause(lambda: bench.jobs._live[30001].tokens),
+              gate.set, bench.settled(), "ls", EOFError)
+    told = [status for status in bench.terminal.statuses if "jobs" in status]
+    assert [([(job.addon, job.status, job.tokens) for job in status["jobs"]],
+             status["jobs_cost"]) for status in told] == [
+        ([("music", "composing…", 0)], 0.0),                # it started,
+        ([("music", "balancing the mix", 0)], 0.0),         # set its status,
+        ([("music", "balancing the mix", 21340)], 0.0),     # read and wrote,
+        ([], 0.3)]                                          # and ended: the total grows
+    assert 0 <= time.monotonic() - told[0]["jobs"][0].began < 20    # on the bar's own clock
+    costs = [status["cost"] for status in bench.terminal.statuses if "cost" in status]
+    assert max(costs) == pytest.approx(0.001)               # the session's sum stays its own
+    bar = StatusBar("claude-opus-5-5", "low")
+    bar.update(cost=costs[-1], **told[-1])
+    assert "".join(text for _, text in bar.segments(100)).endswith("opus 5.5 · low · ~$0.30 ")

@@ -27,7 +27,7 @@ that is step 15. It needs nothing of the agents.
 - **Why not `kept_forms()`.** Two things of the terminal are called "kept" since the
   panel, and neither is this: `keep_form()` lets a program go on without an answer, and
   `Terminal.kept` is the text that is held back while the panel is open
-  (`hallux/terminal.py:100`).
+  (`hallux/terminal.py:101`).
 
 **What is kept,** all of it by block mode:
 

@@ -126,19 +126,19 @@ def test_the_agents_rows_as_they_are_shown():
     assert text(MachineWithAnAgent()).split("\n\n")[1] == """\
   Changes now
     Model              claude-opus-5-5
-    Budget per boot    none                spent in this boot: $0.00
+    Budget per boot    none                spent in this boot: ~$0.00
     Tick budget        $0.25
-    Event budget       $0.25               spent since you typed: $0.00
+    Event budget       $0.25               spent since you typed: ~$0.00
     Agent model        same as Model
     Max agent effort   high
     Agents at once     2
     Budget per job     $1.00
-    Budget, all jobs   $2.00               spent since you typed: $0.00
+    Budget, all jobs   $2.00               spent since you typed: ~$0.00
     Time per job       600s"""
     shown = {line[4:23].strip(): line[23:].strip() for line in text(machine).splitlines()}
     assert [shown[LABELS[name]] for name in AGENTS] == [
         "claude-haiku-4-5", "xhigh", "3", "$0.125",
-        "$4.00               spent since you typed: $0.00", "90.5s"]
+        "$4.00               spent since you typed: ~$0.00", "90.5s"]
 
 
 def test_the_budget_for_all_jobs_shows_what_was_spent_since_it_was_filled():
@@ -152,9 +152,26 @@ def test_the_budget_for_all_jobs_shows_what_was_spent_since_it_was_filled():
 
     before, after = on(machine, script)
     assert any(line.rstrip().endswith("Budget, all jobs   $2.00               "
-                                      "spent since you typed: $0.30") for line in before)
-    assert any("spent since you typed: $0.61" in line for line in after)
-    assert "spent since you typed: $0.30" not in text(Machine(spent_jobs=0.3))   # no agent, no row
+                                      "spent since you typed: ~$0.30") for line in before)
+    assert any("spent since you typed: ~$0.61" in line for line in after)
+    assert "spent since you typed: ~$0.30" not in text(Machine(spent_jobs=0.3))   # no agent, no row
+
+
+def test_what_was_spent_has_the_tilde_and_a_limit_has_none():
+    """What was spent is what the tokens would cost at list prices, like the bar's cost. A
+    limit is a number the user typed."""
+    machine = MachineWithAnAgent(Hardware(max_budget_usd=2.0), spent_boot=1.42, spent_ticks=0.05,
+                                 spent_events=0.1, spent_jobs=0.3)
+    shown = text(machine)
+    rows = {line[4:23].strip(): line[23:].rstrip() for line in shown.splitlines()}
+    for label, limit, spent in (("Budget per boot", "$2.00", "spent in this boot: ~$1.42"),
+                                ("Tick budget", "$0.25", "spent by this program: ~$0.05"),
+                                ("Event budget", "$0.25", "spent since you typed: ~$0.10"),
+                                ("Budget, all jobs", "$2.00", "spent since you typed: ~$0.30")):
+        assert rows[label].startswith(f"{limit} ") and rows[label].endswith(spent)
+    assert rows["Budget per job"] == "$1.00" and shown.count("~$") == 4
+    machine.shown["spent_since_refill"] = 0.1
+    assert "spent since the refill: ~$0.10 · this boot: ~$1.42" in text(machine)
 
 
 @pytest.mark.parametrize("has_agent", [True, False])
@@ -305,9 +322,9 @@ def test_the_text_of_the_tab():
 
   Changes now
     Model              claude-opus-5-5
-    Budget per boot    $2.00               spent in this boot: $1.42
-    Tick budget        $0.25               spent by this program: $0.25 (paused)
-    Event budget       $0.25               spent since you typed: $0.00
+    Budget per boot    $2.00               spent in this boot: ~$1.42
+    Tick budget        $0.25               spent by this program: ~$0.25 (paused)
+    Event budget       $0.25               spent since you typed: ~$0.00
 
   Changes at the machine's next reboot
     Effort             high                running now: low
@@ -334,9 +351,9 @@ def test_values_and_notes_as_the_rows_show_them():
     assert shown["Model"] == ("claude-sonnet-5-5   running now: claude-haiku-4-5 · "
                               "from --model, for this run")
     assert shown["Effort"] == "max                 running now: none · from --effort, for this run"
-    assert shown["Budget per boot"] == "none                spent in this boot: $0.00 (paused)"
+    assert shown["Budget per boot"] == "none                spent in this boot: ~$0.00 (paused)"
     assert shown["Tick budget"] == "$0.125"                 # no program on screen: no note
-    assert shown["Event budget"] == "$0.00               spent since you typed: $0.10 (paused)"
+    assert shown["Event budget"] == "$0.00               spent since you typed: ~$0.10 (paused)"
     assert shown["Fallback model"] == "claude-haiku-4-5"
     assert (shown["Status bar"], shown["Addons"], shown["Transcripts"], shown["OS sandbox"]) == (
         "off", "none", "on", "on")
@@ -346,9 +363,9 @@ def test_values_and_notes_as_the_rows_show_them():
 
 def test_the_budget_per_boot_has_both_numbers_after_a_refill():
     machine = Machine(Hardware(max_budget_usd=2.0), spent_boot=1.52)
-    assert "spent in this boot: $1.52" in text(machine)
+    assert "spent in this boot: ~$1.52" in text(machine)
     machine.shown["spent_since_refill"] = 0.10
-    assert "spent since the refill: $0.10 · this boot: $1.52" in text(machine)
+    assert "spent since the refill: ~$0.10 · this boot: ~$1.52" in text(machine)
     assert "spent in this boot" not in text(machine)
 
 
@@ -643,7 +660,7 @@ def test_what_is_shown_is_read_at_every_redraw():
         await asyncio.sleep(0.05)
         return drawn(panel)
 
-    assert any("spent since you typed: $0.07" in line for line in on(machine, script))
+    assert any("spent since you typed: ~$0.07" in line for line in on(machine, script))
 
 
 def test_opened_again_the_tab_starts_fresh():

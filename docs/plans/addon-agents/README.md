@@ -1,6 +1,6 @@
 # Plan: addon agents
 
-**Status:** written on 2026-10-04. **Steps 1 to 11 are built,** the first seven on
+**Status:** written on 2026-10-04. **Steps 1 to 12 are built,** the first seven on
 2026-10-05; the table under [The steps](#the-steps) says how far the build is. The design
 it follows is
 [addon-agents.md](../../addon-agents.md), in which no question is open. The decisions this
@@ -225,7 +225,7 @@ step of the config panel's plan.
 | 9. A job's real session | [09-session.md](09-session.md) | 6, 7 | Built on 2026-10-06 |
 | 10. The main agent's side | [10-main-agent.md](10-main-agent.md) | 8, 9, panel 5 | Built on 2026-10-06 |
 | 11. A job's end in a full-screen program | [11-wake.md](11-wake.md) | 10, panel 3 and 7 | Built on 2026-10-06 |
-| 12. The status bar and the costs | [12-bar.md](12-bar.md) | 10 | Not built |
+| 12. The status bar and the costs | [12-bar.md](12-bar.md) | 10 | Built on 2026-10-06 |
 | 13. The composer | [13-composer.md](13-composer.md) | 2, 11, 12 | Not built |
 | 14. Keeping a screen | [14-kept-screens.md](14-kept-screens.md) | | Not built |
 | 15. Job control | [15-job-control.md](15-job-control.md) | 10, 14 | Not built |

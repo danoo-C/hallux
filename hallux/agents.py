@@ -501,6 +501,19 @@ class Jobs:
     def _line(self, job: Job, kind: str, text: str) -> None:
         job.activity.append(Line(self.clock() - job.began, kind, clean(text, LINE_MAX)))
 
+    # ------------------------------------------------------------------ what hallux itself shows
+
+    def running(self) -> list[Job]:
+        """The jobs that haven't ended, oldest first: for the bar, and for a script that
+        waits for them."""
+        with self._lock:
+            return [job for job in self._live.values() if job.state not in ENDED]
+
+    @property
+    def started(self) -> int:
+        """How many jobs were started since hallux started."""
+        return self._next - FIRST_PID
+
     # ------------------------------------------------------------------ what the main agent gets
 
     def table(self) -> list[dict]:

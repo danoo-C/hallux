@@ -33,7 +33,7 @@ from hallux.passwords import Passwords
 from hallux.protocol import (
     Action, Field, Form, Reply, ScreenStream, Secret, envelope, json_body, parse, resolve,
 )
-from hallux.statusbar import PANEL_KEY, describe
+from hallux.statusbar import PANEL_KEY, Running, describe
 from hallux.tools import SERVER, build_addon_servers, build_server
 
 log = logging.getLogger("hallux")
@@ -159,6 +159,7 @@ class Machine:
         self.stream: ScreenStream | None = None  # what the last answer showed while written
         self.wake: Callable[[], None] | None = None     # ends the shell prompt, while one that
                                                  # an event may end is being read
+        self.jobs_shown: tuple = ((), 0.0)       # what the bar was last told of the jobs
         # The jobs of the addons' agents (hallux.agents). They read the settings as they are,
         # ask whether the boot is over its budget, and say when one of them reports or ends.
         # A job's worker is a Claude session of its own, unless a test hands in a stand-in.
@@ -474,11 +475,23 @@ class Machine:
         return cap is not None and self.boot_spent() - self.refilled_at >= cap
 
     def job_reported(self) -> None:
-        """A job reported or ended. Its cost can take the boot over its cap while the machine
-        sits at the prompt, where nothing else would ask: the bar says so at once, and not
-        after the next line was typed into it."""
+        """A job reported or ended: the bar shows the jobs that run, and what those that have
+        ended cost. That cost can take the boot over its cap while the machine sits at the
+        prompt, where nothing else would ask: the bar says so at once, and not after the next
+        line was typed into it."""
+        self.show_jobs()
         if self.over_budget():
             self.hold()
+
+    def show_jobs(self) -> None:
+        """Tell the bar which jobs run, and the jobs' sum. The sum goes beside the main
+        session's and not into it: a scripted run books every rise of the session's cost to
+        the line that was typed last, and a job's cost would land on whatever that was."""
+        shown = (tuple(Running(job.addon.name, job.status, job.began, job.tokens)
+                       for job in self.jobs.running()), self.jobs.spent)
+        if shown != self.jobs_shown:
+            self.jobs_shown = shown
+            self.terminal.set_status(jobs=shown[0], jobs_cost=shown[1])
 
     def ticks_used_up(self) -> bool:
         """The program run has spent its tick budget. No tick goes to the AI, and every other

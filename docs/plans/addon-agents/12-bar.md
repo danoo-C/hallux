@@ -129,3 +129,86 @@ was of this kind, and no test on a pipe saw it.
 
 The tests pass, the check on the pseudo-terminal holds, and a scripted run with a stand-in
 job waits for it and reports its cost.
+
+## As built
+
+Built on 2026-10-06, on the branch `addon-agents`. 24 new tests, 1489 in all. Decided while
+building:
+
+**The bar**
+
+- **The bar is told two things about the jobs:** `jobs`, the ones that run, and
+  `jobs_cost`, what the ended ones cost. The machine tells it whenever a job reports or
+  ends, and only when something changed (`Machine.show_jobs()`).
+- **A running job on the bar is a `Running`:** the addon, the status line, when it began
+  and its tokens. The bar works out the time itself at every draw, so it moves between two
+  reports.
+- **How the numbers are written:** `0:48`, and past an hour the minutes run on, `62:05`.
+  Tokens are `900 tok`, `21k tok`, `1.2M tok`.
+- **While the AI works, its activity is what is cut,** and `· 1 job` stays.
+- **The cost is the main session's sum plus the jobs' sum,** added on the bar. The machine
+  keeps telling the session's sum by itself, as before, which is what the scripted
+  terminal books to its lines.
+- **With the `~` the bar's right side is one character longer.** The idle hint loses its
+  parts one column earlier.
+
+**The beat**
+
+- **`Terminal.refresh()`** is the one function that draws again; it was `_refresh`.
+- **The beat is a task of the terminal,** once a second. It starts when the bar is told of
+  a running job and ends by itself when none runs. While the AI works it draws nothing:
+  the bar's light draws the bar many times a second then.
+
+**Scripts**
+
+- **`@wait jobs` without seconds waits as long as a job runs.** The jobs' own timeout
+  bounds that.
+- **After a wait the machine looks for what ended.** The scripted terminal hands the
+  prompt back as interrupted, or a `wake` in a full-screen program. So a listening AI hears
+  of the job by itself before the next line, and otherwise the event is in front of that
+  line. Step 10 asked for both.
+- **A wait is a record in the transcript,** with its seconds, the line `[1 job still
+  running after 180 s]` when it gave up, and the output of an `<events>` message that
+  follows it. It is no round trip in the summary.
+- **`run_script()` returns the records and a `JobsRun`:** how many jobs were started, and
+  what they cost. The summary ends `…, $0.33 (1 job: $0.21)`.
+- **The summary keeps its plain `$`.** The plan gives the `~` to the bar, the Agents tab
+  and the Config tab's notes.
+- **`Jobs.running()` and `Jobs.started`** are new: the jobs that haven't ended, and how
+  many were started.
+
+**Old tests that changed, all with the behaviour:** four of the bar's pin the cost, now
+with the `~`, and one of them its widths, each a column more. The Config tab's tests of
+what was spent have the `~` in sixteen places. The stand-in for `run_script` in the
+addons' tests returns the two things.
+
+**How I checked the tests themselves:** ten wrong versions, one at a time: a beat that
+never starts, a beat that draws with no job, a bar that isn't told of the jobs, the jobs'
+cost put into the session's sum, a long job line cut from its end, `listening` before a
+job, a wait that doesn't wait, a wait that never gives up, a summary without the jobs'
+cost, no look after a wait. Each fails a test.
+
+**The check on a pseudo-terminal, before the user tries it.** The real machine with the
+real terminal, its bar and its panel, on a pseudo-terminal of 24 rows and 80 columns, with
+a pretend model and a stand-in worker that works for seven seconds. The bytes were
+replayed through a terminal emulator (`pyte`).
+
+| Run | What the screen showed |
+|---|---|
+| Half a line typed at the prompt, `ls -l`, and no Enter | The bar went from the idle hint to `music: balancing the mix · 0:00 · 21k tok`, and to `0:02` two seconds on, by itself. It was on row 24 only. Every row above it, and the cursor behind `ls -l`, stayed where they were |
+| When the job had ended | The bar's cost went from `~$0.05` to `~$0.26`, the idle hint came back, and nothing more was drawn. `a` and Enter then sent `ls -la`, and the text came in order |
+| The same, with the beat switched off | The job's time stood at `0:00` three seconds on. So the check can fail |
+| In a full-screen program | The bar is the program's last row there. Its time moved, and the program's rows and the cursor stayed |
+| With the panel open at the shell | The bar is the panel's last row there, and its time moved. The row `Budget per boot` went to `spent in this boot: ~$0.26` when the job ended; no other row changed. After Esc the typed line was back |
+
+**What the check taught about checking.** A real terminal answers a request for the
+cursor's position. My first run didn't, and prompt_toolkit printed a warning and drew its
+prompt a row lower after two seconds at the prompt. That was the check's fault, not the
+bar's. The check now answers the request from where the emulator has the cursor.
+
+**What I couldn't check**
+
+- **Whether the bar's redraw disturbs typing on a real terminal.** The emulator shows that
+  nothing moves; it can't show a flicker. It is tried in the live run of step 13.
+- **A scripted run from the command line with a real model.** `run_script()` is tested
+  with a pretend model and a stand-in worker; the first real one is step 13's.

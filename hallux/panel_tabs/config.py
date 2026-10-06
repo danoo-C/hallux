@@ -104,6 +104,13 @@ def dollars(amount: float) -> str:
     return f"${text}"
 
 
+def spent(amount: float) -> str:
+    """~$0.12: what was spent, as the bar writes it. It is what the tokens would cost at the
+    API's list prices, which nobody with a subscription is billed. A limit that the user
+    typed is an exact number and has no ~."""
+    return f"~${amount:.2f}"
+
+
 def shown(name: str, value: object) -> str:
     """A setting's value as its row shows it."""
     if value is None:
@@ -146,16 +153,16 @@ def note(name: str, view: View) -> str:
     elif name == "effort" and running.model_effort != hw.effort:
         parts.append(f"running now: {running.model_effort or 'none'}")
     elif name == "max_budget_usd" and view.spent_since_refill != view.spent_boot:
-        parts.append(f"spent since the refill: ${view.spent_since_refill:.2f} · "
-                     f"this boot: ${view.spent_boot:.2f}")
+        parts.append(f"spent since the refill: {spent(view.spent_since_refill)} · "
+                     f"this boot: {spent(view.spent_boot)}")
     elif name == "max_budget_usd":
-        parts.append(f"spent in this boot: ${view.spent_boot:.2f}")
+        parts.append(f"spent in this boot: {spent(view.spent_boot)}")
     elif name == "tick_budget_usd" and view.spent_ticks is not None:
-        parts.append(f"spent by this program: ${view.spent_ticks:.2f}")
+        parts.append(f"spent by this program: {spent(view.spent_ticks)}")
     elif name == "event_budget_usd":
-        parts.append(f"spent since you typed: ${view.spent_events:.2f}")
+        parts.append(f"spent since you typed: {spent(view.spent_events)}")
     elif name == "agent_budget_usd":
-        parts.append(f"spent since you typed: ${view.spent_jobs:.2f}")
+        parts.append(f"spent since you typed: {spent(view.spent_jobs)}")
     if name in view.paused:
         parts.append(f"{parts.pop()} (paused)" if parts else "(paused)")
     if name in view.from_flags:
