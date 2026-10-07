@@ -1,6 +1,6 @@
 # Plan: addon agents
 
-**Status:** written on 2026-10-04. **Steps 1 to 12 and step 16 are built, and the code of
+**Status:** written on 2026-10-04. **Steps 1 to 12, 14 and 16 are built, and the code of
 step 13,** the first seven on 2026-10-05; the table under [The steps](#the-steps) says how
 far the build is. The design
 it follows is
@@ -229,7 +229,7 @@ step of the config panel's plan.
 | 11. A job's end in a full-screen program | [11-wake.md](11-wake.md) | 10, panel 3 and 7 | Built on 2026-10-06 |
 | 12. The status bar and the costs | [12-bar.md](12-bar.md) | 10 | Built on 2026-10-06 |
 | 13. The composer | [13-composer.md](13-composer.md) | 2, 11, 12 | The code is built, on 2026-10-06. The scripted run waits for the user's go, and the live run is the user's |
-| 14. Keeping a screen, and two lines for the composer's prompt | [14-kept-screens.md](14-kept-screens.md) | 13's code, for the two lines only | Not built |
+| 14. Keeping a screen, and two lines for the composer's prompt | [14-kept-screens.md](14-kept-screens.md) | 13's code, for the two lines only | Built on 2026-10-07 |
 | 15. Job control | [15-job-control.md](15-job-control.md) | 10, 14 | Not built |
 | 16. The panel's two tabs | [16-panel-tabs.md](16-panel-tabs.md) | 10, panel 5 to 7 | Built on 2026-10-06 |
 | 17. The documentation and the live run | [17-live-run.md](17-live-run.md) | 13, 15, 16 | Not built |
@@ -301,7 +301,7 @@ The user ran a first composition on 2026-10-07, on the real model. What it showe
 | Step | What changed |
 |---|---|
 | 13 | The run is written up: a drum solo for $0.78 in 265 seconds, two rounds of `check`, the `Done` line by itself. Points 4 to 8 of its list are still to try |
-| 14 | It carries two lines for the composer's prompt, at the user's request: a status line before anything else, and the changes of a round in one turn. Its file says what is built and tested |
+| 14 | It carries two lines for the composer's prompt, at the user's request: a status line before anything else, and the changes of a round in one turn. Its file says what is built and tested. Built on 2026-10-07; whether a real composer follows them shows in the next live run |
 
 **Still for the user to decide:** the default cap per job, which the run used to 78 percent
 (suggested: $2.00 a job and $4.00 for all jobs), and whether step 13's scripted run is

@@ -1395,6 +1395,34 @@ def test_a_jobs_file_tools_stay_behind_its_fence(root, music):
     assert (root / "etc" / "passwd").read_text() == "user:x:1000\n"
 
 
+def test_several_edits_of_one_file_in_one_turn_all_take_effect(root, music):
+    """A composer is told to make the changes of a round in one turn, so its edits of one
+    score are under way together. Each runs to its end before the next one starts. Two that
+    want the same text: one changes it, and the other is told that its text is gone."""
+    async def scenario(shop):
+        gate = asyncio.Event()
+        pid = shop.spawn(("wait", gate), edit=[f"{HERE}/neon.score"])
+        await shop.at_a_wait()
+        edit = shop.claudes[0].call
+        together = await asyncio.gather(
+            edit(EDIT, {"path": "neon.score", "old": "90", "new": "120"}),
+            edit(EDIT, {"path": "neon.score", "old": "# neon", "new": "# neon, faster"}),
+            edit(EDIT, {"path": "neon.score", "old": "SONG:", "new": "SONG:\n    (0, 8, A4, lead)"}))
+        same_text = await asyncio.gather(
+            edit(EDIT, {"path": "neon.score", "old": "120", "new": "140"}),
+            edit(EDIT, {"path": "neon.score", "old": "120", "new": "160"}))
+        gate.set()
+        await shop.ended(pid)
+        return together, same_text
+
+    together, same_text = work(root, scenario)
+    assert together == [({"ok": True}, False)] * 3
+    assert same_text == [({"ok": True}, False),
+                         ({"error": "`old` matches 0 times, it must match exactly once"}, True)]
+    assert (music / "neon.score").read_text() == (
+        "BPM = 140\n# neon, faster\nSONG:\n    (0, 8, A4, lead)\n")
+
+
 def test_an_addon_function_reads_the_jobs_own_version_through_its_handle(root, music):
     async def scenario(shop):
         gate = asyncio.Event()

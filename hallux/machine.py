@@ -111,6 +111,20 @@ class Terminal(Protocol):
 
     async def end_form(self) -> None: ...
 
+    async def suspend_form(self, job: int) -> None:
+        """Put the program on screen aside under this number, as it is, and leave block mode
+        as end_form does."""
+
+    async def resume_form(self, job: int) -> bool:
+        """Put the program of this number back on screen as it was. False, and nothing
+        happens, when none is kept under it."""
+
+    def forget_form(self, job: int | None = None) -> None:
+        """Drop the program kept under this number; without one, all of them."""
+
+    def suspended_forms(self) -> list[int]:
+        """The numbers of the programs that are kept, oldest first."""
+
     def field_text(self, id: str) -> str: ...
 
     def field_saved(self, id: str) -> None: ...

@@ -111,6 +111,26 @@ def test_the_manual_has_two_parts_and_the_composer_reads_the_second(addon, manua
     assert composer.isascii() and max(len(line) for line in composer.splitlines()) <= 100
 
 
+def test_the_composers_role_asks_for_a_status_line_first_and_for_one_turn_a_round(addon, manual):
+    """Two lines from the first live run of a composition, on 2026-10-07. The composer set its
+    first status line 174 seconds after its start, and made ten changes in ten model turns.
+    They are the composer's alone: the manual is what it was, to the character."""
+    import hashlib
+    music = sys.modules["hallux_addon_music"]
+    points = [point for point in music.COMPOSER.split("\n- ")[1:]]
+    assert len(points) == 3
+    assert points[0].startswith("Before anything else, call set_status with what you are about "
+                                "to write, in a few words")
+    assert "Call it again whenever you start something new" in points[0]
+    assert "set_status" not in points[1] and "set_status" not in points[2]      # said once
+    assert ("Make all the changes of a\n  round in one turn: several edit_file calls together, "
+            "or one write_file of the whole score\n  when most of its lines change.") in points[2]
+    assert points[2].index("check again") < points[2].index("in one turn") < points[2].index(
+        "after four rounds")
+    assert len(manual) == 8492 and hashlib.sha256(manual.encode()).hexdigest() == (
+        "add75647ac28ce14405220067911933a2747720f36e307dd515282b0d9265dd5")
+
+
 def test_what_the_manual_says_of_compose(manual):
     said = manual.split("- compose(request, folder, edit)")[1].split("\n- ")[0]
     for part in ("write a song into that folder", "change the\n  scores listed in edit",

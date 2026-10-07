@@ -197,6 +197,18 @@ class ScriptTerminal:
     async def end_form(self) -> None:
         pass
 
+    async def suspend_form(self, job: int) -> None:     # a transcript has no screen to keep
+        pass
+
+    async def resume_form(self, job: int) -> bool:
+        return False
+
+    def forget_form(self, job: int | None = None) -> None:
+        pass
+
+    def suspended_forms(self) -> list[int]:
+        return []
+
     def field_text(self, id: str) -> str:
         raise ValueError(f"no field {id!r}: scripts can't type into fields")
 

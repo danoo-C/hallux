@@ -609,7 +609,7 @@ def test_a_composition_from_compose_to_the_landed_file(addon, tmp_path):
     and the event names it."""
     import functools
 
-    from test_agents import CHECK, ROOMY, WRITE, Shop
+    from test_agents import CHECK, ROOMY, STATUS, WRITE, Shop
 
     root = tmp_path / "studio"
     (root / "home" / "user" / "Music").mkdir(parents=True)
@@ -617,8 +617,9 @@ def test_a_composition_from_compose_to_the_landed_file(addon, tmp_path):
     async def scenario():
         shop = Shop(root, ROOMY)                         # real sessions, on a fake Claude
         shop.jobs.addons = (addon,)
-        shop.scripts[30001] = ((("call", WRITE, {"path": "drum-beat.score", "content": BEAT}),
-                                ("call", CHECK, {"path": "drum-beat.score"})), {})
+        shop.scripts[30001] = ((("call", STATUS, {"text": "a drum beat"}),      # first, as its
+                                ("call", WRITE, {"path": "drum-beat.score", "content": BEAT}),
+                                ("call", CHECK, {"path": "drum-beat.score"})), {})   # role says
         [compose] = [tool for tool in tools.build_addon_tools(
             addon, shop.disk, functools.partial(shop.jobs.spawn, addon)) if tool.name == "compose"]
         answer = await compose.handler({"request": "a drum beat", "folder": "/home/user/Music"})
@@ -626,13 +627,16 @@ def test_a_composition_from_compose_to_the_landed_file(addon, tmp_path):
         before = (root / "home" / "user" / "Music" / "drum-beat.score").exists()
         row = await shop.ended(pid)
         await shop.closed()
-        return pid, before, row, shop.events(), shop.claudes[0]
+        lines = [(line.kind, line.text) for line in shop.jobs.kept[0].activity]
+        return pid, before, row, shop.events(), shop.claudes[0], lines
 
-    pid, before, row, [(name, event)], claude = asyncio.run(asyncio.wait_for(scenario(), 30))
+    pid, before, row, [(name, event)], claude, lines = asyncio.run(
+        asyncio.wait_for(scenario(), 30))
     assert pid == 30001 and not before and (row["state"], row["agent"]) == ("done", "composer")
+    assert lines[0] == ("status", "a drum beat") and row["status"] == "a drum beat"
     read = score.read(BEAT)                              # what play returns for the beat
     numbers = render.render(read, song.unfold(read)).report()
-    assert claude.answers[1] == ({"ok": True} | numbers, False)      # from the job's own copy
+    assert claude.answers[2] == ({"ok": True} | numbers, False)      # from the job's own copy
     assert (root / "home" / "user" / "Music" / "drum-beat.score").read_text() == BEAT
     assert name == "music" and event["files"] == ["/home/user/Music/drum-beat.score"]
     assert claude.asked[0].startswith("a drum beat\n\nYour folder is /home/user/Music.")

@@ -234,6 +234,30 @@ class FakeTerminal:
         if self.forms and self.ended < len(self.forms):
             self.ended = len(self.forms)
 
+    suspended = None                         # the programs that are put aside, by number
+
+    async def suspend_form(self, job):
+        """Keep the program on screen under this number, and leave it, as the real one does."""
+        if self.forms and self.ended < len(self.forms):
+            self.suspended = (self.suspended or {}) | {job: self.forms[-1]}
+            await self.end_form()
+
+    async def resume_form(self, job):
+        if job not in (self.suspended or {}):
+            return False
+        screen, form = self.suspended.pop(job)
+        await self.show_form(screen, form)   # it is on screen again, as it was
+        return True
+
+    def forget_form(self, job=None):
+        if job is None:
+            self.suspended = {}
+        elif self.suspended:
+            self.suspended.pop(job, None)
+
+    def suspended_forms(self):
+        return list(self.suspended or {})
+
     def field_text(self, id):
         return self.texts[id]
 

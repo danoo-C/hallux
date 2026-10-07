@@ -411,6 +411,31 @@ class Terminal:
             await self.block.end()
             self._draw_bar()                             # re-pins the scroll region
 
+    async def suspend_form(self, job: int) -> None:
+        """Put the program on screen aside under this number, as it is, and give the screen
+        back to the shell, as end_form does. resume_form brings it back."""
+        if self.block.active:
+            await self.block.suspend(job)
+            self._draw_bar()                             # re-pins the scroll region
+
+    async def resume_form(self, job: int) -> bool:
+        """Put the program of this number back on screen exactly as it was: its screen, its
+        fields with what was typed into them, its cursor. False, and nothing happens, when
+        none is kept under that number."""
+        if job not in self.block.suspended:
+            return False
+        if self.pinned and not self.block.active:        # the full-screen app has its own bar
+            self._write("\x1b7\x1b[r\x1b8")
+        return await self.block.resume(job)
+
+    def forget_form(self, job: int | None = None) -> None:
+        """Drop the program that is kept under this number. Without one: all that are kept."""
+        self.block.forget(job)
+
+    def suspended_forms(self) -> list[int]:
+        """The numbers of the programs that are kept, oldest first."""
+        return list(self.block.suspended)
+
     def field_text(self, id: str) -> str:
         return self.block.field_text(id)
 

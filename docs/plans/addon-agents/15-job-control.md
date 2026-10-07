@@ -28,9 +28,9 @@ brings it back without the AI writing it again.
   line in the log.
 - **A screen that came with `<resume>` may be on the terminal already.** The real terminal
   shows a screen while it is written (`hallux/terminal.py:87`,
-  `hallux/machine.py:830-840`), and the tag comes after `</prompt>`, at the very end. What
+  `hallux/machine.py:844-854`), and the tag comes after `</prompt>`, at the very end. What
   was shown is taken back, the way a full-screen program's screen that streamed is taken
-  back today (`hallux/machine.py:711-714`).
+  back today (`hallux/machine.py:725-728`).
 
 **After `<resume>`:**
 
@@ -43,21 +43,21 @@ brings it back without the AI writing it again.
 
 - **What the machine restores with the form:** the fields it knows on screen, what the
   program had spent on ticks, and the tick the program asked for. Leaving a program forgets
-  all three today (`hallux/machine.py:739-743`), so the machine puts them aside with the
+  all three today (`hallux/machine.py:753-757`), so the machine puts them aside with the
   job's number at the suspend.
-- **Whether its ticks run is decided as for a new screen** (`hallux/machine.py:586-592`):
+- **Whether its ticks run is decided as for a new screen** (`hallux/machine.py:600-606`):
   not when the tick budget is used up, which the restored count can say, and not while the
   boot is over its budget. A tick that is due then isn't sent, as since the fixes of
-  Hallux's report (`hallux/machine.py:617`). Every message of the resumed program carries
+  Hallux's report (`hallux/machine.py:631`). Every message of the resumed program carries
   `ticks="paused"` while that holds, without anything new.
 - **The message for a screen that is gone** is `<gone job="1" …></gone>`: it goes through
   the machine's envelope like every message, so it has the cwd, the time and the size too
-  (`hallux/machine.py:745-750`). The prompt shows it that way.
+  (`hallux/machine.py:759-764`). The prompt shows it that way.
 - **A program in the background gets no ticks,** so it costs nothing.
 
 **Ctrl-Z always reaches the AI in a full-screen program,** like Ctrl-C. In raw mode it does
 already. In a form with fields it is an action key from now on, whether the form lists it
-or not (`hallux/blockmode.py:597`).
+or not (`hallux/blockmode.py:659`).
 
 **`list_processes` on every machine.** It returns `{"jobs": [...], "screens": ["1", "2"]}`:
 the rows of the real jobs, and the numbers of the kept screens, from the terminal's
@@ -65,7 +65,7 @@ the rows of the real jobs, and the numbers of the kept screens, from the termina
 `kill_process` stays where it was: only where an addon has an agent.
 
 **The end of a boot** drops every kept screen, where it leaves a program that is still on
-screen (`hallux/machine.py:342-346`).
+screen (`hallux/machine.py:356-360`).
 
 **The prompt:**
 

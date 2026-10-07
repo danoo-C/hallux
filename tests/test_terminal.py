@@ -837,3 +837,67 @@ def test_the_beat_draws_the_panel_and_a_full_screen_program_too():
     at_the_panel, at_the_shell = with_panel(script, bar=bar)
     assert at_the_panel == (["panel"], [])               # the bar is the panel's last row then
     assert at_the_shell == ([], 1)                       # and at the shell it is the bar itself
+
+
+# --- a full-screen program that is put aside and put back -------------------------------------
+
+def test_a_suspended_form_gives_the_screen_back_and_a_resumed_one_takes_it(tmp_path):
+    """The bar is pinned again after suspend_form, as after end_form, and resume_form gives
+    the program the whole screen, as show_form does. A terminal on a pipe pins no bar, so
+    the test pins it by hand."""
+    from hallux.protocol import Form
+    bar = StatusBar("claude-opus-5-5", "low")
+    whole_screen, pinned = "\x1b7\x1b[r\x1b8", "\x1b7\x1b[1;39r\x1b[40;1H"
+
+    async def script(terminal, type_keys, panel, written):
+        terminal.pinned = terminal.output.get_size()     # as on a real terminal: 40 rows
+        await terminal.show_form("player\ncomposing…\n", Form((), raw=True))
+        shown = list(written)
+        del written[:]
+        await terminal.suspend_form(1)
+        suspended = list(written), terminal.block.active, terminal.suspended_forms()
+        del written[:]
+        nothing = await terminal.resume_form(9), list(written)       # no such number
+        back = await terminal.resume_form(1)
+        resumed = list(written), terminal.block.active, terminal.suspended_forms()
+        await terminal.suspend_form(2)
+        terminal.forget_form(2)
+        await terminal.end_form()
+        return shown, suspended, nothing, back, resumed, terminal.suspended_forms()
+
+    shown, suspended, nothing, back, resumed, left = with_panel(script, bar=bar)
+    assert shown == [whole_screen]
+    assert len(suspended[0]) == 1 and suspended[0][0].startswith(pinned)
+    assert suspended[1:] == (False, [1])
+    assert nothing == (False, []) and back is True
+    assert resumed == ([whole_screen], True, []) and left == []
+
+
+def test_done_when_an_editor_is_suspended_the_shell_is_used_and_the_editor_comes_back():
+    """The step's "Done when": text is typed into an editor field, the form is suspended,
+    something is typed at the shell prompt, the form is resumed, and the field holds exactly
+    the text from before."""
+    from hallux.protocol import Field, Form
+    editor = Form((Field("editor", "text", top=2, height=10, text="line one\nline two\n"),),
+                  keys=("C-o", "C-z"), keymap="nano")
+
+    async def script(terminal, type_keys):
+        await terminal.show_form("  GNU nano 7.2   notes.txt\n", editor)
+        type_keys("unsaved \x1b[B")
+        await asyncio.sleep(0.3)
+        before = terminal.field_text("text"), terminal.block.areas["text"].buffer.cursor_position
+        await terminal.suspend_form(1)
+        type_keys("ls -la\r")
+        line = await terminal.read_line("$ ")
+        resumed = await terminal.resume_form(1)
+        after = terminal.field_text("text"), terminal.block.areas["text"].buffer.cursor_position
+        type_keys("more ")
+        await asyncio.sleep(0.3)
+        typed_on = terminal.field_text("text")
+        await terminal.end_form()
+        return before, line, resumed, after, typed_on
+
+    before, line, resumed, after, typed_on = with_terminal(script)
+    assert before == ("unsaved line one\nline two\n", 25) == after     # one line down
+    assert line == "ls -la" and resumed is True
+    assert typed_on == "unsaved line one\nline twomore \n"         # where the cursor was
