@@ -115,12 +115,16 @@ def beginning_of(sound_file, text):
 def test_the_file_passes_every_check_of_the_loader(addon):
     assert addon.name == "music"
     assert addon.summary == "A sound card: plays score files with bytebeat instruments."
-    assert list(addon.functions) == ["play", "stop", "check"]
+    assert list(addon.functions) == ["play", "stop", "check", "compose"]
     assert addon.stop is addon.functions["stop"]          # the hook is the tool
     assert addon.has_events                               # it has connect(emit)
     for part in ("play(path, loop)", "stop()", "check(path, loop)", '{"event": "finished"}',
-                 "addon_listen"):
+                 "addon_listen", "compose(request, folder, edit)"):
         assert part in addon.manual
+    agent = addon.agent                                   # and its agent, the composer
+    assert (agent.name, agent.effort, agent.status) == ("composer", "high", "composing…")
+    assert agent.tools == {"check": addon.functions["check"]}     # and nothing else of its
+    assert agent.prompt.startswith("You compose for a sound card that plays score files")
 
 
 def test_hallux_itself_never_imports_numpy_or_pygame():
@@ -132,8 +136,8 @@ def test_hallux_itself_never_imports_numpy_or_pygame():
     assert (done.stdout, done.stderr) == ("1 {} []\n", "")
 
 
-def test_the_tools_are_play_stop_and_check_and_the_ai_never_sees_the_disk(play):
-    assert list(play.tools) == ["play", "stop", "check"]
+def test_the_tools_are_play_stop_check_and_compose_and_the_ai_never_sees_the_disk(play):
+    assert list(play.tools) == ["play", "stop", "check", "compose"]
     assert play.tools["play"].input_schema == {
         "type": "object", "properties": {"path": {"type": "string"}, "loop": {"type": "boolean"}},
         "required": ["path"], "additionalProperties": False}
@@ -525,3 +529,116 @@ def test_a_finished_song_wakes_the_machine(sound, tmp_path):
     assert '<event addon="music">{"event": "finished"}</event>' in model.sessions[0][2]
     assert machine.terminal.screen == "boot\nplaying\nthat was the song\n"
     assert "mcp__music__play" in model.options[0].allowed_tools
+
+
+# ---------------------------------------------------------------- compose, and the composer
+
+class Spawn:
+    """What stands in for hallux's spawn: it notes its calls and hands out a pid, or refuses."""
+
+    def __init__(self, refuse=None):
+        self.calls, self.refuse = [], refuse
+
+    def __call__(self, *args):
+        if self.refuse:
+            raise self.refuse
+        self.calls.append(args)
+        return 30000 + len(self.calls)
+
+
+def composing(addon, world, spawn):
+    """The addon's compose as the AI calls it, with this in place of hallux's spawn."""
+    built = {tool.name: tool for tool in tools.build_addon_tools(addon, world, spawn)}
+
+    def call(**args):
+        jsonschema.validate(args, built["compose"].input_schema)
+        result = asyncio.run(built["compose"].handler(args))
+        return json.loads(result["content"][0]["text"]), result["is_error"]
+
+    call.tool = built["compose"]
+    return call
+
+
+def test_the_ai_never_sees_spawn_in_compose(addon, world):
+    compose = composing(addon, world, Spawn())
+    assert compose.tool.input_schema == {
+        "type": "object",
+        "properties": {"request": {"type": "string"}, "folder": {"type": "string"},
+                       "edit": {"type": "array", "items": {"type": "string"}}},
+        "required": ["request", "folder"], "additionalProperties": False}
+    assert compose.tool.description.startswith("Have the composer write a new song into this")
+    with pytest.raises(jsonschema.ValidationError):
+        compose(spawn="mine", request="a song", folder="/home/user")
+
+
+def test_compose_hands_the_request_the_folder_and_the_files_on_as_they_are(addon, world):
+    spawn = Spawn()
+    compose = composing(addon, world, spawn)
+    assert compose(request="dark techno with a cello", folder="/home/user/Music") == (
+        {"pid": 30001}, False)
+    assert compose(request="make the kick softer", folder="Music",
+                   edit=["Music/neon.score", "/home/user/Music/b.score"]) == ({"pid": 30002}, False)
+    assert spawn.calls == [("dark techno with a cello", "/home/user/Music", []),
+                           ("make the kick softer", "Music",
+                            ["Music/neon.score", "/home/user/Music/b.score"])]
+
+
+@pytest.mark.parametrize("refusal, told", [
+    (addons.Refused("EAGAIN"), {"error": "EAGAIN"}),                 # a cap is in the way
+    (addons.Refused("ENOENT", "/home/user/Musik"), {"error": "ENOENT", "path": "/home/user/Musik"}),
+    (addons.Refused("EACCES", "/home/user"), {"error": "EACCES", "path": "/home/user"}),
+])
+def test_a_job_that_cant_start_reaches_the_ai_as_hallux_says_it(addon, world, refusal, told):
+    assert composing(addon, world, Spawn(refusal))(request="a song", folder="/x") == (told, True)
+
+
+def test_a_machine_with_the_music_addon_can_start_a_job(addon, tmp_path):
+    from test_machine import FakeTerminal
+
+    from hallux.machine import JOBS_PROMPT, Machine
+    options = Machine(tmp_path / "m", Hardware(), FakeTerminal(), addons=[addon]).options()
+    assert options.system_prompt.endswith(JOBS_PROMPT)
+    assert options.allowed_tools[-6:] == ["mcp__hallux__list_processes", "mcp__hallux__kill_process",
+                                          "mcp__music__play", "mcp__music__stop",
+                                          "mcp__music__check", "mcp__music__compose"]
+
+
+def test_a_composition_from_compose_to_the_landed_file(addon, tmp_path):
+    """With a stand-in for the model that writes the drum beat: compose returns a pid, the
+    composer's check reads the job's own copy and returns the beat's numbers, the file lands,
+    and the event names it."""
+    import functools
+
+    from test_agents import CHECK, ROOMY, WRITE, Shop
+
+    root = tmp_path / "studio"
+    (root / "home" / "user" / "Music").mkdir(parents=True)
+
+    async def scenario():
+        shop = Shop(root, ROOMY)                         # real sessions, on a fake Claude
+        shop.jobs.addons = (addon,)
+        shop.scripts[30001] = ((("call", WRITE, {"path": "drum-beat.score", "content": BEAT}),
+                                ("call", CHECK, {"path": "drum-beat.score"})), {})
+        [compose] = [tool for tool in tools.build_addon_tools(
+            addon, shop.disk, functools.partial(shop.jobs.spawn, addon)) if tool.name == "compose"]
+        answer = await compose.handler({"request": "a drum beat", "folder": "/home/user/Music"})
+        pid = json.loads(answer["content"][0]["text"])["pid"]
+        before = (root / "home" / "user" / "Music" / "drum-beat.score").exists()
+        row = await shop.ended(pid)
+        await shop.closed()
+        return pid, before, row, shop.events(), shop.claudes[0]
+
+    pid, before, row, [(name, event)], claude = asyncio.run(asyncio.wait_for(scenario(), 30))
+    assert pid == 30001 and not before and (row["state"], row["agent"]) == ("done", "composer")
+    read = score.read(BEAT)                              # what play returns for the beat
+    numbers = render.render(read, song.unfold(read)).report()
+    assert claude.answers[1] == ({"ok": True} | numbers, False)      # from the job's own copy
+    assert (root / "home" / "user" / "Music" / "drum-beat.score").read_text() == BEAT
+    assert name == "music" and event["files"] == ["/home/user/Music/drum-beat.score"]
+    assert claude.asked[0].startswith("a drum beat\n\nYour folder is /home/user/Music.")
+    options = claude.options                             # what the composer's session got
+    assert options.system_prompt.startswith(
+        'You are a background worker of a machine called "hallux": the composer of its music '
+        'addon.')
+    assert "A WHOLE SCORE" in options.system_prompt and options.effort == "high"
+    assert options.allowed_tools[-1] == CHECK and len(options.allowed_tools) == 6

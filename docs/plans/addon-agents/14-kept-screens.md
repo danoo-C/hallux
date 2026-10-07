@@ -2,10 +2,15 @@
 
 [The plan](README.md) · the design: [addon-agents.md](../../addon-agents.md), section 12
 
-**Needs:** nothing of this plan. It changes `blockmode.py` and `terminal.py`, as the config
-panel did, so it comes after the panel. **Changes:** `hallux/blockmode.py`,
-`hallux/terminal.py`, `hallux/script.py`, `tests/test_blockmode.py`,
+**Needs:** nothing of this plan for the kept screens. It changes `blockmode.py` and
+`terminal.py`, as the config panel did, so it comes after the panel. **Changes:**
+`hallux/blockmode.py`, `hallux/terminal.py`, `hallux/script.py`, `tests/test_blockmode.py`,
 `tests/test_terminal.py`.
+
+**It also carries two lines for the composer's prompt,** which need the code of step 13:
+see [Carried with this step](#carried-with-this-step-two-lines-for-the-composers-prompt).
+For those it changes `addons/music.py`, `tests/test_addon_music.py`,
+`tests/test_music_manual.py` and `tests/test_agents.py`.
 
 When a full-screen program is suspended today, Hallux throws its form away: the screen, and
 whatever the user typed into its fields (`hallux/blockmode.py:381-384`). To come back, the
@@ -60,6 +65,48 @@ The scripted terminal gets the four as empty methods: its `resume_form` returns 
 its `suspended_forms()` returns nothing. The tests' fake terminal gets ones that work: it
 keeps the names it is given, so the machine's tests of step 15 can see a screen come back.
 
+## Carried with this step: two lines for the composer's prompt
+
+This part has nothing to do with keeping a screen. The user's first live run of a
+composition, on 2026-10-07, suggested two lines for the composer's prompt, and the user
+asked to have them built with the next step of the plan, which is this one. What the run
+showed, and why the lines are worded as they are, is in
+[step 13's file](13-composer.md), under "Two lines for the composer's prompt".
+
+**In `addons/music.py`,** the composer's role, the text `COMPOSER`:
+
+| | What changes |
+|---|---|
+| A status line first | The point on `set_status` moves to the front and says: before anything else, call `set_status` with what you are about to write, in a few words; call it again whenever you start something new |
+| The changes of a round in one turn | The point on `check` adds: make all the changes of a round in one turn, with several `edit_file` calls together, or with one `write_file` of the whole score when most of its lines change |
+
+- **Nothing else of the composer's prompt changes,** and nothing of the manual: the main
+  agent's text stays as it is, and so does its size.
+- **Hallux's own rules for a worker stay as they are** (`hallux/agent.md`). They say "when
+  you start something new"; the composer's role is where "before anything else" belongs,
+  since another addon's agent may have nothing to say at its start.
+- **Several edits of one file in one turn have to work.** Each of a job's tools runs to its
+  end before the next one starts, and the job's disk has one lock (step 4), so two edits of
+  different lines both take effect whatever their order. Two that touch the same text: the
+  second finds its old text gone and says so, as any edit does. This is tested here, since
+  until now a job's edits came one a turn.
+
+**Its tests:**
+
+- in `tests/test_music_manual.py`: the composer's role names `set_status` in its first
+  point, with "before anything else", and says that the changes of a round are made in one
+  turn; the manual is what it was, to the character;
+- in `tests/test_agents.py`, with the fake Claude: two `edit_file` calls of one file that
+  are under way together both take effect, and two that want the same text leave one
+  change and one error;
+- in `tests/test_addon_music.py`: the composition's test still passes, with its stand-in
+  setting a status line first.
+
+**What only a run shows:** whether a model at high effort sets the status line before it
+thinks, and whether it makes its changes in one turn. Both are looked at in the next live
+run of a composition, in the panel's Details tab: the first line should be a `status`
+within seconds of the start, and the edits of a round should share one time.
+
 ## Tests
 
 In `tests/test_blockmode.py`, with the real block mode on a pipe:
@@ -91,3 +138,4 @@ none:
 
 On a pipe, text is typed into an editor field, the form is suspended, something is typed at
 the shell prompt, the form is resumed, and the field holds exactly the text from before.
+And the composer's role has its two lines, with their tests.

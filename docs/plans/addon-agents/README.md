@@ -1,7 +1,8 @@
 # Plan: addon agents
 
-**Status:** written on 2026-10-04. **Steps 1 to 12 and step 16 are built,** the first
-seven on 2026-10-05; the table under [The steps](#the-steps) says how far the build is. The design
+**Status:** written on 2026-10-04. **Steps 1 to 12 and step 16 are built, and the code of
+step 13,** the first seven on 2026-10-05; the table under [The steps](#the-steps) says how
+far the build is. The design
 it follows is
 [addon-agents.md](../../addon-agents.md), in which no question is open. The decisions this
 plan takes on its own are in a table below. They are my proposals, and the user hasn't
@@ -193,6 +194,7 @@ each answer is in [step 9's file](09-session.md), under "As built":
 | `hallux/statusbar.py`, `hallux/terminal.py`, `hallux/machine.py`, `hallux/script.py`, `hallux/app.py`, `hallux/panel_tabs/config.py` | Jobs on the bar, `~$`, the total with the jobs, the one function that draws again, `@wait jobs`, the summary | 12 |
 | `addons/music.py` | `agent()`, `compose`, the composer's prompt, the manual | 13 |
 | `hallux/blockmode.py`, `hallux/terminal.py`, `hallux/script.py` | A form is put aside and put back | 14 |
+| `addons/music.py` | Two lines for the composer's role, from the first live run: a status line first, and the changes of a round in one turn | 14 |
 | `hallux/protocol.py`, `hallux/machine.py`, `hallux/blockmode.py`, `hallux/tools.py`, `hallux/prompt.md`, `hallux/prompt_jobs.md` | The three tags, Ctrl-Z, `list_processes` on every machine | 15 |
 | `hallux/panel_tabs/agents.py`, `hallux/panel_tabs/details.py` (new), `hallux/app.py`, `hallux/panel.py` | The panel's two tabs; a tab says what Esc does | 16 |
 | `hallux/agents.py` | What each job has been doing, the ended jobs, why an agent can't start | 7, 8, 9, 16 |
@@ -226,8 +228,8 @@ step of the config panel's plan.
 | 10. The main agent's side | [10-main-agent.md](10-main-agent.md) | 8, 9, panel 5 | Built on 2026-10-06 |
 | 11. A job's end in a full-screen program | [11-wake.md](11-wake.md) | 10, panel 3 and 7 | Built on 2026-10-06 |
 | 12. The status bar and the costs | [12-bar.md](12-bar.md) | 10 | Built on 2026-10-06 |
-| 13. The composer | [13-composer.md](13-composer.md) | 2, 11, 12 | Not built |
-| 14. Keeping a screen | [14-kept-screens.md](14-kept-screens.md) | | Not built |
+| 13. The composer | [13-composer.md](13-composer.md) | 2, 11, 12 | The code is built, on 2026-10-06. The scripted run waits for the user's go, and the live run is the user's |
+| 14. Keeping a screen, and two lines for the composer's prompt | [14-kept-screens.md](14-kept-screens.md) | 13's code, for the two lines only | Not built |
 | 15. Job control | [15-job-control.md](15-job-control.md) | 10, 14 | Not built |
 | 16. The panel's two tabs | [16-panel-tabs.md](16-panel-tabs.md) | 10, panel 5 to 7 | Built on 2026-10-06 |
 | 17. The documentation and the live run | [17-live-run.md](17-live-run.md) | 13, 15, 16 | Not built |
@@ -288,6 +290,22 @@ the findings, with what was run for each. The user accepted every recommendation
 | 17 | Refill budgets and an editor with a job ending are in the live run. The README says how far a boot can pass its cap |
 | 11, 12, 15, 16 | Each ends with a check on a pseudo-terminal, with a terminal emulator drawing the screen, before the user tries it |
 | All | The line numbers are the code's of 2026-10-05: 32 of 52 had moved |
+
+---
+
+## After the first live run
+
+The user ran a first composition on 2026-10-07, on the real model. What it showed is in
+[step 13's file](13-composer.md), under "What the live run taught".
+
+| Step | What changed |
+|---|---|
+| 13 | The run is written up: a drum solo for $0.78 in 265 seconds, two rounds of `check`, the `Done` line by itself. Points 4 to 8 of its list are still to try |
+| 14 | It carries two lines for the composer's prompt, at the user's request: a status line before anything else, and the changes of a round in one turn. Its file says what is built and tested |
+
+**Still for the user to decide:** the default cap per job, which the run used to 78 percent
+(suggested: $2.00 a job and $4.00 for all jobs), and whether step 13's scripted run is
+still wanted.
 
 ---
 

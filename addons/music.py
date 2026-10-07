@@ -13,6 +13,10 @@ line from the child that answers no question is an event: a song has ended by it
 check() renders a score without a sound. Each check starts a child of its own, which opens no
 sound card and ends with its answer. So a check never waits for the child that plays, never
 replaces its song, and stop() doesn't know about it.
+
+compose() has a composer write a song: an agent of this addon, which Hallux runs in the
+background as a job (docs/addon-agents.md). agent() declares it. The composer gets the part
+of the manual that says how a score is written, and check as its one tool of the sound card.
 """
 import contextlib
 import importlib.util
@@ -40,7 +44,12 @@ SCORE_KB = 64                          # the biggest score file (music_engine/li
 
 
 def prompt() -> str:
-    return """\
+    """The manual, for the main agent: what the functions do, then how a score is written."""
+    return f"{FUNCTIONS}\n\n{WRITING}"
+
+
+# The manual's first part: the functions, for the one that can call them all.
+FUNCTIONS = """\
 A real sound card. It plays score files: text files on the machine's disk that describe a
 song with bytebeat instruments, at 44100 Hz and 16 bits.
 - play(path, loop) checks the score at that path, renders it and starts the sound, then
@@ -49,12 +58,19 @@ song with bytebeat instruments, at 44100 Hz and 16 bits.
 - stop() stops the sound.
 - check(path, loop) renders the score without a sound and returns what play would return, or
   the same errors. A song that is playing plays on.
+- compose(request, folder, edit) has a composer write a song into that folder, or change the
+  scores listed in edit. It returns a pid at once, and the song isn't there yet: never wait
+  for it or imagine it. Its end comes as an event with the files it wrote; addon_listen
+  brings it at once. The folder must exist, and can't be a home folder itself.
 - {"event": "finished"} is reported, once you listen with addon_listen, when a song that
   plays once ended by itself: not after stop() or a new play(), and never for a loop.
 The addon defines no command: how the sound card shows inside the machine is your choice. A
 score is an ordinary file: you write it, or the user does in nano. Print what play returns,
-and its errors, the way a player would.
+and its errors, the way a player would."""
 
+# Its second part: how a score is written. The composer reads this part too, and has check
+# and not play: nothing in it tells its reader to call a function it may not have.
+WRITING = """\
 A WHOLE SCORE
 ```
 BPM = 120
@@ -188,14 +204,14 @@ INSTRUMENT piano:
 ```
 A drum bar is kick on steps 0 and 16, snare on 8 and 24, hats between, each 4 steps.
 
-WHAT PLAY RETURNS
+WHAT PLAY AND CHECK RETURN
 {"ok": true, "seconds": 8.0, "peak": 98}: the length with its tails (of a loop, one round),
 and the loudest point in percent of full scale. Under 50 is quiet: raise the velocities.
 - "turned_down_to": 61: the mix was too loud, so the whole song was turned down to 61
   percent. Nothing is distorted. Lower the velocities for the balance you meant.
 - "clipped": ["lead"]: that instrument's expression left 16 bits and was cut off: it
   distorts. Shift it further, or lower its velocity.
-An error has every problem of the score, each with its line. Fix them all, then play again.
+An error has every problem of the score, each with its line. Fix them all, then try again.
 
 WRITING WELL
 - Keep the file short: what repeats is a pattern, repeated and transposed.
@@ -207,6 +223,40 @@ A song of 300 seconds with its tails. A file of 64 KB. 10000 notes and changes o
 patterns are unfolded. Patterns 8 deep. An expression of 500 characters, nested 40 deep.
 16 named parts. A tail of 441000 samples. 64 notes sounding at once. BPM 20 to 400, STEPS 1
 to 96. A render that takes over 8 seconds fails: shorten the song."""
+
+
+# The composer's own instructions. Hallux puts its rules for every worker in front, and the
+# manual's second part follows.
+COMPOSER = """\
+You compose for a sound card that plays score files: text files that describe a song with
+bytebeat instruments. Your task is one song, or a change to the scores listed with it.
+- Write the song as one score file in your folder. Name the file after the song, in lowercase
+  with dashes, ending in .score: midnight-cello.score. A score you were given is changed in
+  its own file.
+- Check it with check, fix everything it reports, and check again. Stop when the score is
+  clean and its peak is between 50 and 100, or after four rounds.
+- Say what you are doing with set_status, in a few words: sketching the drums, balancing the
+  mix.
+How a score is written follows. It is all you know of the format: use nothing it doesn't
+name."""
+
+# What the composer is told of its one tool of the sound card, after the manual's second part.
+CHECKING = """\
+CHECK
+check(path, loop) renders the score at that path without a sound and returns what is said
+under WHAT PLAY AND CHECK RETURN, or an error with every problem of the score. loop=true
+renders it as a loop: use it for a song that is meant to repeat."""
+
+
+def agent() -> dict:
+    """The composer: who it is, and what a job of it gets."""
+    return {
+        "name": "composer",                           # how its job shows in the process table
+        "prompt": f"{COMPOSER}\n\n{WRITING}\n\n{CHECKING}",
+        "tools": [check],                             # of this addon's functions
+        "effort": "high",                             # asked for; config.toml decides
+        "status": "composing…",                       # its status line until it sets one
+    }
 
 
 class MusicError(Exception):
@@ -267,7 +317,13 @@ def check(disk, path: str, loop: bool = False) -> dict:
     return answer
 
 
-EXPOSED = [play, stop, check]
+def compose(spawn, request: str, folder: str, edit: list[str] = []) -> dict:
+    """Have the composer write a new song into this folder, or change the scores listed in
+    edit. Returns at once with the pid of its job. The job's end is reported as an event."""
+    return {"pid": spawn(request, folder, edit)}      # the request is its task, as it is
+
+
+EXPOSED = [play, stop, check, compose]
 
 
 def connect(emit) -> None:

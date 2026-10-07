@@ -22,7 +22,7 @@ DESIGN = Path(__file__).resolve().parent.parent / "docs" / "addon-music.md"
 SCORES = Path(__file__).parent / "scores"
 MANUAL_CHARS = 8500                           # every boot that uses the addon reads all of it
 SECTIONS = ["A WHOLE SCORE", "THE FILE", "EVENTS", "PATTERNS AND THE SONG", "INSTRUMENTS",
-            "RECIPES", "WHAT PLAY RETURNS", "WRITING WELL", "LIMITS"]
+            "RECIPES", "WHAT PLAY AND CHECK RETURN", "WRITING WELL", "LIMITS"]
 
 
 @pytest.fixture(scope="module")
@@ -76,16 +76,48 @@ def test_it_has_the_parts_of_the_plan_in_their_order(manual):
     assert places == sorted(places)
     first = manual[:places[0]]
     for part in ("play(path, loop)", "stop()", "check(path, loop)", '{"event": "finished"}',
-                 "addon_listen", "The addon defines no command", "nano", "the way a player would"):
+                 "addon_listen", "The addon defines no command", "nano", "the way a player would",
+                 "compose(request, folder, edit)"):
         assert part in first, part
 
 
 def test_every_example_stands_in_a_block_that_is_checked_here(manual):
     counts = {title: len(blocks(section(manual, title))) for title in SECTIONS}
     assert counts == {"A WHOLE SCORE": 1, "THE FILE": 0, "EVENTS": 1, "PATTERNS AND THE SONG": 1,
-                      "INSTRUMENTS": 2, "RECIPES": 1, "WHAT PLAY RETURNS": 0, "WRITING WELL": 0,
+                      "INSTRUMENTS": 2, "RECIPES": 1, "WHAT PLAY AND CHECK RETURN": 0,
+                      "WRITING WELL": 0,
                       "LIMITS": 0}
     assert manual.count("```") == 12
+
+
+def test_the_manual_has_two_parts_and_the_composer_reads_the_second(addon, manual):
+    """The first part is for the one that can call every function. The second says how a
+    score is written, and the composer reads it too: it has check, and neither play nor
+    stop nor compose. So the second part tells nobody to call one of those."""
+    music = sys.modules["hallux_addon_music"]
+    assert manual == f"{music.FUNCTIONS}\n\n{music.WRITING}"
+    assert music.WRITING.startswith("A WHOLE SCORE\n") and music.WRITING.endswith("the song.")
+    assert all(f"\n\n{title}\n" in f"\n\n{music.WRITING}" for title in SECTIONS)
+    assert not any(title in music.FUNCTIONS for title in SECTIONS)
+    composer = addon.agent.prompt
+    assert composer == f"{music.COMPOSER}\n\n{music.WRITING}\n\n{music.CHECKING}"
+    for told_to_call in ("play(", "stop()", "compose(", "play again", "Print what play",
+                         "addon_listen", '{"event": "finished"}'):
+        assert told_to_call not in composer, told_to_call
+    assert "Fix them all, then try again." in music.WRITING
+    for part in ("check(path, loop)", "set_status", "lowercase\n  with dashes", ".score",
+                 "between 50 and 100, or after four rounds", "WHAT PLAY AND CHECK RETURN"):
+        assert part in composer, part
+    assert composer.isascii() and max(len(line) for line in composer.splitlines()) <= 100
+
+
+def test_what_the_manual_says_of_compose(manual):
+    said = manual.split("- compose(request, folder, edit)")[1].split("\n- ")[0]
+    for part in ("write a song into that folder", "change the\n  scores listed in edit",
+                 "returns a pid at once", "the song isn't there yet", "never wait\n  for it or "
+                 "imagine it", "as an event with the files it wrote", "addon_listen\n  brings it "
+                 "at once", "must exist", "can't be a home folder itself"):
+        assert part in said, part
 
 
 def test_it_is_what_addon_help_returns(addon, manual):
@@ -301,7 +333,7 @@ def test_the_score_in_the_readme_plays():
 # ---------------------------------------------------------------- what play returns, the limits
 
 def test_the_answer_it_shows_is_a_real_one(manual):
-    said = section(manual, "WHAT PLAY RETURNS")
+    said = section(manual, "WHAT PLAY AND CHECK RETURN")
     _, rendered = play((SCORES / "drum-beat.score").read_text())
     assert json.dumps({"ok": True} | rendered.report()) in said     # the drum beat's
     _, loud = play("BPM = 300\nINSTRUMENT lead:\n    sin(p) * 2\nSONG:\n    (0, 4, A4 C5, lead)\n")

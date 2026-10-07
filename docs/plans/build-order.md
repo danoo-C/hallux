@@ -54,8 +54,8 @@ These are the user's rules for this project. They hold for every step.
 - **Make a mistake loud.** Where something an author left out would get a quiet fallback,
   make it a failed check with a readable reason.
 
-**The tests:** `env -u FORCE_COLOR .venv/bin/python -m pytest -q`. There are 1518 today,
-2026-10-06, after steps 1 to 12 and 16 of addon agents. With `FORCE_COLOR` set in the shell one of them
+**The tests:** `env -u FORCE_COLOR .venv/bin/python -m pytest -q`. There are 1527 today,
+2026-10-06, after steps 1 to 12 and 16 of addon agents, and the code of step 13. With `FORCE_COLOR` set in the shell one of them
 fails, because Python then colours a child's traceback: the window addon's. Step 2 of the
 agents plan mended the music addon's.
 
@@ -129,7 +129,7 @@ agents plan's README lists what it changed, step by step. What was asked for:
 | 12 | A12. The status bar and the costs | A10 | |
 | 13 | A16. The panel's two tabs | A10, P5 to P7 | |
 | 14 | A13. The composer | A2, A11, A12 | The scripted run costs a little. The first live run is the user's, and sets the budgets again |
-| 15 | A14. Keeping a screen | | After the panel: it changes `blockmode.py` and `terminal.py` |
+| 15 | A14. Keeping a screen | | After the panel: it changes `blockmode.py` and `terminal.py`. It also carries two lines for the composer's prompt, which A13's first live run suggested; those need A13's code |
 | 16 | A15. Job control | A10, A14 | |
 | 17 | A17. The documentation and the live run | A13, A15, A16 | The live run is the user's |
 
@@ -140,7 +140,8 @@ agents plan's README lists what it changed, step by step. What was asked for:
   brings the real session.
 - **No machine can start a job before A10.** The first job a user can start is a
   composition, in A13.
-- **A14 needs nothing of the other steps.** It can come earlier, any time after the panel.
+- **A14's kept screens need nothing of the other steps.** The two lines for the composer's
+  prompt that it carries since 2026-10-07 need A13's code, which is built.
 
 ---
 

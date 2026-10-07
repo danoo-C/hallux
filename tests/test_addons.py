@@ -1862,14 +1862,15 @@ def test_the_effort_names_are_the_loaders_and_the_configs():
     assert config.EFFORTS is addons.EFFORTS == ("low", "medium", "high", "xhigh", "max")
 
 
-def test_every_addon_that_exists_loads_as_before():
-    """The real addons folder: nothing in it has an agent yet, and nothing is skipped for a
-    reason other than a library that isn't installed."""
+def test_every_addon_that_exists_loads_and_music_has_its_composer():
+    """The real addons folder: nothing is skipped for a reason other than a library that
+    isn't installed, and one addon has an agent."""
     loaded, skipped = addons.load(app.ADDONS_FOLDER)
     for name in [n for n in sys.modules if n.startswith(addons.MODULE_PREFIX)]:
         sys.modules[name].stop() if hasattr(sys.modules[name], "stop") else None
         del sys.modules[name]
     assert all(reason.startswith("No module named") for reason in skipped.values()), skipped
     assert {addon.name for addon in loaded} | set(skipped) == {"music", "window"}
-    assert all(addon.agent is None for addon in loaded)
+    agents = {addon.name: addon.agent.name for addon in loaded if addon.agent is not None}
+    assert agents == ({"music": "composer"} if "music" not in skipped else {})
 
