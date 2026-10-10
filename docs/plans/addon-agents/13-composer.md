@@ -211,6 +211,10 @@ a splash.
 at $1.00. This composition used 78 cents of it with two rounds. A third round would have
 passed the cap, and a job that is killed loses all of its work.
 
+**Decided by the user on 2026-10-10:** the defaults are $2.00 a job and $4.00 for all jobs.
+The timeout stays 600 seconds. They are in `hallux/config.py`, and the design's table has
+them. A world whose `config.toml` names its own budgets keeps those.
+
 ### Two lines for the composer's prompt
 
 **Decided by the user on 2026-10-07:** the suggestion is written down here, and it is built

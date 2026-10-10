@@ -281,8 +281,8 @@ def test_a_job_carries_its_limits_from_the_settings_at_its_start(root):
         return [worker.job.limits for worker in world.workers], (first, second)
 
     limits, _ = run(root, scenario)
-    assert (limits[0].budget_usd, limits[0].turns, limits[0].seconds) == (1.0, TURNS, 600) == (
-        1.0, 60, 600)
+    assert (limits[0].budget_usd, limits[0].turns, limits[0].seconds) == (2.0, TURNS, 600) == (
+        2.0, 60, 600)
     assert (limits[1].budget_usd, limits[1].turns, limits[1].seconds) == (0.25, 60, 90)
 
 
@@ -852,14 +852,14 @@ def test_one_job_of_an_addons_agent_at_a_time(root):
 
 
 def test_the_budget_for_all_jobs_is_never_passed(root):
-    """With the defaults, $1.00 a job and $2.00 for all: a job that runs counts with its full
+    """With the defaults, $2.00 a job and $4.00 for all: a job that runs counts with its full
     cap, one that has ended with what it cost, and the one that asks with its full cap."""
     async def scenario(world):
-        seen = [world.tries(("end", CHEAP)), world.tries(("end", CHEAP), addon=MAIL)]   # 1 + 1
+        seen = [world.tries(("end", CHEAP)), world.tries(("end", CHEAP), addon=MAIL)]   # 2 + 2
         await world.ended(30001), await world.ended(30002)                  # both cost $0.30
-        seen.append(world.tries(("wait", asyncio.Event())))                 # 0.60 + 1.00
-        seen += [world.tries(addon=MAIL), world.jobs.why_not(MAIL)]         # 0.60 + 1.00 + 1.00
-        world.jobs.refill()                                                 # 0 + 1.00 + 1.00
+        seen.append(world.tries(("wait", asyncio.Event())))                 # 0.60 + 2.00
+        seen += [world.tries(addon=MAIL), world.jobs.why_not(MAIL)]         # 0.60 + 2.00 + 2.00
+        world.jobs.refill()                                                 # 0 + 2.00 + 2.00
         return seen, world.tries(addon=MAIL), world.jobs.spent_since_refill
 
     seen, after_the_refill, counted = run(root, scenario, Hardware())
@@ -880,9 +880,9 @@ def test_a_killed_job_counts_with_its_full_cap_until_its_cost_arrives(root):
         await world.ended(pid)
         return meanwhile, world.jobs.why_not(MAIL), world.jobs.spent_since_refill
 
-    meanwhile, then, counted = run(root, scenario, Hardware(agent_budget_usd=1.5))
-    assert meanwhile == ["jobs budget used", "already running", "killed", 0.0]   # 1.00 + 1.00
-    assert then is None and counted == 0.07              # 0.07 + 1.00 fits into 1.50
+    meanwhile, then, counted = run(root, scenario, Hardware(agent_budget_usd=3))
+    assert meanwhile == ["jobs budget used", "already running", "killed", 0.0]   # 2.00 + 2.00
+    assert then is None and counted == 0.07              # 0.07 + 2.00 fits into 3.00
 
 
 def test_a_job_whose_cost_isnt_known_counts_with_its_full_cap_for_good(root):
@@ -893,8 +893,8 @@ def test_a_job_whose_cost_isnt_known_counts_with_its_full_cap_for_good(root):
         await world.ended(pid)
         return world.jobs.spent, world.jobs.spent_boot, world.jobs.why_not(MAIL)
 
-    assert run(root, scenario, Hardware()) == (1.0, 1.0, None)      # 1.00 + 1.00 just fits
-    assert run(root, scenario, Hardware(agent_budget_usd=1.99))[2] == "jobs budget used"
+    assert run(root, scenario, Hardware()) == (2.0, 2.0, None)      # 2.00 + 2.00 just fits
+    assert run(root, scenario, Hardware(agent_budget_usd=3.99))[2] == "jobs budget used"
 
 
 def test_over_the_boots_budget_no_job_starts(root):
@@ -1058,19 +1058,21 @@ def test_the_main_agent_reads_the_table_and_kills_a_job_with_its_two_tools(root)
     assert gone == (({"error": "ESRCH"}, True),) * 2        # it has ended; it never was
     [row] = ended[0]["jobs"]                                # an ended job is listed once
     assert (row["state"], row["why"], row["cost_usd"]) == ("killed", "kill", 0.07)
-    assert seen == ({"jobs": []}, False)
+    assert seen == ({"jobs": [], "screens": []}, False)
 
 
-def test_the_two_tools_exist_only_with_an_addon_that_has_an_agent(root):
+def test_kill_process_exists_only_with_an_addon_that_has_an_agent(root):
+    """list_processes is on every machine since job control: jobs reads the kept screens
+    through it."""
     plain = addons.Addon("plain", "A thing.", "the manual", {})
     jobs = Jobs(Disk(root), Hardware)
 
     def names(**more):
         return [tool.name for tool in build_tools(Disk(root), **more)]
 
-    assert names(addons=[plain, MUSIC], jobs=jobs)[-2:] == ["list_processes", "kill_process"]
+    assert names(addons=[plain, MUSIC], jobs=jobs)[-1] == "kill_process"
     for without in (dict(addons=[plain], jobs=jobs), dict(addons=[plain, MUSIC]), dict(jobs=jobs)):
-        assert not {"list_processes", "kill_process"} & set(names(**without))
+        assert "kill_process" not in names(**without) and "list_processes" in names(**without)
     kill = build_tools(Disk(root), addons=[MUSIC], jobs=jobs)[-1].input_schema
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"pid": "30001"}, kill)         # a number, as kill takes it
@@ -1569,7 +1571,7 @@ def test_a_session_that_breaks_is_a_failed_job_with_the_reason(root, music, capl
     assert (broke["state"], broke["why"]) == (
         "failed", "ConnectionError: Command failed with exit code 1")
     assert broke["cost_usd"] == "unknown" and broke["tokens"] == 3500    # it counts with its cap
-    assert spent == 1.0 and states == ["closed", "closed"]
+    assert spent == 2.0 and states == ["closed", "closed"]
     assert not (root / "tmp" / "work" / "a.txt").exists()
     assert "job 30001: its session didn't open" in caplog.text
     assert "job 30002: its session failed" in caplog.text

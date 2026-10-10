@@ -32,4 +32,7 @@ general: a card says how its own program shows a job, and a rule comes before bo
   program that started the job prints what it would print: a full-screen program answers
   as it would to a tick, with a patch. Without one, bash prints its line before the next
   prompt, as for any background job: [1]+  Done  and the command.
+- A Done line has two sources. For a job it comes from the job's event, as above. A
+  program you imagine in the background (kittymusic &) has no event: you decide when it
+  has ended, and print its Done line before the next prompt.
 - For ps, top, htop and jobs, read list_processes and add the processes you imagine.

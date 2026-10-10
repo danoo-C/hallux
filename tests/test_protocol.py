@@ -260,3 +260,49 @@ def test_a_patch_carries_only_the_rows_that_changed():
     assert reply.patch == ((-3, ("\x1b[7m[ Wrote 3 lines ]\x1b[0m",)), (5, ("chat one", "chat two")))
     assert parse('<form keys="C-x"><editor id="t"/></form><screen>\nx\n</screen><prompt></prompt>').patch is None
     assert parse("<screen>\n<patch>text</patch>\n</screen><prompt>$ </prompt>").patch is None  # shell output
+
+
+# --- job control: three tags after the prompt ---------------------------------------------------
+
+STOPPED = "<screen>\n\n[1]+  Stopped                 nano h.txt\n</screen><prompt>$ </prompt>"
+
+
+def test_the_job_control_tags_are_read_with_their_numbers():
+    assert parse(STOPPED + '<suspend job="1"/>').suspend == 1
+    assert parse('<screen>\n</screen><prompt></prompt><resume job="12"/>').resume == 12
+    assert parse(STOPPED + '<forget job="3"/>').forget == (3,)
+    assert parse(STOPPED + '<resume job="007"/>').resume == 7       # a number, as bash reads it
+    plain = parse(STOPPED)
+    assert (plain.suspend, plain.resume, plain.forget, plain.unread) == (None, None, (), ())
+
+
+def test_the_job_control_tags_stand_beside_the_other_tags():
+    reply = parse('<screen>\nbye\n</screen><prompt>$ </prompt><cwd>/tmp</cwd><forget job="1"/>'
+                  '<forget job="2"/><suspend job="3"/><resume job="1"/><edit>ls</edit>')
+    assert (reply.suspend, reply.resume, reply.forget) == (3, 1, (1, 2))
+    assert (reply.screen, reply.prompt, reply.cwd, reply.edit) == ("bye\n", "$ ", "/tmp", "ls")
+    # with a full-screen program, whichever of the form and the screen comes first
+    first = parse('<form keys="C-x"><editor id="text"/></form><screen>\nnano\n</screen>'
+                  '<prompt></prompt><forget job="2"/>')
+    assert first.forget == (2,) and first.form.fields[0].id == "text"
+    last = parse('<screen>\nnano\n</screen><prompt></prompt><forget job="2"/>'
+                 '<form keys="C-x"><editor id="text">a <resume job="9"/> b</editor></form>')
+    assert last.forget == (2,) and last.resume is None      # what a field holds is text
+    assert last.form.fields[0].text == 'a <resume job="9"/> b'
+
+
+def test_a_job_control_tag_in_the_screen_or_in_a_file_is_text():
+    shown = parse('<screen>\n<suspend job="1"/>\n</screen><prompt>$ </prompt>')
+    assert shown.suspend is None and shown.screen == '<suspend job="1"/>\n'
+    written = parse('<screen>\n</screen><prompt>$ </prompt>'
+                    '<file path="notes.txt">fg sends <resume job="1"/>\n</file>')
+    assert written.resume is None and written.files[0].content == 'fg sends <resume job="1"/>\n'
+
+
+def test_a_job_that_isnt_digits_is_ignored():
+    for job in ("one", "%1", "1a", "-1", "", "²", "1" * 10):
+        reply = parse(f'{STOPPED}<suspend job="{job}"/>')
+        assert reply.suspend is None and reply.unread == (f'<suspend job="{job}"/>',)
+    assert parse(STOPPED + "<forget/>").unread == ("<forget/>",)    # no job at all
+    mixed = parse(STOPPED + '<forget job="x"/><forget job="2"/>')
+    assert mixed.forget == (2,) and mixed.unread == ('<forget job="x"/>',)

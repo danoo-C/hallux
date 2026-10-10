@@ -546,14 +546,14 @@ def test_list_addons_and_addon_help(attached, tmp_path):
 def test_without_addons_the_tools_are_todays(tmp_path):
     names = [t.name for t in tools.build_tools(Disk(tmp_path))]
     assert names == [t.name for t in tools.build_tools(Disk(tmp_path), addons=[])]
-    assert len(names) == 13 and not [n for n in names if "addon" in n]
+    assert len(names) == 14 and not [n for n in names if "addon" in n]
     assert tools.build_addon_servers([]) == ({}, [])
 
 
 def test_a_machine_gets_its_addons_tools(attached, tmp_path):
     bare = Machine(tmp_path, Hardware(), FakeTerminal()).options()
     assert list(bare.mcp_servers) == ["hallux"]
-    assert len(bare.allowed_tools) == 14          # the disk tools and save_field, as before
+    assert len(bare.allowed_tools) == 15          # the disk tools, save_field, list_processes
     assert all(name.startswith("mcp__hallux__") for name in bare.allowed_tools)
 
     options = Machine(tmp_path, Hardware(), FakeTerminal(), addons=attached).options()

@@ -9,7 +9,9 @@ The AI answers every envelope with
 optionally followed by control tags (<halt/>, <reboot/>, <tty mode="raw"/>), the line to
 put back at the prompt (<edit>cat /etc/</edit>, for Tab completion and friends), a new
 working directory (<cwd>/home/user</cwd>) and, for a
-full-screen program in block mode, a <form> of editable fields (see Form). A prompt that
+full-screen program in block mode, a <form> of editable fields (see Form). Job control has
+three tags of its own (<suspend job="1"/>, <resume job="1"/>, <forget job="1"/>): they put
+a full-screen program aside, bring it back, or drop it. A prompt that
 asks for a password says so (<prompt secret="user">, see Secret). It writes
 control characters as Unicode control pictures ("␛" for ESC), which decode() turns into
 real bytes.
@@ -46,7 +48,11 @@ COLOR_START = re.compile(r"(?:\\(?:e|033|x1b|u001b))?\[[0-9;]{0,19}$"
 TTY_TAG = re.compile(r'<tty\s+mode="(raw|cooked)"\s*/>')
 PROMPT_TAG = re.compile(r"<prompt\b([^>]*)>")           # <prompt> or <prompt secret="user">
 
-FORM_START = re.compile(r"</prompt>(?:\s*<(?:halt|reboot)/>|\s*<tty[^>]*/>)*\s*<form\b")
+JOB_TAG = re.compile(r"<(suspend|resume|forget)\b([^>]*?)/>")     # job control: <suspend job="1"/>
+JOB_NUMBER = re.compile(r"[0-9]{1,9}")                  # the AI's job number, as bash shows it
+
+FORM_START = re.compile(r"</prompt>(?:\s*<(?:halt|reboot)/>|\s*<tty[^>]*/>"
+                        r"|\s*<(?:suspend|resume|forget)\b[^>]*/>)*\s*<form\b")
 FIELD_TAG = re.compile(r"<(editor|line|pager)\b([^>]*?)(/>|>(.*?)</\1>)", re.DOTALL)
 FOOTER_TAG = re.compile(r"<footer>(.*?)</footer>", re.DOTALL)
 FILE_TAG = re.compile(r"<file\b([^>]*)>(.*?)</file>", re.DOTALL)
@@ -147,6 +153,10 @@ class Reply:
     cwd: str | None = None        # the new working directory (boot, cd ~) without a tool call
     files: tuple[FileWrite, ...] = ()   # files to write without a tool call
     memory: str | None = None     # a whole new memory (first boot only)
+    suspend: int | None = None    # job control: put the program on screen aside as this job,
+    resume: int | None = None     # put the program of this job back on screen,
+    forget: tuple[int, ...] = ()  # drop the programs kept as these jobs
+    unread: tuple[str, ...] = ()  # job-control tags that name no job: ignored
 
 
 def envelope(tag: str, body: str = "", **attrs: object) -> str:
@@ -216,6 +226,7 @@ def parse(text: str) -> Reply:
                   if (a := _attributes(raw)).get("path"))
     tail_without_files = FILE_TAG.sub("", tail)
     memory = MEMORY_TAG.search(tail_without_files)
+    jobs, unread = _job_tags(tail_without_files)
     return Reply(
         screen=decode(screen.removeprefix("\n")),
         prompt=None if prompt is None else decode(prompt),
@@ -229,7 +240,25 @@ def parse(text: str) -> Reply:
         cwd=tail.partition("<cwd>")[2].partition("</cwd>")[0].strip() or None if "<cwd>" in tail else None,
         files=files,
         memory=memory[1].removeprefix("\n") if memory else None,
+        suspend=jobs["suspend"][0] if jobs["suspend"] else None,
+        resume=jobs["resume"][0] if jobs["resume"] else None,
+        forget=tuple(jobs["forget"]),
+        unread=unread,
     )
+
+
+def _job_tags(text: str) -> tuple[dict[str, list[int]], tuple[str, ...]]:
+    """The job-control tags after the prompt, by kind, and those that name no job. A job is
+    the number bash shows in [1]: digits only, since hallux keeps a screen under it."""
+    jobs: dict[str, list[int]] = {"suspend": [], "resume": [], "forget": []}
+    unread = []
+    for tag in JOB_TAG.finditer(text):
+        number = _attributes(tag[2]).get("job", "")
+        if JOB_NUMBER.fullmatch(number):
+            jobs[tag[1]].append(int(number))
+        else:
+            unread.append(tag[0])
+    return jobs, tuple(unread)
 
 
 def _block(text: str) -> str:

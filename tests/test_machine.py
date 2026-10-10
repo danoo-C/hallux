@@ -917,7 +917,7 @@ def test_a_change_that_cant_hold_with_another_setting_changes_nothing(tmp_path, 
     panel gets the words, and they fit behind it at 80 columns."""
     caplog.set_level(logging.INFO, logger="hallux")
     machine, _ = idle(tmp_path)
-    assert machine.change("agent_job_budget_usd", "3") == "is over the budget for all jobs"
+    assert machine.change("agent_job_budget_usd", "5") == "is over the budget for all jobs"
     assert machine.change("agent_budget_usd", "0.5") == "is under the budget per job"
     assert machine.hardware == Hardware() and machine.unsaved == {}
     assert "config" not in caplog.text
@@ -1766,18 +1766,18 @@ def test_the_machines_own_options_are_what_they_were_and_share_a_jobs(tmp_path):
     assert [getattr(own, name) for name in shared] == [
         True, [], "dontAsk", [], True, {"no-session-persistence": None}, None]
     assert [getattr(jobs, name) for name in shared] == [getattr(own, name) for name in shared]
-    assert (jobs.max_budget_usd, jobs.max_turns, jobs.fallback_model) == (1.0, 60, None)
+    assert (jobs.max_budget_usd, jobs.max_turns, jobs.fallback_model) == (2.0, 60, None)
 
 
 def test_done_when_jobs_start_until_one_is_refused_and_a_typed_line_lets_the_next_start(tmp_path):
-    """The step's "Done when", with the default settings: $1.00 a job, $2.00 for all jobs."""
+    """The step's "Done when", with the default settings: $2.00 a job, $4.00 for all jobs."""
     bench = Bench(tmp_path, FakeModel(screen(""), screen("notes.md\n"), HALT), Hardware())
     steps = []
-    for _ in range(4):                               # each costs $0.30: 1.30, 1.60, 1.90, 2.20
-        steps += [bench.start(), bench.settled()]
+    for _ in range(7):                               # each costs $0.30: the next would ask for
+        steps += [bench.start(), bench.settled()]    # 2.30, 2.60, 2.90, 3.20, 3.50, 3.80, 4.10
     tried = bench.run(*steps, bench.start(), "ls", bench.start(), bench.settled(), EOFError)
-    assert tried == [30001, 30002, 30003, 30004, "EAGAIN", 30005]
-    assert round(bench.jobs.spent, 2) == 1.5 and bench.jobs.spent_since_refill == 0.3
+    assert tried == [*range(30001, 30008), "EAGAIN", 30008]
+    assert round(bench.jobs.spent, 2) == 2.4 and bench.jobs.spent_since_refill == 0.3
 
 
 def test_a_key_or_an_action_in_a_full_screen_program_fills_the_jobs_budget(tmp_path):
@@ -1995,20 +1995,20 @@ def test_done_when_an_addon_starts_a_job_and_its_end_is_in_front_of_the_next_mes
     assert last.startswith("<input ") and bench.jobs.waiting() == []      # told, and once
 
 
-def test_a_machine_with_an_agent_gets_the_two_tools_and_the_section_on_jobs(tmp_path):
+def test_a_machine_with_an_agent_gets_kill_process_and_the_section_on_jobs(tmp_path):
     def names(machine):
         return [name.removeprefix("mcp__hallux__") for name in machine.options().allowed_tools]
 
     plain = addons.Addon("plain", "A thing.", "the manual", {})
-    for attached in ([], [plain]):                          # no addon with an agent: as before
-        machine, _ = idle(tmp_path, addons=attached)
+    for attached in ([], [plain]):                          # no addon with an agent: no kill,
+        machine, _ = idle(tmp_path, addons=attached)        # and the prompt has no section
         assert machine.options().system_prompt == SYSTEM_PROMPT
-        assert not {"list_processes", "kill_process"} & set(names(machine))
+        assert "kill_process" not in names(machine) and "list_processes" in names(machine)
     machine, _ = idle(tmp_path, addons=[plain, MUSIC])
-    assert names(machine)[-2:] == ["list_processes", "kill_process"]
+    assert names(machine)[-1] == "kill_process" and "list_processes" in names(machine)
     prompt = machine.options().system_prompt
     assert prompt == SYSTEM_PROMPT.rstrip() + "\n\n" + JOBS_PROMPT
-    assert "list_processes" not in SYSTEM_PROMPT and prompt.endswith("the processes you imagine.\n")
+    assert "kill_process" not in SYSTEM_PROMPT and prompt.endswith("the processes you imagine.\n")
 
 
 def test_the_section_on_jobs_says_where_its_lines_stand():
@@ -2516,3 +2516,359 @@ def test_the_bar_is_told_which_jobs_run_and_what_the_ended_ones_cost(tmp_path):
     bar = StatusBar("claude-opus-5-5", "low")
     bar.update(cost=costs[-1], **told[-1])
     assert "".join(text for _, text in bar.segments(100)).endswith("opus 5.5 · low · ~$0.30 ")
+
+
+# --- job control: Ctrl-Z keeps a full-screen program's screen, and fg puts it back --------------
+
+from hallux.machine import Suspended  # noqa: E402
+
+STOPPED = screen("\n[1]+  Stopped                 nano hello.txt\n", tail='<suspend job="1"/>')
+TOP_STOPPED = screen("\n[1]+  Stopped                 top\n", tail='<suspend job="1"/>')
+FG = '<screen>\n</screen><prompt></prompt><resume job="1"/>'
+CTRL_Z = Action("C-z", "text", (FieldState("text", "hi\nthere\n", (2, 6), True, True),))
+KEY["C-z"] = Action("keys", None, events=("<key>C-z</key>",))
+LEAVE = Action("C-x", "text", ())
+
+
+def powered(tmp_path, model, *keys, hardware=Hardware(), terminal=FakeTerminal):
+    """A machine and its terminal, for keys that look at the machine on their way."""
+    terminal = terminal(*keys)
+    return Machine(tmp_path, hardware, terminal, client_factory=model), terminal
+
+
+def test_ctrl_z_keeps_the_program_and_fg_puts_it_back(tmp_path):
+    seen = []
+    model = FakeModel(screen(""), NANO, STOPPED, screen("notes.md\n"), FG,
+                      screen("", prompt="$ "), HALT)
+    look = lambda: seen.append((terminal.suspended_forms(), list(machine.suspended),  # noqa: E731
+                                machine.in_form, terminal.ended, len(terminal.forms)))
+    machine, terminal = powered(tmp_path, model, "nano hello.txt", CTRL_Z, look, "ls", "fg",
+                                look, LEAVE, look, "exit")
+    asyncio.run(machine.run())
+    assert seen == [([1], [1], False, 1, 1),                # kept, and the shell is back
+                    ([], [], True, 1, 2),                   # on screen again, kept no more
+                    ([], [], False, 2, 2)]                  # left, as any program
+    assert terminal.forms[1] == terminal.forms[0]           # the screen and the form it had
+    assert terminal.screen == "\n[1]+  Stopped                 nano hello.txt\nnotes.md\n"
+    assert [prompt for prompt, _ in terminal.prompts] == ["user@hallux:~$ "] * 3 + ["$ "]
+    assert kinds(model) == ["boot", "input", "action", "input", "input", "action", "input"]
+    assert model.sessions[0][2].startswith('<action key="C-z" focus="text" ')
+    assert model.sessions[0][5].startswith('<action key="C-x" ')     # no message for the resume,
+    assert "tick" not in kinds(model)                       # and a program without a tick gets none
+
+
+def test_a_screen_that_came_with_a_resume_isnt_shown_and_what_streamed_is_taken_back(tmp_path):
+    named = '<screen>\nnano hello.txt\n</screen><prompt></prompt><resume job="1"/>'
+    for fg, retracted in ((result(named, chunks=4), ["nano hello.txt\n"]), (result(named), []),
+                          (result(FG, chunks=4), [])):
+        model = FakeModel(screen(""), NANO, STOPPED, fg, screen("", prompt="$ "), HALT)
+        terminal = FakeTerminal("nano hello.txt", CTRL_Z, "fg", LEAVE, "exit")
+        terminal.streams = True
+        run(tmp_path, model, terminal)
+        assert getattr(terminal, "retracted", []) == retracted
+        assert terminal.screen == "\n[1]+  Stopped                 nano hello.txt\n"
+        assert terminal.forms[1] == terminal.forms[0]
+        assert terminal.prompts[-1][0] == "$ "              # the resume's own prompt isn't taken
+
+
+def test_a_resumed_program_keeps_the_fields_the_machine_knew(tmp_path):
+    """Leaving a program forgets its fields. A field the AI shows again after a resume keeps
+    its place and its file all the same."""
+    again = ('<screen>\n  GNU nano 7.2   hello.txt\n</screen><prompt></prompt>'
+             '<form keys="C-o C-x"><editor id="text"/></form>')
+    model = FakeModel(screen(""), NANO, STOPPED, FG, again, screen("", prompt="$ "), HALT)
+    terminal = FakeTerminal("nano hello.txt", CTRL_Z, "fg", Action("C-o", "text", ()), LEAVE,
+                            "exit")
+    run(tmp_path, model, terminal)
+    shown_again = terminal.forms[2][1].fields[0]
+    assert (shown_again.top, shown_again.height, shown_again.file) == (3, 20, "hello.txt")
+    assert shown_again.text is None                         # and what the user typed
+
+
+def test_a_resumed_program_with_a_tick_gets_a_tick_at_once(tmp_path):
+    model = FakeModel(screen(""), TOP, TOP_STOPPED, FG, TOP, screen("", prompt="$ "), HALT)
+    terminal = FakeTerminal("top", KEY["C-z"], "fg", KEY["q"], "exit")    # nobody waits 3 seconds
+    run(tmp_path, model, terminal)
+    assert kinds(model) == ["boot", "input", "keys", "input", "tick", "keys", "input"]
+    assert model.sessions[0][2].endswith("><key>C-z</key></keys>")
+    assert terminal.ticks == [3]                            # and it ticks on, as it asked
+    assert terminal.activities[4] == "updating…"
+
+
+def test_what_a_program_spent_on_ticks_and_the_tick_it_asked_for_come_back_with_it(tmp_path):
+    seen = []
+    model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                      result(TOP, total=0.12),                           # a tick for $0.10
+                      result(TOP_STOPPED, total=0.13), result(FG, total=0.14),
+                      result(TOP, total=0.15),                           # the tick at once: $0.01
+                      result(screen("", prompt="$ "), total=0.16), result(HALT, total=0.17))
+    look = lambda: seen.append((machine.tick_spent, machine.tick_asked,  # noqa: E731
+                                dict(machine.suspended), machine.view().spent_ticks))
+    machine, terminal = powered(tmp_path, model, "top", Action("tick", None), KEY["C-z"], look,
+                                "fg", look, KEY["q"], "exit")
+    asyncio.run(machine.run())
+    (spent, asked, kept, shown), back = seen
+    assert (spent, asked, shown) == (0, 0, None)            # at the shell: nothing ticks
+    assert kept == {1: Suspended({}, pytest.approx(0.10), 3)}
+    assert back == (pytest.approx(0.11), 3, {}, pytest.approx(0.11))
+
+
+def test_a_program_suspended_with_its_tick_budget_used_up_comes_back_paused(tmp_path):
+    model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                      result(TOP, total=0.32),                           # a tick for $0.30
+                      result(TOP_STOPPED, total=0.33), result(FG, total=0.34),
+                      result(TOP, total=0.35), result(screen("", prompt="$ "), total=0.36),
+                      result(HALT, total=0.37))
+    terminal = FakeTerminal("top", Action("tick", None), KEY["C-z"], "fg", KEY["x"], KEY["q"],
+                            "exit")
+    run(tmp_path, model, terminal)
+    assert kinds(model) == ["boot", "input", "tick", "keys", "input", "keys", "keys", "input"]
+    assert marked(model) == [None, None, None, "keys", None, "keys", "keys", None]   # not at
+    assert terminal.ticks == [0]                            # the shell; and back without a tick
+    assert notes_of(terminal) == [TICKS_USED, None, TICKS_USED, None]    # the bar says why
+
+
+def test_a_program_resumed_while_the_boot_is_over_its_budget_gets_no_tick(tmp_path):
+    model = FakeModel(result(screen("boot\n"), total=0.001), result(TOP, total=0.002),
+                      result(TOP_STOPPED, total=0.003), result(FG, total=0.02),     # over
+                      result(screen("", prompt="$ "), total=0.03), result(HALT, total=0.04))
+    machine, terminal = powered(tmp_path, model, "top", KEY["C-z"], "fg",
+                                lambda: machine.change("max_budget_usd", ""), KEY["q"], "exit",
+                                hardware=A_CENT)
+    asyncio.run(machine.run())
+    assert kinds(model) == ["boot", "input", "keys", "input", "keys", "input"]     # no tick
+    assert terminal.ticks == [0, 3]                         # none, until the cap was raised
+    assert notes_of(terminal) == [CENT_USED, None]
+
+
+def test_a_refill_counts_for_a_program_that_is_put_aside(tmp_path):
+    model = FakeModel(result(screen(""), total=0.01), result(TOP, total=0.02),
+                      result(TOP, total=0.32),                           # a tick for $0.30
+                      result(TOP_STOPPED, total=0.33), result(FG, total=0.34),
+                      result(TOP, total=0.35), result(screen("", prompt="$ "), total=0.36),
+                      result(HALT, total=0.37))
+    machine, terminal = powered(tmp_path, model, "top", Action("tick", None), KEY["C-z"],
+                                lambda: machine.refill(), "fg", KEY["q"], "exit")
+    asyncio.run(machine.run())
+    assert kinds(model) == ["boot", "input", "tick", "keys", "input", "tick", "keys", "input"]
+    assert terminal.ticks == [3]                            # it ticks again when it is back
+
+
+def test_a_resume_of_a_screen_that_is_gone_tells_the_ai_and_its_answer_is_shown(tmp_path):
+    gone = '<gone job="1" cwd="/" time="[^"]+" cols="100" rows="30"></gone>'
+    model = FakeModel(screen(""), FG, NANO, screen("", prompt="$ "), HALT)
+    terminal = FakeTerminal("fg", LEAVE, "exit")
+    run(tmp_path, model, terminal)
+    assert kinds(model) == ["boot", "input", "gone", "action", "input"]
+    assert re.fullmatch(gone, model.sessions[0][2])
+    assert terminal.forms[0][0] == "  GNU nano 7.2   hello.txt\n"       # drawn again
+    model = FakeModel(screen(""), FG, screen("bash: fg: 1: no such job\n"), HALT)
+    terminal = FakeTerminal("fg", "exit")
+    run(tmp_path, model, terminal)
+    assert kinds(model) == ["boot", "input", "gone", "input"]
+    assert terminal.screen == "bash: fg: 1: no such job\n" and terminal.forms is None
+
+
+def test_a_resume_in_the_answer_to_gone_isnt_followed(tmp_path, caplog):
+    """A model that insists would be called in a loop, a message each time."""
+    model = FakeModel(screen(""), FG, FG, HALT)
+    terminal = FakeTerminal("fg", "exit")
+    run(tmp_path, model, terminal)
+    assert kinds(model) == ["boot", "input", "gone", "input"]
+    assert 'ignored <resume job="1"/> in the answer to <gone>' in caplog.text
+    assert terminal.prompts[-1][0] == "user@hallux:~$ "     # the prompt it had
+
+
+def test_a_resume_that_brings_nothing_back_leaves_the_machine_at_the_shell(tmp_path, caplog):
+    """Also when a program was on screen: an answer with <resume> is the end of that one."""
+    seen = []
+    model = FakeModel(screen(""), TOP, FG, FG, HALT)        # top answers x, and then <gone>,
+    look = lambda: seen.append((machine.in_form, terminal.ended, len(terminal.forms)))  # noqa: E731
+    machine, terminal = powered(tmp_path, model, "top", KEY["x"], look, "exit")    # with a resume
+    asyncio.run(machine.run())
+    assert kinds(model) == ["boot", "input", "keys", "gone", "input"]
+    assert seen == [(False, 1, 1)] and terminal.prompts[-1][0] == "user@hallux:~$ "
+    assert 'ignored <resume job="1"/> in the answer to <gone>' in caplog.text
+
+
+def test_over_the_boots_cap_the_ai_isnt_told_that_a_screen_is_gone(tmp_path):
+    model = FakeModel(result(screen("boot\n"), total=0.001), result(FG, total=0.02),    # over
+                      result(HALT, total=0.03))
+    machine, terminal = powered(tmp_path, model, "fg",
+                                lambda: machine.change("max_budget_usd", ""), "exit",
+                                hardware=A_CENT)
+    asyncio.run(machine.run())
+    assert kinds(model) == ["boot", "input", "input"]       # no <gone> went out over the cap
+    assert notes_of(terminal) == [CENT_USED, None]
+
+
+def test_forget_drops_the_kept_screen(tmp_path):
+    seen = []
+    killed = screen("[1]+  Terminated              nano hello.txt\n", tail='<forget job="1"/>')
+    model = FakeModel(screen(""), NANO, STOPPED, killed, HALT)
+    look = lambda: seen.append((terminal.suspended_forms(), list(machine.suspended)))  # noqa: E731
+    machine, terminal = powered(tmp_path, model, "nano hello.txt", CTRL_Z, look, "kill %1", look,
+                                "exit")
+    asyncio.run(machine.run())
+    assert seen == [([1], [1]), ([], [])]
+    assert terminal.screen.endswith("[1]+  Terminated              nano hello.txt\n")
+
+
+def test_a_suspend_at_the_shell_prompt_keeps_nothing_and_the_log_says_so(tmp_path, caplog):
+    asked = []
+    model = FakeModel(screen(""), screen("", tail='<suspend job="1"/>'), HALT)
+    machine, terminal = powered(tmp_path, model, Key("C-z", "", keep_line=False), "exit")
+    terminal.suspend_form = lambda job: asked.append(job)
+    asyncio.run(machine.run())
+    assert asked == [] and machine.suspended == {}
+    assert ('<suspend job="1"/> without a full-screen program on screen: nothing is kept'
+            in caplog.text)
+
+
+def test_a_job_that_isnt_a_number_is_ignored_and_the_log_says_so(tmp_path, caplog):
+    named = screen("\n[1]+  Stopped                 nano hello.txt\n", tail='<suspend job="%1"/>')
+    model = FakeModel(screen(""), NANO, named, HALT)
+    terminal = FakeTerminal("nano hello.txt", CTRL_Z, "exit")
+    machine = run(tmp_path, model, terminal)
+    assert terminal.suspended_forms() == [] and machine.suspended == {}
+    assert terminal.ended == 1                              # left, as without the tag
+    assert 'ignored <suspend job="%1"/>: a job is a number' in caplog.text
+
+
+def test_a_reboot_drops_every_kept_screen(tmp_path):
+    seen = []
+    look = lambda: seen.append((terminal.suspended_forms(), dict(machine.suspended)))  # noqa: E731
+    model = FakeModel(screen("boot 1\n"), NANO, STOPPED,
+                      screen("rebooting\n", prompt="", tail="<reboot/>"),
+                      screen("boot 2\n"), FG, screen("bash: fg: current: no such job\n"), HALT)
+    machine, terminal = powered(tmp_path, model, "nano hello.txt", CTRL_Z, look, "reboot", look,
+                                "fg", "exit")
+    asyncio.run(machine.run())
+    assert [kept for kept, _ in seen] == [[1], []] and seen[1][1] == {}
+    assert [own(message)[1:].split(" ")[0] for message in model.sessions[1]] == [
+        "boot", "input", "gone", "input"]                   # the next boot knows of no job 1
+    assert terminal.ended == 1 and len(terminal.forms) == 1     # and nothing came back
+
+
+class KeepsOne(FakeTerminal):
+    """A terminal that keeps one program: the real one keeps eight, and a script's none."""
+
+    async def suspend_form(self, job):
+        await super().suspend_form(job)
+        while len(self.suspended) > 1:
+            del self.suspended[next(iter(self.suspended))]
+
+
+def test_the_machine_keeps_only_what_the_terminal_keeps(tmp_path):
+    seen = []
+    second = screen("\n[2]+  Stopped                 top\n", tail='<suspend job="2"/>')
+    model = FakeModel(screen(""), NANO, STOPPED, TOP, second, FG, screen("no such job\n"), HALT)
+    look = lambda: seen.append((terminal.suspended_forms(), list(machine.suspended)))  # noqa: E731
+    machine, terminal = powered(tmp_path, model, "nano hello.txt", CTRL_Z, "top", KEY["C-z"],
+                                look, "fg %1", "exit", terminal=KeepsOne)
+    asyncio.run(machine.run())
+    assert seen == [([2], [2])]
+    assert kinds(model) == ["boot", "input", "action", "input", "keys", "input", "gone", "input"]
+
+
+def test_one_answer_can_put_a_program_aside_and_bring_another_back(tmp_path):
+    seen = []
+    swap = '<screen>\n</screen><prompt></prompt><suspend job="2"/><resume job="1"/>'
+    model = FakeModel(screen(""), NANO, STOPPED, TOP, swap, screen("", prompt="$ "), HALT)
+    look = lambda: seen.append((terminal.suspended_forms(), list(machine.suspended),  # noqa: E731
+                                list(machine.fields), machine.tick_asked))
+    machine, terminal = powered(tmp_path, model, "nano hello.txt", CTRL_Z, "top", KEY["x"], look,
+                                LEAVE, "exit")
+    asyncio.run(machine.run())
+    assert seen == [([2], [2], ["text"], 0)]                # top is kept, and nano is back
+    assert terminal.forms[2] == terminal.forms[0] and terminal.forms[1][1].raw
+    assert machine.suspended == {} and terminal.suspended_forms() == []     # the boot is over
+
+
+def test_a_program_shown_in_the_answer_that_suspends_another_starts_anew(tmp_path):
+    """The suspended program's fields are put aside with it: a field of the same name in the
+    next program is a new one, in its own place."""
+    seen = []
+    other = ('<form keys="C-x"><editor id="text"/></form><screen>\n  other\n</screen>'
+             '<prompt></prompt><suspend job="1"/>')
+    model = FakeModel(screen(""), NANO, other, screen("", prompt="$ "), HALT)
+    look = lambda: seen.append(terminal.suspended_forms())  # noqa: E731
+    machine, terminal = powered(tmp_path, model, "nano hello.txt", CTRL_Z, look, LEAVE, "exit")
+    asyncio.run(machine.run())
+    new = terminal.forms[1][1].fields[0]
+    assert seen == [[1]] and (new.top, new.height, new.file) == (1, 0, None)
+
+
+def test_a_resume_takes_the_place_of_the_program_on_screen(tmp_path):
+    """Who wants the program on screen kept suspends it in the same answer. Without that it
+    is left, and nothing of it stays: not its tick, and not its note on the bar."""
+    seen = []
+    model = FakeModel(result(screen(""), total=0.01), result(NANO, total=0.02),
+                      result(STOPPED, total=0.03), result(TOP, total=0.04),
+                      result(TOP, total=0.34),                           # a tick for $0.30
+                      result(FG, total=0.35), result(screen("", prompt="$ "), total=0.36),
+                      result(HALT, total=0.37))
+    look = lambda: seen.append((list(machine.fields), machine.tick_asked,  # noqa: E731
+                                machine.tick_spent, dict(machine.notes)))
+    machine, terminal = powered(tmp_path, model, "nano hello.txt", CTRL_Z, "top",
+                                Action("tick", None), KEY["x"], look, LEAVE, "exit")
+    asyncio.run(machine.run())
+    assert seen == [(["text"], 0, 0, {})]
+    assert notes_of(terminal) == [TICKS_USED, None]
+    assert marked(model)[5] == "keys" and marked(model)[6] is None      # nano isn't paused
+
+
+def test_jobs_reads_the_kept_screens_through_list_processes(tmp_path, served):
+    answers = []
+
+    async def the_ai_reads_the_table():
+        answer = await served["hallux"]["list_processes"].handler({})
+        answers.append(json.loads(answer["content"][0]["text"]))
+
+    listing = [the_ai_reads_the_table] + result(screen("[1]+  Stopped   nano hello.txt\n"))
+    model = FakeModel(screen(""), listing, NANO, STOPPED, listing, HALT)
+    terminal = FakeTerminal("jobs", "nano hello.txt", CTRL_Z, "jobs", "exit")
+    run(tmp_path, model, terminal)
+    assert answers == [{"jobs": [], "screens": []}, {"jobs": [], "screens": [1]}]
+
+
+def test_the_prompt_has_the_three_tags_of_job_control():
+    reply_format = SYSTEM_PROMPT.split("\nREPLY FORMAT")[1].split("\nINPUT\n")[0]
+    assert reply_format.index("- After </prompt> you may add <halt/>") < reply_format.index(
+        "- After </prompt> you may add a job-control tag")
+    tags = rule_of(reply_format, "After </prompt> you may add a job-control tag")
+    for part in ("The terminal keeps a suspended program's screen, so you never write that "
+                 "screen a second time",
+                 '<suspend job="1"/> puts the program on screen aside as job 1',
+                 "Leave it as usual, with a normal screen and prompt: [1]+ Stopped ...",
+                 '<resume job="1"/> puts job 1 back on screen exactly as it was.',
+                 "a screen you write there is not shown.",
+                 '<forget job="1"/> drops the kept screen of job 1',
+                 "The job number is yours, the one bash shows in [1]: digits only."):
+        assert part in tags, part
+
+
+def test_the_prompts_lines_on_ctrl_z_say_how_a_full_screen_program_is_suspended():
+    keys = " ".join(SYSTEM_PROMPT.split("\nKEYS\n")[1].split("\nPASSWORDS\n")[0].split())
+    assert ("C-z suspends the foreground program ([1]+ Stopped ...); at an empty prompt, nothing. "
+            'A full-screen program is suspended with <suspend job="N"/>, and fg then answers '
+            'with <resume job="N"/> and no screen. A program in the background gets no ticks: '
+            "when it comes back, work out from the clock what it did meanwhile.") in keys
+    block_mode = " ".join(SYSTEM_PROMPT.split("\nBLOCK MODE: ")[1].split("\nRAW MODE: ")[0].split())
+    assert "in editors they type. C-c and C-z always come to you." in block_mode
+    arrives = rule_of(SYSTEM_PROMPT.split("\nINPUT\n")[1].split("\nKEYS\n")[0],
+                      '<gone job="1"></gone>')
+    for part in ('you answered with <resume job="1"/>, and the terminal no longer keeps that '
+                 "program's screen. Draw the program again, whole.",
+                 'For jobs, call list_processes first: its "screens" are the job numbers whose '
+                 "screens are kept",
+                 "a suspended full-screen program that isn't among them is gone, so don't list "
+                 "it."):
+        assert part in arrives, part
+
+
+def test_the_section_on_jobs_says_that_a_done_line_has_two_sources():
+    shows = " ".join(JOBS_PROMPT.split("How it shows. ")[1].split())
+    assert ("- A Done line has two sources. For a job it comes from the job's event, as above. "
+            "A program you imagine in the background (kittymusic &) has no event: you decide "
+            "when it has ended, and print its Done line before the next prompt.") in shows

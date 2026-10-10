@@ -132,8 +132,8 @@ def test_the_agents_rows_as_they_are_shown():
     Agent model        same as Model
     Max agent effort   high
     Agents at once     2
-    Budget per job     $1.00
-    Budget, all jobs   $2.00               spent since you typed: ~$0.00
+    Budget per job     $2.00
+    Budget, all jobs   $4.00               spent since you typed: ~$0.00
     Time per job       600s"""
     shown = {line[4:23].strip(): line[23:].strip() for line in text(machine).splitlines()}
     assert [shown[LABELS[name]] for name in AGENTS] == [
@@ -151,7 +151,7 @@ def test_the_budget_for_all_jobs_shows_what_was_spent_since_it_was_filled():
         return before, drawn(panel)
 
     before, after = on(machine, script)
-    assert any(line.rstrip().endswith("Budget, all jobs   $2.00               "
+    assert any(line.rstrip().endswith("Budget, all jobs   $4.00               "
                                       "spent since you typed: ~$0.30") for line in before)
     assert any("spent since you typed: ~$0.61" in line for line in after)
     assert "spent since you typed: ~$0.30" not in text(Machine(spent_jobs=0.3))   # no agent, no row
@@ -167,9 +167,9 @@ def test_what_was_spent_has_the_tilde_and_a_limit_has_none():
     for label, limit, spent in (("Budget per boot", "$2.00", "spent in this boot: ~$1.42"),
                                 ("Tick budget", "$0.25", "spent by this program: ~$0.05"),
                                 ("Event budget", "$0.25", "spent since you typed: ~$0.10"),
-                                ("Budget, all jobs", "$2.00", "spent since you typed: ~$0.30")):
+                                ("Budget, all jobs", "$4.00", "spent since you typed: ~$0.30")):
         assert rows[label].startswith(f"{limit} ") and rows[label].endswith(spent)
-    assert rows["Budget per job"] == "$1.00" and shown.count("~$") == 4
+    assert rows["Budget per job"] == "$2.00" and shown.count("~$") == 4
     machine.shown["spent_since_refill"] = 0.1
     assert "spent since the refill: ~$0.10 · this boot: ~$1.42" in text(machine)
 
@@ -249,8 +249,8 @@ def test_the_panel_the_app_builds_shows_the_six_rows_only_with_an_agent(tmp_path
      ["› none", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"]),
     ("agent_max_effort", "high", "↑ ↓ pick", ["low", "medium", "› high", "xhigh", "max"]),
     ("agent_max_running", "2", "type a whole number", []),
-    ("agent_job_budget_usd", "1.00", "type the dollars", []),
-    ("agent_budget_usd", "2.00", "type the dollars", []),
+    ("agent_job_budget_usd", "2.00", "type the dollars", []),
+    ("agent_budget_usd", "4.00", "type the dollars", []),
     ("agent_timeout_seconds", "600", "type the seconds", []),
 ])
 def test_each_agents_row_opens_with_its_own_hint_and_list(name, opens_with, how, offered):

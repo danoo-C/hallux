@@ -656,7 +656,8 @@ class BlockMode:
         if "Enter" in form.keys:                         # a pager as a menu: the cursor's
             kb.add("enter", filter=pager, eager=True)(self._action("Enter"))  # line is the pick
         printable_ok = pager | vi_navigation_mode        # letters type text in editors
-        for name in dict.fromkeys((*form.keys, "C-c")):  # Ctrl-C always reaches the AI
+        always = ("C-c", "C-z")                          # the AI interrupts, or suspends: they
+        for name in dict.fromkeys((*form.keys, *always)):    # reach it whatever the form lists
             keys = key_sequence(name)
             if keys is None or name == "Enter":          # Enter never acts in an editor
                 continue

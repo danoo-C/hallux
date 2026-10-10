@@ -1,6 +1,6 @@
 # Plan: addon agents
 
-**Status:** written on 2026-10-04. **Steps 1 to 12, 14 and 16 are built, and the code of
+**Status:** written on 2026-10-04. **Steps 1 to 12 and 14 to 16 are built, and the code of
 step 13,** the first seven on 2026-10-05; the table under [The steps](#the-steps) says how
 far the build is. The design
 it follows is
@@ -230,7 +230,7 @@ step of the config panel's plan.
 | 12. The status bar and the costs | [12-bar.md](12-bar.md) | 10 | Built on 2026-10-06 |
 | 13. The composer | [13-composer.md](13-composer.md) | 2, 11, 12 | The code is built, on 2026-10-06. The scripted run waits for the user's go, and the live run is the user's |
 | 14. Keeping a screen, and two lines for the composer's prompt | [14-kept-screens.md](14-kept-screens.md) | 13's code, for the two lines only | Built on 2026-10-07 |
-| 15. Job control | [15-job-control.md](15-job-control.md) | 10, 14 | Not built |
+| 15. Job control | [15-job-control.md](15-job-control.md) | 10, 14 | Built on 2026-10-10. The try by hand is the user's |
 | 16. The panel's two tabs | [16-panel-tabs.md](16-panel-tabs.md) | 10, panel 5 to 7 | Built on 2026-10-06 |
 | 17. The documentation and the live run | [17-live-run.md](17-live-run.md) | 13, 15, 16 | Not built |
 
@@ -303,9 +303,12 @@ The user ran a first composition on 2026-10-07, on the real model. What it showe
 | 13 | The run is written up: a drum solo for $0.78 in 265 seconds, two rounds of `check`, the `Done` line by itself. Points 4 to 8 of its list are still to try |
 | 14 | It carries two lines for the composer's prompt, at the user's request: a status line before anything else, and the changes of a round in one turn. Its file says what is built and tested. Built on 2026-10-07; whether a real composer follows them shows in the next live run |
 
-**Still for the user to decide:** the default cap per job, which the run used to 78 percent
-(suggested: $2.00 a job and $4.00 for all jobs), and whether step 13's scripted run is
-still wanted.
+**Decided by the user on 2026-10-10:** the default cap per job, which the run used to 78
+percent, is $2.00 now, and the budget for all jobs $4.00. The timeout stays 600 seconds.
+Steps 3 and 8 name the defaults they were built with, $1.00 and $2.00; the design's table
+has the new ones.
+
+**Still for the user to decide:** whether step 13's scripted run is still wanted.
 
 ---
 
@@ -315,8 +318,9 @@ still wanted.
   the budgets and the timeout. The first live run is in step 13, and the numbers are set
   again there.
 - **With the default budgets a second job fits only while nothing was spent.** A running
-  job counts with its full cap of $1.00 against $2.00 for all jobs. That is the design, and
-  step 13 says whether $2.00 is the right number.
+  job counts with its full cap of $2.00 against $4.00 for all jobs. That is the design.
+  The numbers were $1.00 and $2.00 until the user doubled them on 2026-10-10, after step
+  13's first live run.
 - **A second session may slow the first.** Both share the account's rate limits. The check
   for the design ran Haiku, where both were quick.
 - **A job can pass its dollar cap by one model message,** and what a killed job cost can

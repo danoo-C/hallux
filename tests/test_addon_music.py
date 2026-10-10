@@ -598,7 +598,8 @@ def test_a_machine_with_the_music_addon_can_start_a_job(addon, tmp_path):
     from hallux.machine import JOBS_PROMPT, Machine
     options = Machine(tmp_path / "m", Hardware(), FakeTerminal(), addons=[addon]).options()
     assert options.system_prompt.endswith(JOBS_PROMPT)
-    assert options.allowed_tools[-6:] == ["mcp__hallux__list_processes", "mcp__hallux__kill_process",
+    assert "mcp__hallux__list_processes" in options.allowed_tools
+    assert options.allowed_tools[-5:] == ["mcp__hallux__kill_process",
                                           "mcp__music__play", "mcp__music__stop",
                                           "mcp__music__check", "mcp__music__compose"]
 

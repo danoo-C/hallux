@@ -73,7 +73,10 @@ def run(op: Callable[[], Any]) -> dict[str, Any]:
 
 
 def build_tools(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon] = (),
-                events: Events | None = None, jobs: Processes | None = None) -> list[SdkMcpTool]:
+                events: Events | None = None, jobs: Processes | None = None,
+                screens: Callable[[], Sequence[int]] | None = None) -> list[SdkMcpTool]:
+    """hallux's own tools. `screens` gives the job numbers of the full-screen programs that
+    are put aside (the terminal's suspended_forms)."""
     def make(name: str, description: str, input_schema: dict, method: Callable,
              annotations: ToolAnnotations | None = None) -> SdkMcpTool:
         async def handler(args: dict[str, Any]) -> dict[str, Any]:
@@ -104,6 +107,10 @@ def build_tools(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon
             raise ValueError(f"the addon {name!r} has no events")
         events.listen(name, on)
         return {"listening": events.listening()}
+
+    def list_processes() -> dict:
+        return {"jobs": jobs.table() if jobs is not None else [],
+                "screens": list(screens()) if screens is not None else []}
 
     def kill_process(pid: int) -> dict:
         jobs.kill(pid)
@@ -167,6 +174,13 @@ def build_tools(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon
              "Replace exactly one occurrence of old with new in the memory; an empty old "
              "appends new to the end. Returns the new size: keep the memory short.",
              schema({"old": TEXT, "new": TEXT}), disk.memory_edit),
+        make("list_processes",
+             "What is real behind ps, top, htop and jobs. jobs: the machine's real background "
+             "jobs, which addon functions started: pid, addon, agent, state (running; waiting "
+             "inside a tool call; done, failed or killed), seconds, tokens, folder and a "
+             "status line. A job that has ended is listed once. screens: the job numbers of "
+             "the suspended full-screen programs whose screens are kept.",
+             schema({}), list_processes, READS),
     ] + ([] if not addons else [
         make("list_addons",
              "The addons attached to this machine, name and summary: the same list as "
@@ -182,12 +196,6 @@ def build_tools(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon
              "<events>. on=false stops it. Returns the addons you listen to.",
              schema({"name": TEXT}, {"on": FLAG}), addon_listen),
     ]) + ([] if jobs is None or not any(addon.agent for addon in addons) else [
-        make("list_processes",
-             "The machine's real background jobs, which addon functions started: pid, addon, "
-             "agent, state (running; waiting inside a tool call; done, failed or killed), "
-             "seconds, tokens, folder and a status line. For ps, top, htop and jobs. A job "
-             "that has ended is listed once.",
-             schema({}), lambda: {"jobs": jobs.table()}, READS),
         make("kill_process",
              "End a background job by its pid (kill). ESRCH: no job has that pid, or it has "
              "ended already.",
@@ -196,10 +204,11 @@ def build_tools(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon
 
 
 def build_server(disk: Disk, fields: Fields | None = None, addons: Sequence[Addon] = (),
-                 events: Events | None = None, jobs: Processes | None = None
+                 events: Events | None = None, jobs: Processes | None = None,
+                 screens: Callable[[], Sequence[int]] | None = None
                  ) -> tuple[McpSdkServerConfig, list[str]]:
     """The MCP server for ClaudeAgentOptions.mcp_servers, and the names for allowed_tools."""
-    tools = build_tools(disk, fields, addons, events, jobs)
+    tools = build_tools(disk, fields, addons, events, jobs, screens)
     return create_sdk_mcp_server(SERVER, tools=tools), [f"mcp__{SERVER}__{t.name}" for t in tools]
 
 

@@ -95,6 +95,20 @@ def test_ctrl_c_always_reaches_the_ai():
     assert session(script).key == "C-c"
 
 
+@pytest.mark.parametrize("keymap", ["emacs", "nano", "vi"])
+def test_ctrl_z_always_reaches_the_ai_with_the_fields(keymap):
+    """Job control: the AI suspends the program, also one whose form doesn't list the key."""
+    async def script(block, keys):
+        await block.show("", Form((EDITOR,), keys=("C-x",), keymap=keymap))
+        keys("typed \x1a")
+        return await next_action(block)
+
+    action = session(script)
+    assert action.key == "C-z" and action.focus == "text"
+    (state,) = action.fields
+    assert state.text == "typed line one\nline two\n" and state.changed
+
+
 def test_clicks_outside_the_fields_go_to_the_ai():
     async def script(block, keys):
         await block.show("title bar\n", Form((EDITOR,), keys=("C-x",)))
@@ -579,6 +593,25 @@ def test_a_suspended_editor_comes_back_with_its_text_its_cursor_and_its_focus():
     (state,) = action.fields
     assert action.key == "C-o" and state.text == before[0] and state.cursor == (2, 7)
     assert state.changed and state.modified
+
+
+def test_a_resume_over_a_program_that_is_on_screen_takes_its_place():
+    """Job control: a <resume> without a <suspend> of what is on screen ends that program."""
+    async def script(block, keys):
+        await block.show("  GNU nano 7.2   h.txt\n", NANO_FORM)
+        keys("hello ")
+        await asyncio.sleep(0.2)
+        await block.suspend(1)
+        await block.show("player\n", PLAYER)           # another program, without fields
+        back = await block.resume(1)                   # and the editor over it
+        on_screen = block.form.raw, list(block.areas), block._focused().id, block.composed[0]
+        keys("x" + CTRL["O"])                          # typed into the editor, at its cursor
+        return back, on_screen, await next_action(block), list(block.suspended)
+
+    back, on_screen, action, left = session(script)
+    assert back is True and left == []
+    assert on_screen[:3] == (False, ["text"], "text") and on_screen[3].startswith("  GNU nano 7.2")
+    assert action.key == "C-o" and action.fields[0].text == "hello xline one\nline two\n"
 
 
 def test_the_field_that_had_the_focus_has_it_again():

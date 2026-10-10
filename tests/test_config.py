@@ -386,7 +386,7 @@ def test_load_reads_what_save_wrote(tmp_path):
 def test_the_agents_settings_have_defaults(tmp_path):
     hw = config.load(tmp_path)
     assert (hw.agent_model, hw.agent_max_effort, hw.agent_max_running) == (None, "high", 2)
-    assert (hw.agent_job_budget_usd, hw.agent_budget_usd, hw.agent_timeout_seconds) == (1.0, 2.0, 600)
+    assert (hw.agent_job_budget_usd, hw.agent_budget_usd, hw.agent_timeout_seconds) == (2.0, 4.0, 600)
 
 
 def test_the_agents_settings_are_read_from_the_file(tmp_path):
@@ -406,11 +406,11 @@ def test_the_agents_settings_are_read_from_the_file(tmp_path):
 
 def test_a_budget_per_job_above_the_budget_for_all_jobs_is_refused(tmp_path):
     """No job could ever start. A budget for all jobs of 0 turns the agents off instead."""
-    write_config(tmp_path, "agent_job_budget_usd = 3.0\n")       # the other is 2.00 by default
+    write_config(tmp_path, "agent_job_budget_usd = 5.0\n")       # the other is 4.00 by default
     with pytest.raises(ValueError) as e:
         config.load(tmp_path)
-    assert str(e.value) == (f"{tmp_path / '.hallux' / 'config.toml'}: agent_job_budget_usd (3.0) "
-                            f"must not be more than agent_budget_usd (2.0)")
+    assert str(e.value) == (f"{tmp_path / '.hallux' / 'config.toml'}: agent_job_budget_usd (5.0) "
+                            f"must not be more than agent_budget_usd (4.0)")
     write_config(tmp_path, "agent_job_budget_usd = 3.0\nagent_budget_usd = 0\n")
     assert config.load(tmp_path).agent_budget_usd == 0
     write_config(tmp_path, "agent_job_budget_usd = 3.0\nagent_budget_usd = 3\n")

@@ -261,3 +261,22 @@ def test_the_summary_counts_the_jobs_and_their_cost(jobs, shown):
     line = summary(records, Hardware(), jobs)
     assert line.startswith("opus 5.5 · low — boot 1.0s (0 tool calls), reboot 0.2s (0 tool calls)")
     assert line.endswith(f" — {shown}") and summary(records, Hardware()).endswith("$0.12")
+
+
+# --- job control in a scripted run -----------------------------------------------------------
+
+def test_a_scripted_run_keeps_no_screen_so_fg_has_the_program_drawn_again(tmp_path):
+    """A transcript has no screen to keep. The AI is told so at its <resume>, and draws."""
+    nano = ('<screen>\n  GNU nano 7.2\n</screen><prompt></prompt>'
+            '<form keys="C-x"><editor id="text" top="2"/></form>')
+    stopped = screen("\n[1]+  Stopped                 nano\n", tail='<suspend job="1"/>')
+    model = FakeModel(screen("boot\n"), nano, stopped,
+                      '<screen>\n</screen><prompt></prompt><resume job="1"/>', nano,
+                      screen("", prompt="$ "), screen("logout\n", prompt="", tail="<halt/>"))
+    terminal = run_lines(tmp_path, model, ["nano", "@action C-z", "fg", "@action C-x"])
+    kinds = [message[1:].split(" ")[0] for message in model.sessions[0]]
+    assert kinds == ["boot", "input", "action", "input", "gone", "action", "key"]
+    assert [record.typed for record in terminal.records] == [
+        "(boot)", "nano", "@action C-z", "fg", "@action C-x", "@key C-d"]
+    assert "[1]+  Stopped" in terminal.records[2].output
+    assert "GNU nano 7.2" in terminal.records[3].output                  # drawn again, under fg

@@ -31,7 +31,7 @@ def test_server_and_allowed_tool_names(root):
     server, allowed = build_server(Disk(root))
     assert server["type"] == "sdk" and server["name"] == "hallux"
     assert allowed == [f"mcp__hallux__{t.name}" for t in build_tools(Disk(root))]
-    assert "mcp__hallux__memory_edit" in allowed and len(allowed) == 13
+    assert "mcp__hallux__memory_edit" in allowed and len(allowed) == 14
 
 
 def test_schemas_are_strict(tools):
@@ -90,7 +90,7 @@ class Screen:
 def test_save_field_only_exists_with_block_mode(root):
     assert "save_field" not in {t.name for t in build_tools(Disk(root))}
     _, allowed = build_server(Disk(root), fields=Screen())
-    assert "mcp__hallux__save_field" in allowed and len(allowed) == 14
+    assert "mcp__hallux__save_field" in allowed and len(allowed) == 15
 
 
 def test_save_field_writes_exactly_what_the_user_typed(root):
@@ -103,3 +103,20 @@ def test_save_field_writes_exactly_what_the_user_typed(root):
     payload, is_error = call(tools, "save_field", field="nope", path="/x")
     assert is_error and "no field 'nope'" in payload["error"]
     assert call(tools, "save_field", field="text", path="/.hallux/memory.md")[0] == {"error": "ENOENT"}
+
+
+def test_list_processes_is_on_every_machine_with_the_kept_screens(root):
+    """Job control: jobs reads the kept screens through it, and a machine without an addon
+    has kept screens too. Its table of jobs is just empty there."""
+    assert call({t.name: t for t in build_tools(Disk(root))}, "list_processes") == (
+        {"jobs": [], "screens": []}, False)
+    kept = [2, 5]
+    tools = {t.name: t for t in build_tools(Disk(root), screens=lambda: kept)}
+    assert call(tools, "list_processes") == ({"jobs": [], "screens": [2, 5]}, False)
+    kept.remove(2)                                          # asked each time, not once
+    assert call(tools, "list_processes") == ({"jobs": [], "screens": [5]}, False)
+    assert "screens" in tools["list_processes"].description
+
+
+def test_kill_process_isnt_there_without_an_agent_addon(root):
+    assert "kill_process" not in {t.name for t in build_tools(Disk(root), screens=lambda: [1])}

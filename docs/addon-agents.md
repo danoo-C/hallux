@@ -416,9 +416,13 @@ file, like the machine itself.
 | `agent_model` | the model the machine runs on | The model every addon agent runs on |
 | `agent_max_effort` | `"high"` | An agent gets the effort it asks for, or this if it asks for more |
 | `agent_max_running` | `2` | Jobs at the same time, over all addons. `0` turns addon agents off |
-| `agent_job_budget_usd` | `1.00` | What one job may cost. A job that uses it up is killed |
-| `agent_budget_usd` | `2.00` | What all jobs together may cost since you last did something at the keyboard. Used up: no new job starts until you type a line or press a key |
+| `agent_job_budget_usd` | `2.00` | What one job may cost. A job that uses it up is killed |
+| `agent_budget_usd` | `4.00` | What all jobs together may cost since you last did something at the keyboard. Used up: no new job starts until you type a line or press a key |
 | `agent_timeout_seconds` | `600` | How long one job may run |
+
+The two budgets were `1.00` and `2.00` until 2026-10-10. The first composition on the real
+model used $0.78 of its $1.00, and a job that is killed loses all its work, so the user
+doubled both.
 
 - **The effort is capped, not refused.** A cap that turns `xhigh` into `high` is what a cap
   is for. The log says it when the addon loads.
@@ -430,7 +434,7 @@ file, like the machine itself.
 - **What fills the second budget again:** a typed line, as for `event_budget_usd`, and also
   a key or an action in a full-screen program. Somebody is at the keyboard then. A tick and
   an event don't fill it. Without this a player that starts a composition on a key press
-  would get `EAGAIN` after $2.00, until the user leaves the program and types a line.
+  would get `EAGAIN` after $4.00, until the user leaves the program and types a line.
 - **The panel's Refill budgets button fills it too,** with every other budget
   ([config-panel.md](config-panel.md), section 5). The budget per boot then counts the jobs
   that have ended since the refill.
@@ -472,7 +476,7 @@ file, like the machine itself.
   to the AI. This needs step 3 of the panel's plan.
 - **A boot can pass its cap while jobs run.** A running job isn't counted yet, so a boot
   just under its cap can start jobs, and they spend their caps. The budget for all jobs
-  bounds how far: $2.00 with the defaults. The README says so.
+  bounds how far: $4.00 with the defaults. The README says so.
 - **Without `agent_model` a job gets the model the main session really runs on,** not the
   `model` setting. The two differ only when the setting holds a name that is no model: a
   running session refuses such a name and goes on, and a new session fails on it. Every

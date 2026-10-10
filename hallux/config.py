@@ -50,8 +50,8 @@ class Hardware:
     agent_model: str | None = None            # None: the model the machine runs on
     agent_max_effort: str = "high"            # an agent gets the effort it asks for, at most this
     agent_max_running: int = 2                # jobs at the same time; 0 turns addon agents off
-    agent_job_budget_usd: float = 1.00        # what one job may cost, then it is killed
-    agent_budget_usd: float = 2.00            # all jobs since you last typed or pressed a key
+    agent_job_budget_usd: float = 2.00        # what one job may cost, then it is killed
+    agent_budget_usd: float = 4.00            # all jobs since you last typed or pressed a key
     agent_timeout_seconds: float = 600        # how long one job may run
 
     @property

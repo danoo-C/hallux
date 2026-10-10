@@ -131,3 +131,119 @@ the resume the editor's screen is as it was, row by row.
 The tests pass, the check on the pseudo-terminal holds, and the user has tried it by hand:
 text typed into nano, Ctrl-Z, a command at the shell, `fg`, and the text is there, within
 the time of one short answer.
+
+## As built
+
+Built on 2026-10-10, on the branch `addon-agents`. 35 new tests, 1578 in all. The user's
+try by hand, the last part of "Done when", is open. Decided while building:
+
+**The tags**
+
+- **A job is a whole number of at most nine digits.** `job="007"` is job 7, since the
+  terminal keeps a screen under a number (step 14). Anything else is ignored, and the log
+  has `ignored <suspend job="%1"/>: a job is a number`.
+- **The tags are read after `</screen>`, and not inside a `<file>`.** A file whose text
+  holds a tag is written as it is.
+- **In the older order, with the form after the prompt, the tags may stand between the
+  two.** Without that the form wasn't read, and a field's text was searched for tags.
+- **One answer can hold several `<forget>`,** and one `<suspend>` and one `<resume>`: the
+  first of each counts.
+- **Their order in one answer is forget, suspend, resume.** So
+  `<suspend job="2"/><resume job="1"/>` puts the program on screen aside and brings
+  another back, in one answer.
+
+**Suspend and resume**
+
+- **The machine keeps three things beside the terminal's screen,** in `Machine.suspended`,
+  by job number: the fields, what the program spent on ticks, the tick it asked for. After
+  every suspend it drops what the terminal doesn't keep: the ninth screen, and in a
+  scripted run all of them.
+- **Nothing of an answer with `<resume>` is shown,** and its prompt isn't taken. That
+  holds also when the screen is gone.
+- **A `<resume>` with a program on screen and no `<suspend>` ends that program.** The
+  resumed one takes its place, and nothing of the other stays: not its tick, and not its
+  note on the bar. Step 14 left this to this step.
+- **A `<suspend>` in an answer that shows a form** keeps the old program, and the new one
+  starts anew: a field of the same name is a new field.
+- **The first tick of a program that came back is sent by the machine,** without a wait
+  on the terminal. Keys typed while it is answered are kept by block mode, as after any
+  action.
+- **`block_mode` is three parts now:** showing a form, deciding its tick (`tick_for`), and
+  attending the program on screen (`attend`). A resume uses the last two.
+
+**A screen that is gone**
+
+- **A `<resume>` in the answer to `<gone>` isn't followed.** A model that insists would be
+  called in a loop, a message each time. The log says so, and the user is at the shell
+  with the prompt it had.
+- **Over the boot's budget `<gone>` isn't sent.** The bar says that the budget is used,
+  and the user is at the shell. After the cap is raised, `fg` leads to `<gone>` as usual.
+- **In a scripted run every `fg` leads to `<gone>`,** since a transcript keeps no screen.
+  The AI draws the program again, and the transcript has it under `fg`.
+
+**`list_processes`**
+
+- **`screens` holds numbers, `[1, 2]`,** not the strings of this file's example. The
+  terminal keeps them as numbers since step 14.
+- **It stands with the base tools, after `memory_edit`.** `kill_process` is still the last
+  of Hallux's own tools, and only on a machine with an agent addon.
+- **The terminal is asked at each call,** through `build_tools(..., screens=…)`.
+
+**The budgets**
+
+- **Refill budgets counts for a program that is put aside too:** what it had spent on
+  ticks starts at zero. Otherwise the button would lift the pause of the program on screen
+  and not of one in the background.
+
+**The prompt** grew by about 1,200 characters, and the section on jobs by about 230.
+
+| Where | What it says now |
+|---|---|
+| REPLY FORMAT | A point of its own after `<halt/>`: the three tags, that the terminal keeps the screen, that a screen written with `<resume>` isn't shown, and that the job number is the AI's |
+| INPUT | `<gone job="1"></gone>`, and that `jobs` calls `list_processes` first |
+| KEYS | Three lines under the one on C-z: `<suspend>`, `fg` with `<resume>` and no screen, no ticks in the background |
+| BLOCK MODE | "C-c and C-z always come to you" |
+| The section on jobs | One more point under "How it shows": the two sources of a `Done` line |
+
+The main prompt names `list_processes` now. A test said that it doesn't; it holds
+`kill_process` to that instead.
+
+**Old tests that changed:** eight that pin the list of tools, in `tests/test_tools.py`,
+`tests/test_addons.py`, `tests/test_agents.py`, `tests/test_addon_music.py` and
+`tests/test_machine.py`. Two of them were about "the two tools"; they are about
+`kill_process` now. One more file than the list at the top got tests:
+`tests/test_script.py`.
+
+**How I checked the tests themselves:** 33 wrong versions, one at a time, among them a
+form that isn't kept, fields, spending or a tick that don't come back, no tick at once, a
+tick at once while ticks are paused, a screen with `<resume>` that is shown, a `<gone>`
+that isn't sent, one that goes out over the cap, a `<resume>` after `<gone>` that is
+followed, a boot's end that keeps the screens, and Ctrl-Z only where a form lists it. 32
+failed a test at once. One didn't: a suspend that leaves the machine's own state as it
+was, which shows only when the same answer brings a new form. A test for that is added,
+and the version fails it.
+
+**The check on a pseudo-terminal:** the real machine and the real terminal with its bar,
+24 rows by 80 columns, the bytes replayed through a terminal emulator. The model is a
+pretend one that answers as a bash with job control would. Its nano doesn't list Ctrl-Z.
+
+| Moment | What the screen showed |
+|---|---|
+| The editor, with `unsaved ` typed and the cursor a line down | The title, the two lines, the footer on row 23 and the bar on row 24 |
+| After Ctrl-Z | The shell's screen from before the editor, an empty line, `[1]+  Stopped                 nano notes.txt`, the prompt, and the bar on row 24 only |
+| After `ls`, thirty lines written piece by piece | The lines scrolled in order above the prompt, and the bar on row 24 only |
+| After `fg`, whose answer wrote `nano notes.txt` into its screen | Every row of the editor as it was, and the cursor on row 3, column 9, where it had been |
+| `more ` typed, then Ctrl-O | The text went in at the cursor: `line twomore`. At the shell the line under `fg` is the editor's last word: nothing of the answer's screen is left |
+| The same, with what streamed not taken back | `nano notes.txt` stays under `fg`. So the check can fail |
+| The same, with a terminal that keeps no screen | `<gone>` goes out, and the editor is drawn again as new, without the typed text. The check fails there, as it should |
+| `top` with a tick of 30 seconds, Ctrl-Z, `fg` | Its screen was back and patched by a tick 0.2 seconds after `fg` |
+
+**What I couldn't check**
+
+- **What a real model does with the new lines of the prompt:** whether Ctrl-Z in nano gets
+  `<suspend>` and a `Stopped` line, whether `fg` gets `<resume>` with an empty screen,
+  whether `jobs` reads `list_processes`, and whether `kill %1` gets `<forget>`. No test
+  calls a model, and no paid run was made for this step.
+- **A real terminal:** the emulator shows where text lands, not how the switch looks.
+- **The try by hand,** which is the user's: text typed into nano, Ctrl-Z, a command at the
+  shell, `fg`, and the text is there, within the time of one short answer.
