@@ -98,3 +98,88 @@ import puts an `a.score` there before the job lands, and the job's file lands as
 
 The tests pass, and a folder of a few hundred real files (the repository's own `docs`)
 copied into a temporary machine is the same as its source, compared file by file.
+
+## As built
+
+Built on 2026-10-10, on the branch `drag-and-drop`. 38 new tests (25 for the copy, 12 for
+`copy_whole`, 1 in `tests/test_jobdisk.py`), 1722 in all; no old test changed. Nothing calls
+`carry_out` yet.
+
+**How it is built:**
+
+- **The copy goes over the sources with the tree's own walk,** `_walk` of step 2. So a
+  thing's mark in the copy is worked out by the very lines that marked it in the tree, at
+  the moment the copy comes to it.
+- **The walk gives each thing its real place too.** The disk is asked once for a thing, the
+  mark is worked out for that place, and the copy writes at that place and no other.
+- **`copy_whole(source, real, stop, wrote)` has a fourth thing, `wrote`.** It is told the
+  bytes of each piece. That is how `tell` can speak inside a big file. It returns `False`
+  when it was stopped.
+- **`_new_beside` is two functions now.** `_open_beside` makes the file beside the place and
+  raises what the folder says against it. `_new_beside` is the old one on top of it, which
+  says nothing and returns `None`, for `write_whole`. The copy needs the reason: a full
+  disk ends the whole copy, a folder that isn't there ends one file.
+
+**Where it differs from the text above:**
+
+- **"A file that can't be read, between two that can"** is skipped and counted as
+  `can't be read`, by the walk's mark: it never reaches the copy. It is in `failed` only
+  when it seemed readable and then couldn't be opened. Both are tested.
+- **`tell` counts what the copy is through with, copied or not:** folders, files and bytes,
+  as a `Counts`. So it ends at the counts of the tree, and the tab's `120 of 1,400 files`
+  ends at 1,400 (the note step 2 left).
+
+**Decided while building,** where the text above leaves it open:
+
+- **`copy_whole` replaces a file and nothing else.** If a folder or a link has the name by
+  the time it writes, it fails with `File exists`, and the name stays what it was. The
+  walk would have marked that `in the way`; this is for what gets there in between.
+- **A path in `failed` is the path below the destination,** `album/b.txt`. Its reason is
+  the system's own words: `Permission denied`, `No such file or directory`. How many more
+  failed than the 50 is in `more`.
+- **A copy that the tree would refuse never starts.** `ended` then holds the tree's words:
+  `would be copied into itself: home`, `the folder is gone: /home/user/Videos`.
+- **Whether the destination is gone** is looked at when a write fails. A copy in which
+  nothing fails never asks.
+- **`folders` are the folders that were made,** not the ones that were there and got
+  something. **`bytes`** are the bytes that were written, counted piece by piece.
+- **A name is in `names` when something was written at it or under it:** a folder that was
+  made, a file, a link. A folder that was there already, in which everything was skipped,
+  isn't among them.
+- **A folder that can't be made is in `failed`, and so is every thing in it,** each with
+  `No such file or directory`. Nothing in it is left out without a word.
+- **The copy has the source's time, the one it was changed at and the one it was read
+  at.** A folder that is made has the time it was made.
+- **Stopped inside a file,** the copy ends at once: `copy_whole` looks at `stop` before
+  every megabyte.
+
+**What it can't do:**
+
+- **A file whose name is longer than about 238 bytes can't be copied.** There is no room
+  for the longer name of the file beside it. It is in `failed` with `File name too long`.
+  `write_whole` writes such a file in place; a copy never writes in place, as the step
+  says.
+- **A file that appears at a place while the copy writes to that place is replaced.** The
+  walk looks, then the copy writes and renames, and what is renamed last stays (the
+  README's risk about the AI and the copy writing at the same time).
+
+**For the later steps:**
+
+- **Step 4:** `tell` gets a `Counts`, as the walk's `tell` does. How far the copy is, of
+  how much, is that `Counts` beside the tree's.
+- **Step 6:** `names` is in the order of the drop.
+
+**Checked beyond the tests:**
+
+- **Done when:** the repository's `docs`, 77 files in 19 folders, 1.1 MB, copied into a
+  temporary machine in 0.05 seconds: the same as its source file by file, and every file
+  has its source's time. Dropped a second time without the question, all 77 are
+  `appeared meanwhile` and nothing is written. With overwrite, all 77 are replaced.
+- **Many small files:** 686 files of 8.5 MB in 0.34 seconds, the same as their source.
+- **Files of the Windows drive:** three fonts from `C:\Windows\Fonts` are `r-xr-xr-x`
+  there and arrive as `rw-r--r--`, the mode of a new file here, with the same bytes and
+  the source's time.
+- **A real thread, stopped from another:** a file of 200 MB, `stop` set 0.1 seconds into
+  it. The copy ended as `stopped`, no file was at the place, nothing with `.hallux-` in its
+  name was left, and the thread had ended.
+- **The code was broken in 59 ways,** one at a time, and a test noticed each.

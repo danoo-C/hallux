@@ -12,9 +12,14 @@ look works out what would be copied, where to, and what is in the way, and write
 the tree that the panel shows before a copy. A thing that was dropped goes into a directory
 of the machine under its own name, and what is in a folder goes under that folder's place.
 Every place is asked of the Disk, so none is outside the machine or in /.hallux.
+
+carry_out copies. It goes over what was dropped once more and decides about each thing as
+it is at that moment, by the same walk and the same marks as the tree. No file is ever
+seen half-copied (disk.copy_whole), and none is replaced that the user wasn't asked about.
 """
 from __future__ import annotations
 
+import errno
 import functools
 import os
 import posixpath
@@ -30,7 +35,7 @@ from pathlib import Path
 from typing import Callable, Iterator, Sequence
 from urllib.parse import unquote, urlsplit
 
-from hallux.disk import Disk
+from hallux.disk import Disk, copy_whole
 
 LONGEST = 64 * 1024                           # bytes of a text that can still be a drop
 SHOWN = 60                                    # characters of a text that a refusal repeats:
@@ -58,6 +63,9 @@ HERE, IN_THE_WAY, NO_PLACE, UNREADABLE, NOT_COPIED = (
 SKIPPED = (HERE, IN_THE_WAY, NO_PLACE, UNREADABLE, NOT_COPIED)
 EXISTS = "exists"                             # a file is there already: the user is asked
 LEADS = "→"                                   # a link in a dropped folder: "→ ../cat.png"
+MEANWHILE = "appeared meanwhile"              # a file that is there, and the user wasn't asked
+STOPPED, FULL = "stopped", "the disk is full"                     # why a copy ended early
+FAILED_MAX = 50                               # failures a copy names; the rest it counts
 
 Translate = Callable[[str], "str | None"]
 
@@ -226,7 +234,8 @@ class Tree:
 class _Entry:
     """One thing a walk comes to: a thing that was dropped, or one in a dropped folder."""
     source: Path                      # where it is on the user's computer
-    where: str                        # its place, as the machine's path
+    where: str                        # its place, as the machine's path,
+    place: Path | None                # and as the real one; None where the disk gives none
     depth: int
     name: str
     kind: str
@@ -351,7 +360,11 @@ def _walk(disk: Disk, sources: Sequence[Path], into: str) -> Iterator[_Entry]:
         where = posixpath.join(above, name)
         found = _seen(source, follow=depth == 0)      # what was dropped itself is followed
         kind = _kind(found)
-        mark, leads, names = _mark(disk, source, kind, found, where), "", []
+        try:
+            place = disk.place(where)
+        except OSError:
+            place = None
+        mark, leads, names = _mark(source, kind, found, place), "", []
         try:
             if mark == LEADS:
                 leads = os.readlink(source)
@@ -360,7 +373,7 @@ def _walk(disk: Disk, sources: Sequence[Path], into: str) -> Iterator[_Entry]:
         except OSError:
             mark = UNREADABLE
         size = found.st_size if found is not None and kind == FILE else 0
-        yield _Entry(source, where, depth, name, kind, size, mark, leads, number, of)
+        yield _Entry(source, where, place, depth, name, kind, size, mark, leads, number, of)
         waiting += [(source / child, child, where, depth + 1, at, len(names))
                     for at, child in reversed(list(enumerate(names)))]
 
@@ -380,12 +393,9 @@ def _kind(found: os.stat_result | None) -> str:
             else LINK if stat.S_ISLNK(found.st_mode) else OTHER)
 
 
-def _mark(disk: Disk, source: Path, kind: str, found: os.stat_result | None,
-          where: str) -> str:
+def _mark(source: Path, kind: str, found: os.stat_result | None, place: Path | None) -> str:
     """The mark of one thing: the first that fits. LEADS for a link that would be copied."""
-    try:
-        place = disk.place(where)
-    except OSError:
+    if place is None:
         return NO_PLACE
     there = _seen(place, follow=False)                # a link at the place is seen as a link
     if found is not None and there is not None and os.path.samestat(found, there):
@@ -399,3 +409,130 @@ def _mark(disk: Disk, source: Path, kind: str, found: os.stat_result | None,
     if kind == FILE and there is not None:
         return EXISTS
     return LEADS if kind == LINK else ""
+
+
+# ---------------------------------------------------------------------- the copy
+
+@dataclass(frozen=True)
+class Result:
+    """What a copy did."""
+    into: str                         # the destination, as the machine's path
+    files: int = 0                    # what was written: files and links,
+    folders: int = 0                  # the folders that were made,
+    bytes: int = 0                    # and what the files hold
+    skipped: dict[str, int] = field(default_factory=dict)    # what wasn't copied, by its mark;
+                                                             # MEANWHILE is one of them
+    failed: tuple[tuple[str, str], ...] = ()      # up to FAILED_MAX: a path below `into`, and why
+    more: int = 0                     # how many more failed
+    ended: str | None = None          # why it stopped early
+    names: tuple[str, ...] = ()       # the dropped names under which something was written, a
+                                      # folder's with a / after it
+
+
+def carry_out(disk: Disk, sources: Sequence[Path], into: str, overwrite: bool | None,
+              stop: threading.Event | None = None,
+              tell: Callable[[Counts], None] | None = None) -> Result:
+    """Copy `sources`, the paths of a drop, into `into`, a directory of the machine.
+
+    It doesn't copy from a tree: it goes over the sources again and decides about each thing
+    as it is by then. What has a mark that skips is skipped. A file that exists is replaced
+    if `overwrite` is True and skipped if it is False. None means that the user wasn't asked,
+    because nothing existed when the tree was made: what exists by now is skipped, and counted
+    as MEANWHILE.
+
+    What goes wrong with one thing is that thing's: it is in `failed` with its reason, and
+    the copy goes on. Three things end the whole copy, and what was written until then stays:
+    `stop` is set, the disk is full, the destination is gone.
+
+    `tell` gets how far the copy has come, after each thing and some times a second inside a
+    big file: the folders, the files and the bytes it is through with, copied or not. They
+    end at the counts of the tree."""
+    into = disk.virtual(into)
+    ended = _refused(disk, sources, into)
+    if ended is not None:
+        return Result(into, ended=ended)
+    files = folders = held = more = 0
+    skipped: dict[str, int] = {}
+    failed: list[tuple[str, str]] = []
+    names: dict[str, None] = {}                       # in the order they were dropped
+    seen_folders = seen_files = seen_bytes = 0        # how far it is through, for `tell`
+    told = time.monotonic()
+
+    def wrote(count: int) -> None:
+        """A piece of a file is written."""
+        nonlocal seen_bytes, told
+        seen_bytes += count
+        if tell is not None and time.monotonic() - told >= TELL_SECONDS:
+            told = time.monotonic()
+            tell(Counts(seen_folders, seen_files, seen_bytes))
+
+    for entry in _walk(disk, sources, into):
+        if stop is not None and stop.is_set():
+            ended = STOPPED
+            break
+        if entry.depth == 0:
+            top = entry.name + "/" * (entry.kind == FOLDER)
+        skip, before, made = _skip(entry.mark, overwrite), seen_bytes, False
+        try:
+            if skip is not None:
+                skipped[skip] = skipped.get(skip, 0) + 1
+            elif entry.kind == FOLDER:
+                made = _make_folder(entry.place)
+                folders += made
+            elif entry.kind == LINK:
+                os.symlink(entry.leads, entry.place)
+                files, made = files + 1, True
+            elif copy_whole(entry.source, entry.place, stop, wrote):
+                files, held, made = files + 1, held + seen_bytes - before, True
+            else:
+                ended = STOPPED
+                break
+        except OSError as e:
+            if e.errno in (errno.ENOSPC, errno.EDQUOT):
+                ended = FULL
+                break
+            if _gone(disk, into):
+                ended = f"the folder is gone: {into}"
+                break
+            if len(failed) < FAILED_MAX:
+                failed.append((posixpath.relpath(entry.where, into),
+                               e.strerror or type(e).__name__))
+            else:
+                more += 1
+        if made:
+            names.setdefault(top)
+        if entry.kind == FOLDER:
+            seen_folders += 1
+        else:
+            seen_files, seen_bytes = seen_files + 1, before + entry.size
+        if tell is not None:
+            tell(Counts(seen_folders, seen_files, seen_bytes))
+    return Result(into, files, folders, held, skipped, tuple(failed), more, ended, tuple(names))
+
+
+def _skip(mark: str, overwrite: bool | None) -> str | None:
+    """Why a thing with this mark isn't copied, or None if it is."""
+    if mark in SKIPPED:
+        return mark
+    if mark == EXISTS and not overwrite:
+        return EXISTS if overwrite is False else MEANWHILE
+    return None
+
+
+def _make_folder(place: Path) -> bool:
+    """Make a folder, unless one is there. Says whether it made one."""
+    try:
+        os.mkdir(place)
+    except FileExistsError:
+        if place.is_symlink() or not place.is_dir():  # something else took the name meanwhile
+            raise
+        return False
+    return True
+
+
+def _gone(disk: Disk, into: str) -> bool:
+    """Is the destination no folder any more?"""
+    try:
+        return not disk.real(into).is_dir()
+    except OSError:
+        return False                                  # behind the fence, which every place says

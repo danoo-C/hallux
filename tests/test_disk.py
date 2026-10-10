@@ -2,11 +2,12 @@ import errno
 import os
 import re
 import stat
+import threading
 
 import pytest
 
 import hallux.disk
-from hallux.disk import READ_LIMIT, Disk
+from hallux.disk import READ_LIMIT, Disk, copy_whole
 
 
 @pytest.fixture
@@ -370,6 +371,145 @@ def test_write_whole_takes_bytes_as_they_are(root):
     hallux.disk.write_whole(sound, "text\r\n")
     assert sound.read_bytes() == b"text\r\n"
     assert sorted(path.name for path in sound.parent.iterdir()) == ["notes.md", "sound.bin"]
+
+
+# ---------------------------------------------------------------- copy_whole: a file of any size
+
+@pytest.fixture
+def photo(outside):
+    """A file of the user's computer, with bytes that are no text, and a time of its own."""
+    photo = outside / "photo.jpg"
+    photo.write_bytes(b"\xff\xd8\x00 ten bytes")
+    os.utime(photo, ns=(1_600_000_000_000_000_000, 1_500_000_000_000_000_000))
+    return photo
+
+
+def test_a_copy_is_the_source_piece_by_piece_and_has_its_time(root, photo, monkeypatch):
+    monkeypatch.setattr(hallux.disk, "PIECE", 4)
+    place, wrote = root / "home" / "user" / "photo.jpg", []
+    assert copy_whole(photo, place, wrote=wrote.append) is True
+    assert place.read_bytes() == photo.read_bytes() and wrote == [4, 4, 4, 1]
+    assert place.stat().st_mtime_ns == 1_500_000_000_000_000_000
+    assert left_behind(place.parent) == []
+
+
+def test_a_copy_of_an_empty_file_is_an_empty_file(root, outside):
+    (outside / "empty").write_bytes(b"")
+    assert copy_whole(outside / "empty", root / "empty") is True
+    assert (root / "empty").read_bytes() == b"" and left_behind(root) == []
+
+
+def test_a_new_copy_has_a_new_files_mode_whatever_the_source_has(root, photo):
+    (root / "plain.txt").write_text("x")              # the way a file was always made
+    for mode in (0o777, 0o600):
+        photo.chmod(mode)
+        copy_whole(photo, root / f"photo-{mode:o}.jpg")
+        assert (root / f"photo-{mode:o}.jpg").stat().st_mode == (root / "plain.txt").stat().st_mode
+
+
+def test_a_copy_over_a_file_keeps_that_files_mode_and_is_never_open_to_others(root, photo,
+                                                                             monkeypatch):
+    secret = root / "home" / "user" / "key"
+    secret.write_text("old\n")
+    secret.chmod(0o600)
+    sizes, chmod = [], os.chmod
+    monkeypatch.setattr(hallux.disk.os, "chmod",
+                        lambda path, mode: (sizes.append(os.stat(path).st_size), chmod(path, mode)))
+    copy_whole(photo, secret)
+    assert sizes == [0] and stat.S_IMODE(secret.stat().st_mode) == 0o600
+    assert secret.read_bytes() == photo.read_bytes()
+
+
+def test_a_reader_that_has_the_file_open_reads_the_old_one_while_it_is_copied_over(root, photo):
+    notes = root / "home" / "user" / "notes.md"
+    with notes.open() as reader:                      # opened before the copy, read after it
+        copy_whole(photo, notes)
+        assert reader.read() == "hello\n"
+    assert notes.read_bytes() == photo.read_bytes() and left_behind(notes.parent) == []
+
+
+def test_a_copy_that_is_stopped_leaves_the_place_as_it_was(root, photo, monkeypatch):
+    monkeypatch.setattr(hallux.disk, "PIECE", 4)
+    notes, new = root / "home" / "user" / "notes.md", root / "home" / "user" / "new.jpg"
+    stop, wrote = threading.Event(), []
+
+    def after_the_first(count):
+        wrote.append(count)
+        stop.set()
+
+    assert copy_whole(photo, notes, stop, after_the_first) is False
+    assert copy_whole(photo, new, stop, after_the_first) is False         # stopped before it began
+    assert wrote == [4]
+    assert notes.read_text() == "hello\n" and not new.exists()
+    assert left_behind(notes.parent) == []
+
+
+def test_a_copy_that_fails_halfway_leaves_the_old_file(root, photo, monkeypatch):
+    def gives_up(source, target):
+        raise OSError(errno.EIO, "the disk gave up")
+
+    notes = root / "home" / "user" / "notes.md"
+    monkeypatch.setattr(hallux.disk.os, "replace", gives_up)
+    fails(errno.EIO, copy_whole, photo, notes)
+    fails(errno.EIO, copy_whole, photo, notes.with_name("new.jpg"))
+    assert notes.read_text() == "hello\n"
+    assert [path.name for path in notes.parent.iterdir()] == ["notes.md"]
+
+
+def test_a_copy_replaces_a_file_and_nothing_else(root, photo, outside):
+    home = root / "home" / "user"
+    (home / "folder").mkdir()
+    (home / "link").symlink_to("notes.md")
+    (home / "out").symlink_to(outside / "secret.txt")
+    for taken in ("folder", "link", "out"):
+        fails(errno.EEXIST, copy_whole, photo, home / taken)
+    assert (home / "folder").is_dir() and os.readlink(home / "link") == "notes.md"
+    assert (home / "notes.md").read_text() == "hello\n"                  # not through the link
+    assert (outside / "secret.txt").read_text() == "host secret\n" and left_behind(home) == []
+
+
+def test_a_copy_of_what_isnt_there_makes_nothing(root, outside):
+    fails(errno.ENOENT, copy_whole, outside / "gone.jpg", root / "home" / "user" / "gone.jpg")
+    fails(errno.EISDIR, copy_whole, outside, root / "home" / "user" / "folder")
+    assert [path.name for path in (root / "home" / "user").iterdir()] == ["notes.md"]
+
+
+def test_when_no_name_beside_the_file_is_free_a_write_goes_in_place_and_a_copy_fails(
+        root, photo, monkeypatch):
+    home = root / "home" / "user"
+    monkeypatch.setattr(hallux.disk.os, "urandom", lambda count: bytes(count))    # one name only
+    (home / ".notes.md.hallux-00000000").write_text("taken, by whatever chance\n")
+    inode = (home / "notes.md").stat().st_ino
+    hallux.disk.write_whole(home / "notes.md", "in place\n")
+    assert (home / "notes.md").read_text() == "in place\n"
+    assert (home / "notes.md").stat().st_ino == inode
+    fails(errno.EEXIST, copy_whole, photo, home / "notes.md")
+    assert (home / "notes.md").read_text() == "in place\n"
+    assert (home / ".notes.md.hallux-00000000").read_text() == "taken, by whatever chance\n"
+
+
+def test_a_copy_never_writes_in_place(root, photo):
+    fails(errno.ENOENT, copy_whole, photo, root / "no" / "such" / "dir" / "photo.jpg")
+    name = "n" * (os.pathconf(root, "PC_NAME_MAX") - 3)       # no room for a second file beside it
+    (root / name).write_text("old\n")
+    fails(errno.ENAMETOOLONG, copy_whole, photo, root / name)
+    assert (root / name).read_text() == "old\n"
+
+
+@not_as_root
+def test_a_copy_fails_where_the_folder_takes_no_new_file_or_the_file_no_writing(root, photo):
+    home = root / "home" / "user"
+    notes = home / "notes.md"
+    home.chmod(0o555)                                 # write_whole would write this one in place
+    try:
+        fails(errno.EACCES, copy_whole, photo, notes)
+        fails(errno.EACCES, copy_whole, photo, home / "new.jpg")
+    finally:
+        home.chmod(0o755)
+    notes.chmod(0o444)                                # and a rename would get around this mode
+    fails(errno.EACCES, copy_whole, photo, notes)
+    assert notes.read_text() == "hello\n" and stat.S_IMODE(notes.stat().st_mode) == 0o444
+    assert [path.name for path in home.iterdir()] == ["notes.md"]
 
 
 def test_make_dir(disk, root):

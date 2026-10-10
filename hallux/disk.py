@@ -10,6 +10,8 @@ errno) or ValueError; hallux.tools turns those into tool results for the AI.
 
 A whole file is never seen half-written: write_whole() writes it beside the old one and
 renames it over it. An addon function reads in a thread of its own, while a tool writes.
+copy_whole() does the same for a file from the user's computer, which may be bigger than
+memory.
 """
 from __future__ import annotations
 
@@ -21,13 +23,16 @@ import os
 import posixpath
 import shutil
 import stat
+import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 log = logging.getLogger("hallux")
 
 HIDDEN_NAME = ".hallux"
 TEMP_MARK = ".hallux-"        # in the name of a file that exists only while another is written
+PIECE = 1024 * 1024           # bytes a copy reads and writes at a time
 READ_LIMIT = 64 * 1024        # bytes returned per read_file call
 FIND_LIMIT = 1000             # entries returned per find call
 EDIT_LIMIT = 1024 * 1024      # biggest file a block-mode editor loads
@@ -96,19 +101,76 @@ def write_whole(real: Path, data: str | bytes) -> None:
         raise
 
 
+def copy_whole(source: Path, real: Path, stop: threading.Event | None = None,
+               wrote: Callable[[int], None] | None = None) -> bool:
+    """Copy a file of any size to a real path, as write_whole writes one: into a new file
+    beside the place, which is renamed over it. Nobody reads it half-copied, and a reader
+    that has the old file open reads the old one to its end. A file that is replaced gives
+    the new one its mode. A new file gets the mode a new file gets, whatever the source's
+    is. The time is the source's.
+
+    It reads and writes a piece at a time. Before each piece it looks at `stop`, and returns
+    False if that is set; after each it tells `wrote` how many bytes that was. Stopped, or
+    with anything gone wrong, the new file is taken away and the place is as it was.
+
+    Unlike write_whole it never writes in place: where the folder takes no new file it
+    fails with what the folder says. And it replaces a file only: a folder or a link that
+    has the name stays."""
+    try:
+        old = real.lstat()
+    except FileNotFoundError:
+        old = None
+    if old is not None:
+        if not stat.S_ISREG(old.st_mode):
+            raise _fail(errno.EEXIST)
+        os.close(os.open(real, os.O_WRONLY))      # as in write_whole: what hallux may not
+                                                  # write stays refused
+    with open(source, "rb") as reader:
+        times = os.fstat(reader.fileno())         # before the reading changes them
+        handle, temp = _open_beside(real)
+        try:
+            with os.fdopen(handle, "wb") as writer:
+                if old is not None:               # the mode first, as in write_whole
+                    os.chmod(temp, stat.S_IMODE(old.st_mode))
+                for piece in iter(lambda: reader.read(PIECE), b""):
+                    if stop is not None and stop.is_set():
+                        break
+                    writer.write(piece)
+                    if wrote is not None:
+                        wrote(len(piece))
+                else:
+                    stop = None                   # through: nothing stops it any more
+            if stop is not None:
+                temp.unlink()
+                return False
+            os.utime(temp, ns=(times.st_atime_ns, times.st_mtime_ns))
+            os.replace(temp, real)                # atomic: the old file or the new, never half
+        except BaseException:
+            with contextlib.suppress(OSError):
+                temp.unlink()                     # nothing is left behind, and the old file stands
+            raise
+    return True
+
+
 def _new_beside(real: Path) -> tuple[int, Path] | None:
     """A new, empty file in the folder of `real`, open for writing, with the mode a new file
     gets. None if the folder takes none: it isn't there, it isn't ours to write, the name
     is too long."""
+    try:
+        return _open_beside(real)
+    except OSError:
+        return None
+
+
+def _open_beside(real: Path) -> tuple[int, Path]:
+    """The same file, or what the folder says against it: an OSError."""
     for _ in range(4):
         temp = real.with_name(f".{real.name}{TEMP_MARK}{os.urandom(4).hex()}")
         try:
             return os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666), temp
         except FileExistsError:
             continue                              # taken, by whatever chance: another name
-        except OSError:
-            return None
-    return None
+    raise _fail(errno.EEXIST)
 
 
 def _write_in_place(real: Path, data: bytes) -> None:

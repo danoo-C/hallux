@@ -1,9 +1,11 @@
 """Reading a drop, hallux/importing.py: the text a terminal sends for a drop becomes real
 paths. Real files in a temporary folder, and a stand-in for wslpath, which notes what it
 was asked."""
+import errno
 import os
 import shutil
 import socket
+import stat
 import threading
 import time
 from pathlib import Path
@@ -12,10 +14,11 @@ from urllib.parse import quote
 import pytest
 
 import hallux.importing
-from hallux.disk import Disk
-from hallux.importing import (EXISTS, FILE, FOLDER, HERE, IN_THE_WAY, LEADS, LINK, LONGEST, MORE,
-                              NO_PLACE, NOT_COPIED, OTHER, UNREADABLE, Counts, Line, NotADrop,
-                              from_windows, look, read_drop)
+from hallux.disk import TEMP_MARK, Disk, copy_whole
+from hallux.importing import (EXISTS, FILE, FOLDER, FULL, HERE, IN_THE_WAY, LEADS, LINK, LONGEST,
+                              MEANWHILE, MORE, NO_PLACE, NOT_COPIED, OTHER, STOPPED, UNREADABLE,
+                              Counts, Line, NotADrop, Result, carry_out, from_windows, look,
+                              read_drop)
 
 DISTRO = "kali-linux"                         # the user's, in every text their terminals sent
 # Eight files, as the user dragged onto Windows Terminal at once on 2026-10-10. The first
@@ -714,3 +717,324 @@ def test_a_walk_tells_some_times_a_second_not_at_every_file(disk, desk):
     told = []
     tree = looked(disk, [desk / "album"], tell=told.append)
     assert tree.counts.files == 200 and len(told) < 20
+
+
+# ================================================================ the copy
+
+PICTURES = "/home/user/Pictures"
+
+
+@pytest.fixture
+def music(root):
+    return root / "home" / "user" / "Music"
+
+
+def held(folder):
+    """What a folder holds: every path below it with its bytes, and a link with where it
+    leads."""
+    return {str(path.relative_to(folder)): os.readlink(path) if path.is_symlink()
+            else path.read_bytes() if path.is_file() else None
+            for path in sorted(folder.rglob("*"))}
+
+
+def left_behind(folder):
+    """The files a copy made beside the ones it wrote, and should have taken away."""
+    return [path for path in folder.rglob("*") if TEMP_MARK in path.name]
+
+
+def failing(monkeypatch, code, *names):
+    """A copy_whole that fails with this errno for the files of these names."""
+    def stand_in(source, real, stop=None, wrote=None):
+        if source.name in names:
+            raise OSError(code, os.strerror(code))
+        return copy_whole(source, real, stop, wrote)
+
+    monkeypatch.setattr(hallux.importing, "copy_whole", stand_in)
+
+
+def test_a_file_arrives_under_its_name(disk, root, desk, music):
+    put(desk, notes_txt="hello")
+    assert carry_out(disk, [desk / "notes.txt"], MUSIC, None) == Result(
+        MUSIC, files=1, folders=0, bytes=5, names=("notes.txt",))
+    assert held(music) == {"notes.txt": b"hello"} and left_behind(root) == []
+
+
+def test_a_folder_arrives_with_all_that_is_in_it(disk, root, desk, music):
+    put(desk / "album", cat_png="12345", sound_bin="\x00\xff")
+    put(desk / "album" / "holiday" / "raw", one_raw="1234567")
+    put(desk / "album" / "empty")
+    result = carry_out(disk, [desk / "album"], MUSIC, None)
+    assert result == Result(MUSIC, files=3, folders=4, bytes=15, names=("album/",))
+    assert held(music / "album") == held(desk / "album") and left_behind(root) == []
+    assert (music / "album" / "empty").is_dir()
+
+
+def test_three_hundred_files_arrive_as_they_are(disk, root, desk, music):
+    for number in range(300):
+        folder = desk / "many" / f"d{number % 7}" / f"e{number % 3}"
+        put(folder, **{f"f{number}_bin": chr(number) * number})
+    (desk / "many" / "latest").symlink_to("d0/e0/f0.bin")
+    result = carry_out(disk, [desk / "many"], MUSIC, None)
+    assert (result.files, result.folders, result.failed, result.ended) == (301, 29, (), None)
+    assert held(music / "many") == held(desk / "many") and len(held(music / "many")) == 329
+
+
+def test_a_folder_into_a_folder_of_its_name_is_merged_into_it(disk, root, desk):
+    put(desk / "Pictures", dog_png="a dog")
+    put(desk / "Pictures" / "holiday", beach_jpg="123")
+    result = carry_out(disk, [desk / "Pictures"], "/home/user", None)
+    assert result == Result("/home/user", files=2, folders=1, bytes=8, names=("Pictures/",))
+    assert held(root / "home" / "user" / "Pictures") == {         # only holiday was made
+        "cat.png": b"a cat", "dog.png": b"a dog", "holiday": None, "holiday/beach.jpg": b"123"}
+
+
+def test_a_file_that_exists_is_replaced_or_skipped_as_the_user_said(disk, root, desk):
+    cat = root / "home" / "user" / "Pictures" / "cat.png"
+    cat.chmod(0o640)
+    put(desk, cat_png="another cat")
+    os.utime(desk / "cat.png", ns=(1_600_000_000_000_000_000, 1_500_000_000_000_000_000))
+    before = as_it_is(root)
+    assert carry_out(disk, [desk / "cat.png"], PICTURES, False) == Result(
+        PICTURES, skipped={EXISTS: 1})
+    assert carry_out(disk, [desk / "cat.png"], PICTURES, None) == Result(   # the user wasn't
+        PICTURES, skipped={MEANWHILE: 1})                                   # asked about it
+    assert as_it_is(root) == before
+    assert carry_out(disk, [desk / "cat.png"], PICTURES, True) == Result(
+        PICTURES, files=1, bytes=11, names=("cat.png",))
+    assert cat.read_text() == "another cat" and left_behind(root) == []
+    assert stat.S_IMODE(cat.stat().st_mode) == 0o640              # the old file's mode,
+    assert cat.stat().st_mtime_ns == 1_500_000_000_000_000_000    # the source's time
+
+
+def test_what_has_a_mark_that_skips_is_skipped_and_its_place_stays(disk, root, desk, music):
+    put(desk / "taken", inside_txt="a folder where a file is")
+    put(desk, linked_txt="a file where a link is")
+    put(music, taken="a file", own_txt="the machine's own")
+    (music / "linked.txt").symlink_to("own.txt")
+    os.mkfifo(desk / "pipe")
+    (desk / "dead").symlink_to(desk / "gone")
+    sources = [desk / "taken", desk / "linked.txt", desk / "pipe", desk / "dead", music / "own.txt"]
+    before = as_it_is(root)
+    for overwrite in (True, False, None):
+        assert carry_out(disk, sources, MUSIC, overwrite) == Result(MUSIC, skipped={
+            IN_THE_WAY: 2, NOT_COPIED: 1, UNREADABLE: 1, HERE: 1})
+    assert as_it_is(root) == before
+
+
+def test_nothing_is_written_into_the_hidden_folder_or_out_of_the_machine(disk, root, desk,
+                                                                         tmp_path):
+    put(desk / ".hallux", config_toml="model = 'mine'", memory_md="# not the machine's")
+    put(desk, notes_txt="hello")
+    outside = put(tmp_path / "outside" / "sub")
+    (root / "home" / "user" / "out").symlink_to(tmp_path / "outside")
+    before, beyond = as_it_is(root), as_it_is(tmp_path / "outside")
+    assert carry_out(disk, [desk / ".hallux"], "/", True) == Result("/", skipped={NO_PLACE: 1})
+    into = "/home/user/out/sub"
+    assert carry_out(disk, [desk / "notes.txt", desk / ".hallux"], into, True) == Result(
+        into, skipped={NO_PLACE: 2})
+    assert as_it_is(root) == before and as_it_is(tmp_path / "outside") == beyond
+    assert outside.is_dir() and (root / ".hallux" / "memory.md").read_text() == "# memory\n"
+
+
+def test_a_link_in_a_dropped_folder_arrives_as_the_link_it_is(disk, desk, music):
+    put(desk / "album" / "holiday", beach_jpg="123")
+    (desk / "album" / "latest").symlink_to("holiday/beach.jpg")
+    (desk / "album" / "all").symlink_to(desk)         # leads out of the machine: dead in it
+    (desk / "album" / "dead").symlink_to("gone")
+    result = carry_out(disk, [desk / "album"], MUSIC, None)
+    assert result == Result(MUSIC, files=4, folders=2, bytes=3, names=("album/",))
+    assert os.readlink(music / "album" / "latest") == "holiday/beach.jpg"
+    assert os.readlink(music / "album" / "all") == str(desk)
+    assert os.readlink(music / "album" / "dead") == "gone"
+    assert (music / "album" / "latest").read_text() == "123"
+
+
+def test_a_dropped_link_arrives_as_what_it_leads_to(disk, desk, music):
+    put(desk / "Pictures", cat_png="12345")
+    (desk / "shots").symlink_to(desk / "Pictures")
+    (desk / "pet.png").symlink_to(desk / "Pictures" / "cat.png")
+    result = carry_out(disk, [desk / "shots", desk / "pet.png"], MUSIC, None)
+    assert result == Result(MUSIC, files=2, folders=1, bytes=10, names=("shots/", "pet.png"))
+    assert held(music) == {"pet.png": b"12345", "shots": None, "shots/cat.png": b"12345"}
+    assert not (music / "shots").is_symlink() and not (music / "pet.png").is_symlink()
+
+
+def test_a_new_file_has_a_new_files_mode_whatever_the_source_has(disk, root, desk, music):
+    put(desk, photo_jpg="from a Windows drive", secret_txt="private")
+    (desk / "photo.jpg").chmod(0o777)
+    (desk / "secret.txt").chmod(0o600)
+    (root / "plain.txt").write_text("x")              # the way the machine makes a file
+    carry_out(disk, [desk / "photo.jpg", desk / "secret.txt"], MUSIC, None)
+    assert (music / "photo.jpg").stat().st_mode == (root / "plain.txt").stat().st_mode
+    assert (music / "secret.txt").stat().st_mode == (root / "plain.txt").stat().st_mode
+
+
+def test_a_copy_stopped_inside_a_big_file_leaves_its_place_as_it_was(disk, root, desk, music,
+                                                                    monkeypatch):
+    monkeypatch.setattr(hallux.importing, "TELL_SECONDS", 0)
+    put(desk, a_txt="first", c_txt="never reached")
+    (desk / "big.bin").write_bytes(b"x" * 3 * 1024 * 1024)
+    put(music, **{"big_bin": "the old one"})
+    stop, told = threading.Event(), []
+
+    def tell(counts):
+        told.append(counts.bytes)
+        if counts.bytes > 1024 * 1024:                # after the first piece of big.bin
+            stop.set()
+
+    result = carry_out(disk, [desk / "a.txt", desk / "big.bin", desk / "c.txt"], MUSIC, True,
+                       stop=stop, tell=tell)
+    assert result == Result(MUSIC, files=1, bytes=5, ended=STOPPED, names=("a.txt",))
+    assert told == [5, 5, 5 + 1024 * 1024]            # a.txt's piece, a.txt, the first piece
+    assert held(music) == {"a.txt": b"first", "big.bin": b"the old one"}
+    assert left_behind(root) == []
+
+
+def test_a_copy_that_is_stopped_before_it_starts_writes_nothing(disk, root, desk):
+    put(desk / "album", one_png="1")
+    stop, before = threading.Event(), as_it_is(root)
+    stop.set()
+    assert carry_out(disk, [desk / "album"], MUSIC, None, stop=stop) == Result(MUSIC, ended=STOPPED)
+    assert as_it_is(root) == before
+
+
+def test_what_fails_is_that_files_and_the_copy_goes_on(disk, root, desk, music, monkeypatch):
+    put(desk / "album", a_txt="first", b_txt="can't be had", c_txt="third")
+    failing(monkeypatch, errno.EIO, "b.txt")
+    result = carry_out(disk, [desk / "album"], MUSIC, None)
+    assert result == Result(MUSIC, files=2, folders=1, bytes=10, names=("album/",),
+                            failed=(("album/b.txt", "Input/output error"),))
+    assert held(music) == {"album": None, "album/a.txt": b"first", "album/c.txt": b"third"}
+
+
+@not_as_root
+def test_a_file_that_cant_be_read_is_skipped_between_two_that_can(disk, root, desk, music,
+                                                                 monkeypatch):
+    put(desk / "album", a_txt="first", b_txt="secret", c_txt="third")
+    (desk / "album" / "b.txt").chmod(0)
+    assert carry_out(disk, [desk / "album"], MUSIC, None) == Result(
+        MUSIC, files=2, folders=1, bytes=10, names=("album/",), skipped={UNREADABLE: 1})
+    monkeypatch.setattr(hallux.importing.os, "access", lambda path, mode: True)   # it seemed
+    result = carry_out(disk, [desk / "album"], MUSIC, True)                       # readable
+    assert result.failed == (("album/b.txt", "Permission denied"),) and result.files == 2
+    assert held(music) == {"album": None, "album/a.txt": b"first", "album/c.txt": b"third"}
+    assert left_behind(root) == []
+
+
+def test_the_result_names_so_many_failures_and_counts_the_rest(disk, desk, monkeypatch):
+    monkeypatch.setattr(hallux.importing, "FAILED_MAX", 2)
+    names = [f"f{number}.txt" for number in range(5)]
+    put(desk, ok_txt="fine", **{name.replace(".", "_"): "x" for name in names})
+    failing(monkeypatch, errno.EIO, *names)
+    result = carry_out(disk, sorted(desk.iterdir()), MUSIC, None)
+    assert result.failed == (("f0.txt", "Input/output error"), ("f1.txt", "Input/output error"))
+    assert (result.more, result.files, result.names) == (3, 1, ("ok.txt",))
+
+
+@pytest.mark.parametrize("code", [errno.ENOSPC, errno.EDQUOT])
+def test_a_full_disk_ends_the_copy_and_what_was_written_stays(disk, desk, music, monkeypatch, code):
+    put(desk / "album", a_txt="first", b_txt="one too many", c_txt="third")
+    failing(monkeypatch, code, "b.txt")
+    result = carry_out(disk, [desk / "album"], MUSIC, None)
+    assert result == Result(MUSIC, files=1, folders=1, bytes=5, ended=FULL, names=("album/",))
+    assert held(music) == {"album": None, "album/a.txt": b"first"}
+
+
+def test_a_destination_that_goes_away_ends_the_copy(disk, root, desk, music):
+    put(desk / "album", a_txt="first", b_txt="second", c_txt="third")
+
+    def tell(counts):
+        if counts.files == 1:                         # after a.txt, someone removes the folder
+            shutil.rmtree(music)
+
+    result = carry_out(disk, [desk / "album"], MUSIC, None, tell=tell)
+    assert result == Result(MUSIC, files=1, folders=1, bytes=5, names=("album/",),
+                            ended="the folder is gone: /home/user/Music")
+    assert not music.exists() and left_behind(root) == []
+
+
+def test_a_copy_that_look_refuses_never_starts(disk, root, desk):
+    put(desk, notes_txt="hello")
+    before = as_it_is(root)
+    assert carry_out(disk, [root / "home"], MUSIC, True) == Result(
+        MUSIC, ended="would be copied into itself: home")
+    assert carry_out(disk, [desk / "notes.txt"], "/home/user/Videos", True) == Result(
+        "/home/user/Videos", ended="the folder is gone: /home/user/Videos")
+    assert as_it_is(root) == before
+
+
+@not_as_root
+def test_a_folder_that_cant_be_made_fails_with_what_is_in_it(disk, root, desk, music):
+    put(desk / "album", a_txt="first")
+    put(desk, notes_txt="hello")
+    music.chmod(0o555)
+    try:
+        result = carry_out(disk, [desk / "album", desk / "notes.txt"], MUSIC, None)
+    finally:
+        music.chmod(0o755)
+    assert result == Result(MUSIC, failed=(
+        ("album", "Permission denied"), ("album/a.txt", "No such file or directory"),
+        ("notes.txt", "Permission denied")))
+    assert held(music) == {}
+
+
+def test_a_folder_is_made_only_where_none_is(tmp_path):
+    (tmp_path / "there").mkdir()
+    (tmp_path / "file").write_text("x")
+    (tmp_path / "link").symlink_to(tmp_path / "there")
+    assert hallux.importing._make_folder(tmp_path / "new") is True
+    assert hallux.importing._make_folder(tmp_path / "there") is False
+    for taken in ("file", "link"):                    # a name that something else took meanwhile
+        with pytest.raises(FileExistsError):
+            hallux.importing._make_folder(tmp_path / taken)
+    assert (tmp_path / "new").is_dir() and (tmp_path / "link").is_symlink()
+
+
+def test_a_reader_that_has_the_old_file_open_reads_it_to_its_end(disk, root, desk):
+    cat = root / "home" / "user" / "Pictures" / "cat.png"
+    put(desk, cat_png="another cat")
+    with cat.open() as reader:                        # opened before the copy, read after it
+        carry_out(disk, [desk / "cat.png"], PICTURES, True)
+        assert reader.read() == "a cat"
+    assert cat.read_text() == "another cat"
+
+
+def test_the_names_are_those_under_which_something_was_written(disk, root, desk, music):
+    put(desk / "Kept", cat_png="another cat")         # a folder in which nothing can be written
+    put(desk / "new", one_png="1")
+    put(desk / "empty")
+    (put(desk / "Linked") / "latest").symlink_to("../new/one.png")
+    put(desk, a_txt="a", own_txt="in the way of nothing, but there already")
+    put(music / "Kept", cat_png="a cat")
+    put(music / "Linked")                             # there already, and gets a link
+    put(music, own_txt="the machine's")
+    sources = [desk / "new", desk / "Kept", desk / "own.txt", desk / "a.txt", desk / "empty",
+               desk / "Linked"]
+    result = carry_out(disk, sources, MUSIC, False)
+    assert result.names == ("new/", "a.txt", "empty/", "Linked/")         # in the order of the drop
+    assert result.skipped == {EXISTS: 2} and (result.files, result.folders) == (3, 2)
+
+
+def test_a_copy_tells_how_far_it_is_and_ends_at_the_trees_counts(disk, root, desk, music):
+    put(desk / "album", a_txt="12345", b_txt="123", cat_png="1234567")
+    put(desk / "album" / "holiday", beach_jpg="12")
+    os.mkfifo(desk / "album" / "pipe")
+    put(music / "album", b_txt="here already")
+    sources, told = [desk / "album"], []
+    counts = look(disk, sources, MUSIC).counts
+    result = carry_out(disk, sources, MUSIC, False, tell=told.append)
+    assert [(done.folders, done.files, done.bytes) for done in told] == [
+        (1, 0, 0), (1, 1, 5), (1, 2, 8), (1, 3, 15), (2, 3, 15), (2, 4, 17), (2, 5, 17)]
+    assert told[-1] == Counts(counts.folders, counts.files, counts.bytes)     # copied or not
+    assert (result.files, result.bytes, result.skipped) == (3, 14, {EXISTS: 1, NOT_COPIED: 1})
+
+
+def test_inside_a_big_file_a_copy_tells_some_times_a_second(disk, desk, monkeypatch):
+    monkeypatch.setattr(hallux.disk, "PIECE", 4)
+    put(desk, big_bin="0123456789")
+    told = []
+    carry_out(disk, [desk / "big.bin"], MUSIC, True, tell=lambda done: told.append(done.bytes))
+    assert told == [10]                               # three pieces in no time: one word
+    monkeypatch.setattr(hallux.importing, "TELL_SECONDS", 0)
+    carry_out(disk, [desk / "big.bin"], MUSIC, True, tell=lambda done: told.append(done.bytes))
+    assert told == [10, 4, 8, 10, 10]
