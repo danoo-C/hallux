@@ -91,9 +91,40 @@ next, in detail, is in [next-steps.md](next-steps.md).
   - `max_budget_usd` is hallux's own check now: a boot over it holds its messages back, and
     Refill budgets or a higher number lets them through;
   - the shell's screen and a program's screen come back as they were.
+- [x] **11. Addon agents:** an addon brings an agent, and its work runs in the background
+  as a job while the machine goes on answering. The design is in
+  [addon-agents.md](addon-agents.md), the seventeen steps in
+  [plans/addon-agents/](plans/addon-agents/README.md).
+  - `agent()` in the addon, and a function with `spawn` that starts a job
+    (`hallux/addons.py`); a job is a Claude session of its own (`hallux/agents.py`);
+  - a fenced disk for each job: one folder, new files and the files it was given, private
+    copies that land when it ends well (`hallux/jobdisk.py`);
+  - a process table with real pids, `list_processes` and `kill_process`, and a job's end
+    as an event, also inside a full-screen program without fields;
+  - six settings: the model, the effort, how many jobs, and what they may cost and how
+    long they may run;
+  - the jobs on the status bar, and two tabs in the panel that show them live: Agents and
+    Details;
+  - the music addon's composer, with `check` and `compose`: its first song took 265
+    seconds and cost $0.78.
+
+  Run by hand on 2026-10-10, and declared working by the user that day. What the run
+  showed, and the few points it didn't try, is in
+  [step 17](plans/addon-agents/17-live-run.md).
+- [x] **12. Job control:** Ctrl-Z puts a full-screen program aside and `fg` brings it back
+  as it was, with no redraw by the AI.
+  - the terminal keeps a suspended program's screen, its fields and what was typed into
+    them, at most eight (`hallux/blockmode.py`);
+  - three tags in the AI's answer: `<suspend>`, `<resume>` and `<forget>`
+    (`hallux/protocol.py`);
+  - Ctrl-Z always reaches the AI in a full-screen program, and `jobs` reads the kept
+    screens through `list_processes`.
+
+  Tried by hand on 2026-10-10, with the real model.
 - [ ] **Later:**
-  - events inside full-screen programs, and a script line that fakes an event;
-  - worker agents that an addon brings;
+  - events inside full-screen programs, and a script line that fakes an event. A job's end
+    already arrives in a program without fields; an addon's own events still wait until
+    the program is left;
   - smarter AI tab completion;
   - a "CPU" subagent;
   - a standalone MCP server;

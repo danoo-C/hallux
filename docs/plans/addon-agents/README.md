@@ -1,8 +1,11 @@
 # Plan: addon agents
 
-**Status:** written on 2026-10-04. **Steps 1 to 12 and 14 to 16 are built, and the code of
-step 13,** the first seven on 2026-10-05; the table under [The steps](#the-steps) says how
-far the build is. The design
+**Status:** written on 2026-10-04, and **built: all seventeen steps, with the live run,
+from 2026-10-05 to 2026-10-10.** The user ran the feature by hand on 2026-10-10, with
+[the checklist](live-run-checklist.md), and declared it working that day. What each step
+built is in the table under [The steps](#the-steps). Nine points of the checklist weren't
+tried, and the user decided that they need no other try: [step 17](17-live-run.md) lists
+them, with what the run showed. One part of step 13 was never run, its scripted run. The design
 it follows is
 [addon-agents.md](../../addon-agents.md), in which no question is open. The decisions this
 plan takes on its own are in a table below. They are my proposals, and the user hasn't
@@ -228,11 +231,11 @@ step of the config panel's plan.
 | 10. The main agent's side | [10-main-agent.md](10-main-agent.md) | 8, 9, panel 5 | Built on 2026-10-06 |
 | 11. A job's end in a full-screen program | [11-wake.md](11-wake.md) | 10, panel 3 and 7 | Built on 2026-10-06 |
 | 12. The status bar and the costs | [12-bar.md](12-bar.md) | 10 | Built on 2026-10-06 |
-| 13. The composer | [13-composer.md](13-composer.md) | 2, 11, 12 | The code is built, on 2026-10-06. The scripted run waits for the user's go, and the live run is the user's |
+| 13. The composer | [13-composer.md](13-composer.md) | 2, 11, 12 | The code is built, on 2026-10-06, and its live run is done, on 2026-10-07 and 2026-10-10. The scripted run was never run: whether it is still wanted is the user's to say |
 | 14. Keeping a screen, and two lines for the composer's prompt | [14-kept-screens.md](14-kept-screens.md) | 13's code, for the two lines only | Built on 2026-10-07 |
-| 15. Job control | [15-job-control.md](15-job-control.md) | 10, 14 | Built on 2026-10-10. The try by hand is the user's |
+| 15. Job control | [15-job-control.md](15-job-control.md) | 10, 14 | Built on 2026-10-10, and tried by hand the same day |
 | 16. The panel's two tabs | [16-panel-tabs.md](16-panel-tabs.md) | 10, panel 5 to 7 | Built on 2026-10-06 |
-| 17. The documentation and the live run | [17-live-run.md](17-live-run.md) | 13, 15, 16 | Not built |
+| 17. The documentation and the live run | [17-live-run.md](17-live-run.md) | 13, 15, 16 | Built on 2026-10-10: the documentation, and the live run with its write-up. The user declared the feature working that day. Nine points of the run weren't tried; the step's file lists them |
 
 Steps 1, 2 and 6 need nothing and can come in any order. Step 14 needs nothing of this plan,
 but it changes the files the config panel changes, so it comes after the panel. Step 16 can

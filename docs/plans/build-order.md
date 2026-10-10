@@ -8,8 +8,10 @@ two tables are the only place that says what is built.
 **Where things stand:** both features are designed, planned and reviewed. **The config
 panel is built:** all eight steps and the live run, on 2026-10-05, on the branch
 `config-panel`. **Part 2, the check of the agents plan against the code, is done:** on
-2026-10-05, and its fixes are in the plan. Next is addon agents, part 3, on the branch
-`addon-agents`. The two tables say how far each plan is.
+2026-10-05, and its fixes are in the plan. **Addon agents, part 3, is built:** all
+seventeen steps and the live run, from 2026-10-05 to 2026-10-10, on the branch
+`addon-agents`, and the user declared it working on 2026-10-10. The two tables say what
+each step built.
 
 | | The config panel | Addon agents |
 |---|---|---|

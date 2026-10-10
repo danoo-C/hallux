@@ -134,8 +134,9 @@ the time of one short answer.
 
 ## As built
 
-Built on 2026-10-10, on the branch `addon-agents`. 35 new tests, 1578 in all. The user's
-try by hand, the last part of "Done when", is open. Decided while building:
+Built on 2026-10-10, on the branch `addon-agents`. 35 new tests, 1578 in all. **The user
+tried it by hand the same day,** which was the last part of "Done when": see
+[The try by hand](#the-try-by-hand) at the end. Decided while building:
 
 **The tags**
 
@@ -246,4 +247,29 @@ pretend one that answers as a bash with job control would. Its nano doesn't list
   calls a model, and no paid run was made for this step.
 - **A real terminal:** the emulator shows where text lands, not how the switch looks.
 - **The try by hand,** which is the user's: text typed into nano, Ctrl-Z, a command at the
-  shell, `fg`, and the text is there, within the time of one short answer.
+  shell, `fg`, and the text is there, within the time of one short answer. Done on
+  2026-10-10, below.
+
+### The try by hand
+
+By the user, on 2026-10-10, in `test-hallux`, with part A of
+[the checklist](live-run-checklist.md). The real model, Opus at effort low, followed the
+new lines of the prompt each time. From that world's log:
+
+| What was tried | What happened |
+|---|---|
+| nano, Ctrl-Z | Answered in 3 seconds, with `<suspend job="1"/>` and the `Stopped` line |
+| `jobs` | The AI read `list_processes` first, every time |
+| `fg` | Answered in 1 second, with `<resume job="1"/>` and an empty screen |
+| Leaving nano afterwards | The AI sent `<forget job="1"/>` by itself |
+| `top`, Ctrl-Z, `fg` | Its tick went out 1 second after the `fg` |
+| nano and less, `fg %1`, `fg` | Jobs 1 and 2, each brought back by its number |
+| A window that got narrower in between, 120 to 86 columns | The user ticked it as working |
+| `reboot` with a suspended nano | The AI sent `<forget job="1"/>` with its answer, and `jobs` was empty after the boot |
+| A player, Ctrl-Z, `fg`, with a job running | `[1]+  Stopped  kittymusic`, and back with a tick at once |
+
+**Not tried:** vim's mode after a resume, and `kill %1` on a suspended program. Neither was
+typed in the run. Both are tested with the real block mode and a pretend model.
+
+**One thing came up beside the list,** a screenshot that the user set aside for later:
+[step 17](17-live-run.md) names it.

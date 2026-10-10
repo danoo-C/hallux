@@ -262,3 +262,34 @@ It is tried in the next live run of a composition.
 job runs (5), `kill` of a running composer (6), whether the bar's redraw disturbs typing
 (7), and a second `compose` while one runs or after the budget is used up (8). The log
 can't answer 7; only the user can.
+
+### The second run, by the user, on 2026-10-10
+
+In `test-hallux`, with [the checklist](live-run-checklist.md) of step 17. What every point
+of that list showed is in [step 17's file](17-live-run.md). For this step's own list:
+
+| Point of the list | What the run showed |
+|---|---|
+| 4. A player that composes | The player showed the job's pid and time from its ticks. When the job ended, the player was woken at once, the AI answered as the player, and the song played without a key |
+| 5. `ps` and `htop` while a job runs | Both read `list_processes`, and `htop`'s ticks carried the job's row |
+| 6. `kill` of a running composer | `kill 30005` ended it. Nothing was written, and the folder was as before |
+| 7. The bar while typing | It doesn't disturb: the user ticked it |
+| 8. A second `compose` | Refused while one ran, and the program said `compose: composer busy`. One after the budget is used up can't be reached at the shell: every typed line fills that budget |
+
+**Four compositions:** 124, 141 and 124 seconds for three new songs, at $0.42, $0.42 and
+$0.37, each in 14 turns, and 22 seconds and $0.10 for a change to one of them. That is
+about half of the first run's time and cost, and a fifth of the new cap per job.
+
+**The two lines for the composer's prompt,** which step 14 built:
+
+| The line | What the composer did |
+|---|---|
+| A status line before anything else | Its first call was `set_status`, as the line asks. But it thought first: the call came 82 seconds after its start, where the first run had 174. In a later job of the same day, which changed a score, it came after 3 seconds |
+| The changes of a round in one turn | It didn't. After its first `check` it made seven `edit_file` calls, one a second, each in a turn of its own |
+
+So the role's words don't change how the model works here: it thinks before it calls
+anything, and it calls one tool a turn. Neither costs much: the turns of the edits took a
+second each.
+
+**What is left of this step:** the scripted run, which was never run. Whether it is still
+wanted is the user's to say.

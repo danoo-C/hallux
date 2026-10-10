@@ -14,7 +14,11 @@ each step's file ends with what was built. What an addon is, and how Hallux load
   every limit can still take that long (section 6).
 - `stop()` also ends the child process. The next `play` starts a new one.
 - What the AI reads is the manual in `addons/music.py`: this document, shortened to under
-  8000 characters, with every example in it tested.
+  8500 characters, with every example in it tested.
+- **Two more functions came with addon agents,** on 2026-10-05 and 2026-10-06: `check`,
+  which renders a score without a sound, and `compose`, which has the addon's agent, the
+  composer, write a song in the background. Section 1 has them. Their design is in
+  [addon-agents.md](addon-agents.md).
 
 **Revised on 2026-10-01,** after a review of the first version. Two requirements came from the
 user: sound at 44100 Hz, and samples finer than 8 bits. The other changes were my
@@ -42,7 +46,8 @@ through it, and said "it works".
 ## In short
 
 1. **The addon is a bridge to the sound card.** It has two functions, `play(path, loop)` and
-   `stop()`, and one event, `finished`.
+   `stop()`, and one event, `finished`. Two more were added later: `check` and `compose`
+   (section 1).
 2. **A song is one score file on the machine's disk.** It holds the tempo, the variables, the
    instruments, the patterns and the song.
 3. **The sound is 16-bit at 44100 Hz.** A sample is a whole number from -32768 to 32767, and
@@ -111,6 +116,35 @@ through it, and said "it works".
 5. The AI prints what a player would print.
 
 The song survives a reboot, and playing it again costs one call and no writing.
+
+**Added with addon agents:** two functions and an agent. Their design, with the reasons, is
+in [addon-agents.md](addon-agents.md), sections 3 and 4.
+
+| Function | What it does |
+|---|---|
+| `check(path, loop)` | Renders the score without a sound and returns what `play` would return for it with the same `loop`, or the same errors. A song that is playing plays on |
+| `compose(request, folder, edit)` | Has the composer write a song into that folder, or change the scores listed in `edit`. It returns `{"pid": 30001}` at once; the song isn't there yet |
+
+- **`check` starts a child of its own for one render.** That child opens no sound card and
+  ends with its answer, so a check never waits for the song that plays and never replaces
+  it. It has 8 seconds, from the start of its child to its answer.
+- **The composer is the addon's agent:** a Claude session of its own that Hallux runs in
+  the background as a job. `agent()` in `addons/music.py` declares it. It asks for the
+  effort `high`, and `config.toml` decides what it gets.
+- **What the composer reads:** its role, the part of the manual that says how a score is
+  written, and what `check` does. `check` is its one tool of the sound card: it can't call
+  `play`, `stop` or `compose`.
+- **How it works:** it sets a status line, writes one score file named after the song,
+  checks it, fixes what the check reports, and checks again, until the score is clean and
+  its peak is between 50 and 100, or after four rounds.
+- **The song lands when the job ends well.** Until then nothing is in the folder. The
+  job's end comes as an event of the addon, with the files it wrote; a machine that
+  listens with `addon_listen("music")` hears it at once.
+- **A score in `edit` is changed in its own file.** If somebody saved that file while the
+  composer worked, nothing is replaced: the composer's version lands beside it as
+  `name.score.new`, and the event says so.
+- **The first composition on the real model,** on 2026-10-07: a drum solo of 335 lines, in
+  265 seconds and two rounds of `check`, for $0.78.
 
 ---
 

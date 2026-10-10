@@ -272,7 +272,8 @@ def test_save_changes_one_line_of_the_readme_example(tmp_path):
     assert "#" in was["effort"] and "#" in was["max_budget_usd"] and len(lines) == len(before)
     assert config.load(tmp_path) == Hardware(
         "claude-opus-5-5", "high", "claude-haiku-4-5", 3.0, tick_budget_usd=1.25,
-        addons=("window",))
+        addons=("window",), agent_model="claude-opus-5-5")      # its other agent lines are
+                                                                # the defaults
 
 
 def test_save_keeps_what_follows_the_value(tmp_path):

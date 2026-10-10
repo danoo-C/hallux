@@ -1,7 +1,15 @@
 # Addon agents
 
-**Status:** designed on 2026-10-03, and reviewed the same day:
-[the review](addon-agents-report-2026-10-03.md). Nothing is built. The idea, the first use
+**Status:** built, from 2026-10-05 to 2026-10-10, by the plan in
+[plans/addon-agents](plans/addon-agents/README.md): each of its steps ends with what was
+built and what was decided while building. Where a step and this document differ, the step
+is what the code does. **The user ran it by hand on 2026-10-10,** with
+[a checklist](plans/addon-agents/live-run-checklist.md), and declared it working that day.
+[Step 17](plans/addon-agents/17-live-run.md) has what the run showed, and the few points
+it didn't try.
+
+**How it came about:** designed on 2026-10-03, and reviewed the same day:
+[the review](addon-agents-report-2026-10-03.md). The idea, the first use
 case and the list of points to cover are the user's. The user decided what a job may write,
 and accepted my recommendations on all the other questions together.
 [Decisions](#decisions) lists them with what was turned down, and
@@ -10,8 +18,8 @@ design changed the user's first idea.
 
 **After the review.** It found five problems, smaller gaps and some corrections, and five
 more gaps came up after it. On 2026-10-04 the user accepted a fix for every one of them.
-All of it is in the sections now, and [Decisions](#decisions) lists it. Nothing is open,
-and the plan comes next. One fix leans on another feature: counting jobs towards the budget
+All of it is in the sections now, and [Decisions](#decisions) lists it. Nothing was open
+then, and the plan came next. One fix leans on another feature: counting jobs towards the budget
 per boot needs step 3 of the [config panel](config-panel.md)'s plan, and the panel is built
 first.
 
@@ -1127,13 +1135,24 @@ budgets was changed on 2026-10-04: a key press fills the second budget too.
 
 ## Still to find out
 
-Each needs a run or a measurement.
+Each needs a run or a measurement. **After the live run of 2026-10-10** nine of the eleven
+have an answer, one has part of one, and one is still open: the memory of a Claude Code
+process.
 
 - **What a composition at high effort costs, and how long it takes.** The budgets and the
-  timeout of section 6 are set again from it.
+  timeout of section 6 are set again from it. **Answered in step 13,** by the user's first
+  composition on 2026-10-07, on Opus: a drum solo in 265 seconds for $0.78, in 16 turns.
+  That was 78 percent of the cap per job, so the user doubled both budgets on 2026-10-10.
+  The timeout stays. It is one run of one kind of song.
 - **Whether a second session slows the first** on a real model. I ran Haiku, where both
-  were quick. Both sessions share the account's rate limits.
+  were quick. Both sessions share the account's rate limits. **Answered in part in step
+  13:** in that run, on Opus, `echo hi` took 2.5 seconds while the composer worked, `cd`
+  2.2 and an `ls` 4.5. One `ls` took 11.4. On 2026-10-10 the answers at the shell took 2
+  to 7 seconds while a composer worked, as they do without one. No run has compared the
+  same commands with and without a job.
 - **How much memory a Claude Code process takes.** It decides how many jobs can run.
+  **Still open.** It is a point of the checklist, and the run of 2026-10-10 didn't
+  measure it: the command has to be typed on the computer, not into Hallux.
 - **Where the live token count comes from.** In my run each model message reported its
   input tokens when it started, and the whole turn's tokens came at its end. The count
   during a long turn has to come from the stream. **Answered in step 9:** from the stream.
@@ -1152,10 +1171,22 @@ Each needs a run or a measurement.
   The Details tab leaves it out until a run shows what arrives. **Answered in step 9:** a
   thinking block arrives in front of each answer, on Haiku too. The worker passes it over.
 - **Whether redrawing the bar once a second disturbs typing** at the shell prompt.
+  **Answered in the live run of 2026-10-10:** it doesn't. The user typed at the prompt
+  while a job ran, and ticked the point as working.
 - **Whether a form comes back exactly,** with an editor's unsaved text and after the window
-  was resized.
+  was resized. **Answered in part in steps 14 and 15:** on a pseudo-terminal, with the real
+  terminal and the real machine, an editor came back row for row, with its unsaved text and
+  its cursor. In a test of block mode by itself, a window that had got lower had the
+  screen fitted and the footer still at the bottom. **Answered in the live run of
+  2026-10-10,** on a real terminal: an editor came back with its text after Ctrl-Z and
+  `fg`, also when the window had got narrower in between, from 120 to 86 columns.
 - **Whether the main agent keeps the pids apart** and prints the `Done` line without being
-  asked twice. Only a live run shows it.
+  asked twice. Only a live run shows it. **Answered in step 13,** for one job: the AI
+  listened to the addon by itself, and printed the `Done` line with the right pid the
+  moment the job ended. Two jobs at once need two addons with an agent, and only the music
+  addon has one. **On 2026-10-10 the pid was right each time, but the AI didn't listen at
+  the shell,** twice out of twice: the `Done` line came with the next typed line. Whether
+  it listens after a `compose` is its own choice, and it varies.
 
 ---
 
