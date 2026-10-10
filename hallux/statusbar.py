@@ -11,7 +11,9 @@ The cost is written ~$1.42: it is what the tokens would cost at the API's list p
 with a subscription nobody is billed that amount.
 
 In the scrolling shell the bar is pinned with a scroll region (rows 1..rows-1 scroll,
-the last row stays); in block mode it's a row of the full-screen layout.
+the last row stays); in block mode it's a row of the full-screen layout. While a full-screen
+program or the panel has the alternate screen, the shell's screen behind it has no region
+and no bar: the terminal moves the rows of a waiting screen when the window is resized.
 """
 from __future__ import annotations
 
@@ -235,6 +237,18 @@ def install(rows: int) -> str:
 def draw(bar: StatusBar, rows: int, cols: int) -> str:
     """Re-pin the region and redraw the bar, leaving the cursor where it was."""
     return f"\x1b7\x1b[1;{rows - 1}r\x1b[{rows};1H{bar.ansi(cols - 1)}\x1b8"
+
+
+def reinstall(bar: StatusBar, rows: int, cols: int) -> str:
+    """Pin the region and draw the bar when the cursor may stand on the bottom row: back from
+    the alternate screen, after the window got shorter there. Text written on that row would
+    go over the bar, and wouldn't scroll.
+
+    One line down first (an index, which keeps the column): that scrolls the screen if the
+    cursor is on the bottom row, as install's newline does, and moves the cursor anywhere
+    else. Then the region and the bar, and the cursor a row up again, inside the region.
+    """
+    return f"\x1bD{draw(bar, rows, cols)}\x1b[1A"
 
 
 def uninstall(rows: int) -> str:

@@ -372,8 +372,7 @@ class Terminal:
         # it starts. Those were typed for the shell, so they are taken out for the visit.
         earlier = get_typeahead(self.input)
         store_typeahead(self.input, keys)
-        if self.pinned:                                  # the panel has the whole screen,
-            self._write("\x1b7\x1b[r\x1b8")              # as a full-screen program has
+        self._take_bar_off()                             # the panel has the whole screen
         self.kept = []                                   # from here on write() doesn't print
         try:
             await self.panel.run(self.input, self.output)    # on the alternate screen
@@ -381,8 +380,7 @@ class Terminal:
             kept, self.kept = self.kept, None
             after = get_typeahead(self.input)
             store_typeahead(self.input, earlier)
-            self._check_size()                           # the window may have another size now
-            self._draw_bar()                             # pins the region again, before any text:
+            self._put_bar_back()                         # pins the region again, before any text:
             for text in kept:                            # unpinned, the text would scroll the
                 self.write(text)                         # bar's row away and end up on it
         return after
@@ -390,8 +388,8 @@ class Terminal:
     # ---------------------------------------------------------------- block mode
 
     async def show_form(self, screen: str, form: Form, patch=None) -> None:
-        if self.pinned and not self.block.active:        # the full-screen app has its own bar
-            self._write("\x1b7\x1b[r\x1b8")
+        if not self.block.active:                        # the full-screen app has its own bar
+            self._take_bar_off()
         await self.block.show(screen, form, patch)
 
     async def next_action(self) -> Action:
@@ -409,14 +407,14 @@ class Terminal:
     async def end_form(self) -> None:
         if self.block.active:
             await self.block.end()
-            self._draw_bar()                             # re-pins the scroll region
+            self._put_bar_back()                         # re-pins the scroll region
 
     async def suspend_form(self, job: int) -> None:
         """Put the program on screen aside under this number, as it is, and give the screen
         back to the shell, as end_form does. resume_form brings it back."""
         if self.block.active:
             await self.block.suspend(job)
-            self._draw_bar()                             # re-pins the scroll region
+            self._put_bar_back()                         # re-pins the scroll region
 
     async def resume_form(self, job: int) -> bool:
         """Put the program of this number back on screen exactly as it was: its screen, its
@@ -424,8 +422,8 @@ class Terminal:
         none is kept under that number."""
         if job not in self.block.suspended:
             return False
-        if self.pinned and not self.block.active:        # the full-screen app has its own bar
-            self._write("\x1b7\x1b[r\x1b8")
+        if not self.block.active:                        # the full-screen app has its own bar
+            self._take_bar_off()
         return await self.block.resume(job)
 
     def forget_form(self, job: int | None = None) -> None:
@@ -490,6 +488,24 @@ class Terminal:
             return ""
         size = self.output.get_size()
         return statusbar.draw(self.bar, size.rows, size.columns)
+
+    def _take_bar_off(self) -> None:
+        """Before the alternate screen is taken: the shell's screen waits behind it without
+        the region and without the bar. A bar that waited there wouldn't stay on the bottom
+        row: when the window's width changes meanwhile, the terminal lays the waiting screen
+        out again, and a line that wraps differently moves every row below it. The bar that
+        is drawn afterwards wouldn't cover the old one, and it would scroll into the text."""
+        if self.pinned:
+            self._write(statusbar.uninstall(self.output.get_size().rows))
+
+    def _put_bar_back(self) -> None:
+        """Back on the shell's screen: the region and the bar, for the size the window has
+        now. No bar waited there, so there is no old row to wipe. But the cursor is where
+        the terminal put it, and after a resize that can be the bottom row: see reinstall."""
+        if self.pinned:
+            self.pinned = size = self.output.get_size()
+            if not self.block.active and self.kept is None:
+                self._write(statusbar.reinstall(self.bar, size.rows, size.columns))
 
     def _check_size(self) -> None:
         """After a resize: move the bar to the new bottom row and re-pin the region."""

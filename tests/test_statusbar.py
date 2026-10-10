@@ -91,9 +91,13 @@ def test_the_ai_cannot_move_the_bar():
 
 def test_pinning_the_bar():
     assert statusbar.install(30) == "\n\x1b7\x1b[1;29r\x1b8\x1b[1A"
-    drawn = statusbar.draw(StatusBar("claude-opus-5-5", "low"), 30, 120)
+    bar = StatusBar("claude-opus-5-5", "low")
+    drawn = statusbar.draw(bar, 30, 120)
     assert drawn.startswith("\x1b7\x1b[1;29r\x1b[30;1H") and drawn.endswith("\x1b[0m\x1b8")
     assert statusbar.uninstall(30) == "\x1b7\x1b[r\x1b[30;1H\x1b[0m\x1b[2K\x1b8"
+    # back from the alternate screen the cursor may be on the bottom row: a line down, which
+    # scrolls the screen there, then the region and the bar, then up again into the region
+    assert statusbar.reinstall(bar, 30, 120) == f"\x1bD{drawn}\x1b[1A"
 
 
 def test_a_note_replaces_the_idle_hint():
