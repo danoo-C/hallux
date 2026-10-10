@@ -97,6 +97,31 @@ def test_hidden_folder_is_invisible_to_the_os(disk, root):
     assert (root / ".hallux" / "memory.md").read_text() == "# memory\n"
 
 
+def test_the_place_for_a_write_is_checked_up_to_its_name_and_no_further(disk, root, outside):
+    assert disk.place("/home/user/new.txt") == root / "home" / "user" / "new.txt"
+    assert disk.place("/home/user/Music/new/a.score") == (
+        root / "home" / "user" / "Music" / "new" / "a.score")     # none of it there yet
+    disk.cwd = "/home/user"
+    assert disk.place("../user/new.txt") == root / "home" / "user" / "new.txt"
+    (root / "docs").symlink_to(root / "home" / "user")
+    assert disk.place("/docs/new.txt") == root / "home" / "user" / "new.txt"   # a folder above
+    (root / "home" / "user" / "link").symlink_to(outside / "secret.txt")
+    (root / "home" / "user" / "dead").symlink_to(root / "nowhere")
+    assert disk.place("/home/user/link") == root / "home" / "user" / "link"    # found as a link,
+    assert disk.place("/home/user/dead") == root / "home" / "user" / "dead"    # wherever it leads
+    assert disk.place("/home/user/link").is_symlink()
+
+
+def test_no_place_for_a_write_is_out_of_the_machine_or_in_the_hidden_folder(disk, root, outside):
+    (root / "escape").symlink_to(outside)
+    (root / "sneaky").symlink_to(root / ".hallux")
+    fails(errno.EACCES, disk.place, "/escape/new.txt")
+    fails(errno.EACCES, disk.place, "/escape/deeper/new.txt")
+    fails(errno.ENOENT, disk.place, "/.hallux")
+    fails(errno.ENOENT, disk.place, "/.hallux/config.toml")
+    fails(errno.ENOENT, disk.place, "/sneaky/config.toml")
+
+
 # ---------------------------------------------------------------- reading
 
 def test_list_dir_entries(disk, root):

@@ -141,6 +141,12 @@ class Disk:
         parent, name = posixpath.split(rel)
         return self._check((self.root / parent).resolve() / name)
 
+    def place(self, path: str) -> Path:
+        """The real path at which something would be written under this name, or a refusal.
+        The folders above it are resolved and checked; the name itself is left as it is. So
+        a link that has the name is found as a link, and nothing is written through it."""
+        return self.real(path, follow=False)
+
     def _check(self, real: Path) -> Path:
         if real != self.root and self.root not in real.parents:
             raise _fail(errno.EACCES)             # a symlink pointing out of the machine
