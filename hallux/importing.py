@@ -16,11 +16,17 @@ Every place is asked of the Disk, so none is outside the machine or in /.hallux.
 carry_out copies. It goes over what was dropped once more and decides about each thing as
 it is at that moment, by the same walk and the same marks as the tree. No file is ever
 seen half-copied (disk.copy_whole), and none is replaced that the user wasn't asked about.
+
+Imports is what the machine has of all this, and all that the panel's Files tab knows: one
+list of what was dropped, one walk or one copy at a time, each in a thread of its own, and
+what there is to show of them.
 """
 from __future__ import annotations
 
+import asyncio
 import errno
 import functools
+import logging
 import os
 import posixpath
 import re
@@ -66,8 +72,14 @@ LEADS = "â†’"                                   # a link in a dropped folder: "â
 MEANWHILE = "appeared meanwhile"              # a file that is there, and the user wasn't asked
 STOPPED, FULL = "stopped", "the disk is full"                     # why a copy ended early
 FAILED_MAX = 50                               # failures a copy names; the rest it counts
+# The states of the machine's Imports: nothing dropped, the tree is being worked out, it is
+# there, the copy runs, the copy is over.
+EMPTY, LOOKING, READY, COPYING, DONE = "empty", "looking", "ready", "copying", "done"
+CHANGED_SECONDS = 0.1                         # how often a thread asks for the panel to be drawn
+CLOSE_SECONDS = 2.0                           # how long Hallux waits at its end for a thread
 
 Translate = Callable[[str], "str | None"]
+log = logging.getLogger("hallux")
 
 
 class NotADrop(ValueError):
@@ -219,6 +231,11 @@ class Counts:
     marks: dict[str, int] = field(default_factory=dict)      # how many have each mark;
                                                              # the links are under LEADS
 
+    @property
+    def to_copy(self) -> int:
+        """How many of them have no mark that skips them: what a copy would at least try."""
+        return self.folders + self.files - sum(self.marks.get(mark, 0) for mark in SKIPPED)
+
 
 @dataclass(frozen=True)
 class Tree:
@@ -330,6 +347,11 @@ def _refused(disk: Disk, sources: Sequence[Path], into: str) -> str | None:
         return None                                   # behind the fence: every line says so
     if not folder.is_dir():
         return f"the folder is gone: {into}"
+    return _into_itself(sources, folder)
+
+
+def _into_itself(sources: Sequence[Path], folder: Path) -> str | None:
+    """The words for a source that is this real folder, or holds it. None if none does."""
     for source in sources:
         if _holds(source, folder):
             return f"would be copied into itself: {_name(source) or source}"
@@ -536,3 +558,217 @@ def _gone(disk: Disk, into: str) -> bool:
         return not disk.real(into).is_dir()
     except OSError:
         return False                                  # behind the fence, which every place says
+
+
+# ---------------------------------------------------------------------- the machine's side
+
+@dataclass(frozen=True)
+class Seen:
+    """Everything the Files tab shows, as it is at one moment. The tab may keep it."""
+    state: str                        # EMPTY, LOOKING, READY, COPYING or DONE
+    into: str                         # the destination; in EMPTY, where a drop would go now
+    names: tuple[str, ...] = ()       # what was dropped, in its order
+    lines: tuple[Line, ...] = ()      # the tree, in READY and COPYING
+    counts: Counts = field(default_factory=Counts)      # of the tree; in LOOKING, so far
+    refused: str | None = None        # in READY: why nothing of the tree can be copied
+    through: Counts = field(default_factory=Counts)     # in COPYING: how far it is, of `counts`
+    result: Result | None = None      # in DONE
+
+
+class _Run:
+    """A walk or a copy that runs in its thread."""
+
+    def __init__(self) -> None:
+        self.stop = threading.Event()
+        self.thread: threading.Thread | None = None
+
+
+class Imports:
+    """What was dropped into the machine, and what becomes of it.
+
+    Everything is called in the event loop, as the panel calls it. A walk and a copy work in
+    a thread of their own, so the panel stays alive, and so does an answer of the AI that
+    runs. What they report from there is taken under a lock, and what they end with comes
+    back into the loop. `changed` is called in the loop whenever a thread has changed what
+    watch() returns; what the panel changes itself it draws itself.
+
+    A daemon thread, not asyncio's pool, as for an addon's function: a copy that hangs on a
+    drive that doesn't answer must not keep Hallux from quitting."""
+
+    def __init__(self, disk: Disk, changed: Callable[[], None] | None = None) -> None:
+        self.disk = disk
+        self.changed = changed or (lambda: None)
+        self._state = EMPTY
+        self._sources: list[Path] = []                # what was dropped, in its order
+        self._into = ""                               # where it goes: the shell's directory at
+                                                      # the first drop of the list
+        self._tree: Tree | None = None
+        self._result: Result | None = None
+        self._run: _Run | None = None                 # the walk or the copy that counts: the
+                                                      # last one begun, unless it was dropped
+        self._runs: list[_Run] = []                   # and every one whose thread may still live
+        self._lock = threading.Lock()                 # for what a thread reports:
+        self._through = Counts()                      # how far the walk or the copy has come,
+        self._asked = 0.0                             # and when it last asked to be drawn
+
+    # ------------------------------------------------------------------ what the tab is shown
+
+    def watch(self) -> Seen:
+        with self._lock:
+            through = self._through
+        if self._state == EMPTY:
+            return Seen(EMPTY, self.disk.cwd)
+        names = tuple(_name(source) or str(source) for source in self._sources)
+        if self._state == LOOKING:
+            return Seen(LOOKING, self._into, names, counts=through)
+        if self._state == DONE:
+            return Seen(DONE, self._into, names, result=self._result)
+        tree = self._tree
+        refused = tree.refused or (STOPPED if tree.stopped else None)
+        return Seen(self._state, self._into, names, tree.lines, tree.counts, refused,
+                    through if self._state == COPYING else Counts())
+
+    # ------------------------------------------------------------------ what the tab asks for
+
+    def reads(self, text: str) -> bool:
+        """Is this text a drop at all?"""
+        try:
+            read_drop(text)
+        except NotADrop:
+            return False
+        return True
+
+    def drop(self, text: str) -> str | None:
+        """Add what a dropped text names to the list, and work the tree out again. Returns
+        None, or why nothing was added, in words for the panel's foot: then the list is as
+        it was. The first drop of a list notes where the list goes: the shell's directory."""
+        if self._state == COPYING:
+            return "a copy is running"
+        try:
+            dropped = read_drop(text)
+        except NotADrop as e:
+            return str(e)
+        fresh = self._state in (EMPTY, DONE)
+        sources = [] if fresh else list(self._sources)
+        into = self.disk.cwd if fresh else self._into
+        for source in dropped:
+            name = _name(source)
+            if source in sources:
+                return f"already in the list: {name}"
+            if name in map(_name, sources):
+                return f"two things named {name}"
+            sources.append(source)
+        try:
+            said = _into_itself(dropped, self.disk.real(into))
+        except OSError:
+            said = None                               # behind the fence: the tree says so
+        if said is not None:
+            return said
+        self._sources, self._into, self._state = sources, into, LOOKING
+        self._begin(lambda run, tell: look(self.disk, tuple(sources), into, run.stop, tell),
+                    self._looked, lambda why: Tree(into, refused=f"couldn't be looked at: {why}"))
+        return None
+
+    def start(self, overwrite: bool | None) -> None:
+        """Copy what the tree shows. `overwrite` is carry_out's: True and False are the
+        user's answer about the files that exist, None says that none did. Nothing happens
+        unless the tree is there, isn't refused, and has something that would be copied."""
+        tree = self._tree
+        if (self._state != READY or tree.refused is not None or tree.stopped
+                or not tree.counts.to_copy):
+            return
+        sources, into = tuple(self._sources), self._into
+        self._state = COPYING
+
+        def copy(run: _Run, tell: Callable[[Counts], None]) -> Result:
+            result = carry_out(self.disk, sources, into, overwrite, run.stop, tell)
+            log.info("import into %s: %d files, %d folders, %d bytes; %d skipped, %d failed%s",
+                     result.into, result.files, result.folders, result.bytes,
+                     sum(result.skipped.values()), len(result.failed) + result.more,
+                     f"; {result.ended}" if result.ended else "")
+            return result
+
+        self._begin(copy, self._copied, lambda why: Result(into, ended=f"failed: {why}"))
+
+    def stop(self) -> None:
+        """Stop the walk or the copy that runs. What was copied stays."""
+        if self._run is not None:
+            self._run.stop.set()
+
+    def clear(self) -> None:
+        """Empty the list, or forget the result of the last copy. Not while a copy runs."""
+        if self._state == COPYING:
+            return
+        self._drop_run()
+        self._state = EMPTY                           # in which nothing reads what the list held
+
+    def close(self) -> None:
+        """Hallux ends: stop what runs, and wait until it has stopped. A thread that doesn't
+        answer in time is left to itself. It is a daemon thread and ends with Hallux."""
+        self._drop_run()                              # every other run was stopped when it
+        for run in self._runs:                        # was replaced, or is through
+            run.thread.join(CLOSE_SECONDS)
+            if run.thread.is_alive():
+                log.warning("an import didn't stop in %.0f seconds", CLOSE_SECONDS)
+        self._runs = []
+
+    # ------------------------------------------------------------------ the threads
+
+    def _begin(self, work: Callable[[_Run, Callable[[Counts], None]], object],
+               landed: Callable[[object], None], broken: Callable[[str], object]) -> None:
+        """Do `work` in a thread of its own, in place of the walk that runs, if one does.
+        What it returns goes to `landed`, in the loop, unless this run was replaced or
+        dropped meanwhile: then it reaches nobody. If it raises, which is a mistake in here,
+        the log has it, and `landed` gets what `broken` makes of the error's words: the tab
+        says so, and doesn't wait for ever."""
+        loop, run = asyncio.get_running_loop(), _Run()
+        self._drop_run()
+
+        def ask(function: Callable, *args: object) -> None:
+            try:
+                loop.call_soon_threadsafe(function, *args)
+            except RuntimeError:                      # the loop is closed: Hallux is off
+                pass
+
+        def tell(counts: Counts) -> None:             # in the thread
+            with self._lock:
+                if run is not self._run:
+                    return
+                self._through = counts
+                due = time.monotonic() - self._asked >= CHANGED_SECONDS
+                if due:
+                    self._asked = time.monotonic()
+            if due:
+                ask(self.changed)
+
+        def land(outcome: object) -> None:            # in the loop
+            if run is self._run:
+                landed(outcome)
+                self.changed()
+
+        def body() -> None:                           # the thread
+            try:
+                outcome = work(run, tell)
+            except Exception as e:
+                log.exception("an import's thread failed")
+                outcome = broken(f"{type(e).__name__}: {e}")
+            ask(land, outcome)
+
+        with self._lock:                              # its first report is drawn at once
+            self._run, self._through, self._asked = run, Counts(), 0.0
+        self._runs = [other for other in self._runs if other.thread.is_alive()] + [run]
+        run.thread = threading.Thread(target=body, name="hallux-import", daemon=True)
+        run.thread.start()
+
+    def _drop_run(self) -> None:
+        """Stop the walk or the copy that counts, and take no more of it."""
+        with self._lock:
+            run, self._run = self._run, None
+        if run is not None:
+            run.stop.set()
+
+    def _looked(self, tree: Tree) -> None:
+        self._tree, self._state = tree, READY
+
+    def _copied(self, result: Result) -> None:
+        self._result, self._state = result, DONE

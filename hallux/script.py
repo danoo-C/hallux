@@ -82,6 +82,9 @@ class ScriptTerminal:
     def stop(self) -> None:
         pass
 
+    def refresh(self) -> None:                          # no panel, so nothing to draw again
+        pass
+
     async def read_line(self, prompt: str, default: str = "") -> str | Key | Interrupted:
         if self._waits():
             await self._wait_for_jobs(prompt)

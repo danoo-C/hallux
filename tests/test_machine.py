@@ -6,6 +6,8 @@ import json
 import logging
 import re
 import sys
+import threading
+import time
 
 import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolUseBlock
@@ -120,6 +122,9 @@ class FakeTerminal:
         pass
 
     def stop(self):
+        pass
+
+    def refresh(self):                       # no panel: nothing of hallux's own to draw again
         pass
 
     @contextlib.asynccontextmanager
@@ -2872,3 +2877,104 @@ def test_the_section_on_jobs_says_that_a_done_line_has_two_sources():
     assert ("- A Done line has two sources. For a job it comes from the job's event, as above. "
             "A program you imagine in the background (kittymusic &) has no event: you decide "
             "when it has ended, and print its Done line before the next prompt.") in shows
+
+
+# ---------------------------------------------------------------- what the user drops in
+
+def import_threads():
+    return [thread for thread in threading.enumerate() if thread.name == "hallux-import"]
+
+
+async def imported(machine, state, seconds=5):
+    """Wait until the machine's imports are in this state."""
+    deadline = time.monotonic() + seconds
+    while machine.imports.watch().state != state:
+        assert time.monotonic() < deadline, f"never {state}"
+        await asyncio.sleep(0.002)
+
+
+@pytest.fixture
+def desk(tmp_path):
+    """A file of the user's computer, outside the machine."""
+    (tmp_path / "desk").mkdir()
+    (tmp_path / "desk" / "notes.txt").write_text("hello")
+    return tmp_path / "desk"
+
+
+@pytest.fixture
+def held_back(monkeypatch):
+    """Copies that wait until the test lets them go, or until they are stopped."""
+    import hallux.importing
+    go, real = threading.Event(), hallux.importing.copy_whole
+
+    def slow(source, place, stop=None, wrote=None):
+        while not go.is_set() and not stop.is_set():
+            time.sleep(0.001)
+        return real(source, place, stop, wrote)
+
+    monkeypatch.setattr(hallux.importing, "copy_whole", slow)
+    return go
+
+
+def test_the_machine_has_its_imports_on_its_own_disk(tmp_path, desk):
+    async def drop():                                 # while the AI works, as from the panel
+        assert machine.imports.drop(str(desk / "notes.txt")) is None
+        await imported(machine, "ready")
+        machine.imports.start(None)
+        await imported(machine, "done")
+
+    class Drawing(FakeTerminal):
+        drawn = 0
+
+        def refresh(self):
+            self.drawn += 1
+
+    model = FakeModel(screen("boot\n"), [drop, *result(screen("", prompt="", tail="<halt/>"))])
+    terminal = Drawing("ls")
+    machine = Machine(tmp_path / "world", Hardware(), terminal, client_factory=model)
+    assert machine.imports.disk is machine.disk and machine.imports.watch().state == "empty"
+    asyncio.run(asyncio.wait_for(machine.run(), 10))
+    assert machine.imports.watch().result.names == ("notes.txt",)
+    assert (tmp_path / "world" / "notes.txt").read_text() == "hello"      # the shell was in /
+    assert terminal.drawn >= 2                        # the tree, and the copy's end
+
+
+def test_a_machine_that_halts_while_a_copy_runs_ends_and_stops_the_copy(tmp_path, desk, held_back):
+    async def drop():
+        machine.imports.drop(str(desk / "notes.txt"))
+        await imported(machine, "ready")
+        machine.imports.start(None)
+        await imported(machine, "copying")
+        assert len(import_threads()) == 1
+
+    model = FakeModel(screen("boot\n"), [drop, *result(screen("", prompt="", tail="<halt/>"))])
+    machine = Machine(tmp_path / "world", Hardware(), FakeTerminal("poweroff"),
+                      client_factory=model)
+    started = time.monotonic()
+    asyncio.run(asyncio.wait_for(machine.run(), 10))
+    assert time.monotonic() - started < 3 and import_threads() == []      # nobody let it go
+    assert not (tmp_path / "world" / "notes.txt").exists()
+    assert [path.name for path in (tmp_path / "world").iterdir() if ".hallux-" in path.name] == []
+
+
+def test_a_copy_goes_on_over_a_reboot(tmp_path, desk, held_back):
+    async def drop():
+        machine.imports.drop(str(desk / "notes.txt"))
+        await imported(machine, "ready")
+        machine.imports.start(None)
+
+    async def let_it_go():                            # in the next boot
+        assert machine.imports.watch().state == "copying"
+        held_back.set()
+        await imported(machine, "done")
+
+    model = FakeModel(screen("boot 1\n"),
+                      [drop, *result(screen("rebooting\n", prompt="", tail="<reboot/>"))],
+                      screen("boot 2\n"),
+                      [let_it_go, *result(screen("", prompt="", tail="<halt/>"))])
+    machine = Machine(tmp_path / "world", Hardware(), FakeTerminal("reboot", "poweroff"),
+                      client_factory=model)
+    asyncio.run(asyncio.wait_for(machine.run(), 10))
+    assert len(model.sessions) == 2 and import_threads() == []
+    assert (tmp_path / "world" / "notes.txt").read_text() == "hello"
+    assert machine.imports.watch().result.files == 1

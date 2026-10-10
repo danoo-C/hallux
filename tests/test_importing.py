@@ -1,6 +1,7 @@
 """Reading a drop, hallux/importing.py: the text a terminal sends for a drop becomes real
 paths. Real files in a temporary folder, and a stand-in for wslpath, which notes what it
 was asked."""
+import asyncio
 import errno
 import os
 import shutil
@@ -15,9 +16,10 @@ import pytest
 
 import hallux.importing
 from hallux.disk import TEMP_MARK, Disk, copy_whole
-from hallux.importing import (EXISTS, FILE, FOLDER, FULL, HERE, IN_THE_WAY, LEADS, LINK, LONGEST,
-                              MEANWHILE, MORE, NO_PLACE, NOT_COPIED, OTHER, STOPPED, UNREADABLE,
-                              Counts, Line, NotADrop, Result, carry_out, from_windows, look,
+from hallux.importing import (COPYING, DONE, EMPTY, EXISTS, FILE, FOLDER, FULL, HERE, IN_THE_WAY,
+                              LEADS, LINK, LONGEST, LOOKING, MEANWHILE, MORE, NO_PLACE,
+                              NOT_COPIED, OTHER, READY, STOPPED, UNREADABLE, Counts, Imports,
+                              Line, NotADrop, Result, Seen, Tree, carry_out, from_windows, look,
                               read_drop)
 
 DISTRO = "kali-linux"                         # the user's, in every text their terminals sent
@@ -1038,3 +1040,552 @@ def test_inside_a_big_file_a_copy_tells_some_times_a_second(disk, desk, monkeypa
     monkeypatch.setattr(hallux.importing, "TELL_SECONDS", 0)
     carry_out(disk, [desk / "big.bin"], MUSIC, True, tell=lambda done: told.append(done.bytes))
     assert told == [10, 4, 8, 10, 10]
+
+
+# ================================================================ the machine's side
+
+def in_a_loop(scenario):
+    """Run a scenario in an event loop, where the panel makes its calls."""
+    return asyncio.run(asyncio.wait_for(scenario(), 20))
+
+
+async def until(condition, seconds=5):
+    """Wait until something holds. The test fails if it never does."""
+    deadline = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < deadline, "it never happened"
+        await asyncio.sleep(0.002)
+
+
+def threads():
+    """The threads of imports that are alive."""
+    return [thread for thread in threading.enumerate() if thread.name == "hallux-import"]
+
+
+class Watched:
+    """The machine's imports in the user's Music folder, and what was to be seen at every
+    call for a new drawing."""
+
+    def __init__(self, disk):
+        disk.cwd = MUSIC
+        self.imports = Imports(disk, lambda: self.drawn.append(self.imports.watch().state))
+        self.drawn = []
+        for name in ("watch", "drop", "reads", "start", "stop", "clear", "close"):
+            setattr(self, name, getattr(self.imports, name))
+
+    async def has(self, state):
+        await until(lambda: self.watch().state == state)
+        return self.watch()
+
+
+@pytest.fixture
+def held_back(monkeypatch):
+    """Walks and copies that wait: each goes on when the test sets this, and ends at once
+    when it is stopped."""
+    go = threading.Event()
+    real_look, real_copy = hallux.importing.look, hallux.importing.copy_whole
+
+    def waited(stop):
+        while not go.is_set() and not stop.is_set():
+            time.sleep(0.001)
+
+    def slow_look(disk, sources, into, stop=None, tell=None):
+        waited(stop)
+        return real_look(disk, sources, into, stop, tell)
+
+    def slow_copy(source, real, stop=None, wrote=None):
+        waited(stop)
+        return real_copy(source, real, stop, wrote)
+
+    monkeypatch.setattr(hallux.importing, "look", slow_look)
+    monkeypatch.setattr(hallux.importing, "copy_whole", slow_copy)
+    return go
+
+
+def test_a_drop_is_looked_at_in_a_thread_and_then_its_tree_is_there(disk, desk, held_back):
+    put(desk / "album", one_png="1")
+
+    async def scenario():
+        files = Watched(disk)
+        assert files.watch() == Seen(EMPTY, MUSIC)
+        assert files.drop(str(desk / "album")) is None
+        assert files.watch() == Seen(LOOKING, MUSIC, ("album",))
+        assert files.drawn == [] and len(threads()) == 1
+        held_back.set()
+        seen = await files.has(READY)
+        assert seen == Seen(READY, MUSIC, ("album",), look(disk, [desk / "album"], MUSIC).lines,
+                            Counts(folders=1, files=1, bytes=1))
+        assert drawn(seen) == [("album/", ""), ("  one.png", "")]
+        assert files.drawn[-1] == READY               # the terminal was asked to draw it
+        await until(lambda: threads() == [])
+
+    in_a_loop(scenario)
+
+
+def test_more_drops_add_to_the_list_and_the_tree_is_worked_out_again(disk, desk, held_back):
+    put(desk / "album", one_png="1")
+    put(desk, notes_txt="hello", b_txt="b")
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "album"))
+        disk.cwd = PICTURES                           # the list goes where its first drop went
+        assert files.drop(str(desk / "notes.txt")) is None        # while the first is looked at
+        assert files.watch() == Seen(LOOKING, MUSIC, ("album", "notes.txt"))
+        await until(lambda: len(threads()) == 1)      # the first walk was stopped: one is left
+        held_back.set()
+        seen = await files.has(READY)
+        assert drawn(seen) == [("album/", ""), ("  one.png", ""), ("notes.txt", "")]
+        assert files.drop(f"'{desk / 'b.txt'}'") is None          # and when the tree is there
+        assert files.watch().state == LOOKING and files.watch().lines == ()
+        seen = await files.has(READY)
+        assert drawn(seen)[2:] == [("notes.txt", ""), ("b.txt", "")]
+        assert seen.counts == Counts(folders=1, files=3, bytes=7)
+        assert files.drawn.count(READY) == 2          # the walk that was replaced reached nobody
+        await until(lambda: threads() == [])
+
+    in_a_loop(scenario)
+
+
+def test_the_destination_is_the_shells_directory_at_the_first_drop(disk, desk, music):
+    put(desk, notes_txt="hello", b_txt="b")
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "notes.txt"))
+        disk.cwd = PICTURES                           # an answer of the AI changes it meanwhile
+        files.drop(str(desk / "b.txt"))
+        assert (await files.has(READY)).into == MUSIC
+        files.start(None)
+        seen = await files.has(DONE)
+        assert seen.into == seen.result.into == MUSIC
+        assert held(music) == {"b.txt": b"b", "notes.txt": b"hello"}
+        files.clear()
+        assert files.watch() == Seen(EMPTY, PICTURES)             # where a drop would go now
+
+    in_a_loop(scenario)
+
+
+def test_a_drop_that_is_refused_leaves_the_list_as_it_was(disk, root, desk, held_back):
+    put(desk, notes_txt="hello")
+    put(desk / "other", notes_txt="another one of that name")
+    held_back.set()
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "notes.txt"))
+        before = await files.has(READY)
+        for text, said in [
+                (str(desk / "notes.txt"), "already in the list: notes.txt"),
+                (str(desk / "other" / "notes.txt"), "two things named notes.txt"),
+                (f"{desk / 'other'} {root / 'home'}", "would be copied into itself: home"),
+                ("hello", "no such file or folder on this computer: hello"),
+                ("", "not a path")]:
+            assert files.drop(text) == said
+            assert files.watch() == before and threads() == []
+        held_back.clear()
+        files.start(None)
+        copying = await files.has(COPYING)
+        assert files.drop(str(desk / "other")) == "a copy is running"
+        assert files.watch() == copying
+        held_back.set()
+        await files.has(DONE)
+
+    in_a_loop(scenario)
+
+
+def test_two_things_of_one_name_in_one_drop_are_refused(disk, desk):
+    put(desk / "a", notes_txt="one")
+    put(desk / "b", notes_txt="another")
+
+    async def scenario():
+        files = Watched(disk)
+        text = f"{desk / 'a' / 'notes.txt'} {desk / 'b' / 'notes.txt'}"
+        assert files.drop(text) == "two things named notes.txt"
+        assert files.watch() == Seen(EMPTY, MUSIC) and threads() == []
+
+    in_a_loop(scenario)
+
+
+def test_a_copy_runs_in_a_thread_and_its_result_is_shown(disk, desk, music, held_back, caplog):
+    put(desk / "album", a_txt="12345", b_txt="123")
+    held_back.set()
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "album"))
+        ready = await files.has(READY)
+        held_back.clear()
+        files.start(None)
+        seen = files.watch()
+        assert (seen.state, seen.lines, seen.counts) == (COPYING, ready.lines, ready.counts)
+        assert seen.through == Counts(folders=0, files=0, bytes=0) and len(threads()) == 1
+        await until(lambda: files.watch().through.folders == 1)   # the folder is made, and the
+        assert held(music) == {"album": None}                     # first file is held back
+        held_back.set()
+        seen = await files.has(DONE)
+        assert seen == Seen(DONE, MUSIC, ("album",), result=Result(
+            MUSIC, files=2, folders=1, bytes=8, names=("album/",)))
+        assert held(music) == {"album": None, "album/a.txt": b"12345", "album/b.txt": b"123"}
+        assert files.drawn[-1] == DONE and COPYING in files.drawn
+        await until(lambda: threads() == [])
+
+    with caplog.at_level("INFO", logger="hallux"):
+        in_a_loop(scenario)
+    assert ("import into /home/user/Music: 2 files, 1 folders, 8 bytes; 0 skipped, 0 failed"
+            in caplog.text)
+
+
+def test_a_copy_asks_for_a_new_drawing_some_times_a_second_not_at_every_file(disk, desk):
+    put(desk / "album", **{f"f{number}_txt": "12" for number in range(200)})
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "album"))
+        await files.has(READY)
+        files.start(None)
+        assert (await files.has(DONE)).result.files == 200
+        assert 2 <= len(files.drawn) < 20             # the tree, the copy now and then, its end
+
+    in_a_loop(scenario)
+
+
+def test_start_does_nothing_without_a_tree_that_can_be_copied(disk, root, desk, held_back):
+    put(desk, notes_txt="hello")
+
+    async def scenario():
+        files = Watched(disk)
+        files.start(None)                             # nothing was dropped
+        assert files.watch().state == EMPTY
+        files.drop(str(desk / "notes.txt"))
+        files.start(None)                             # the tree isn't there yet
+        assert files.watch().state == LOOKING
+        files.clear()
+        held_back.set()
+        disk.cwd = "/home/user/Videos"                # a folder that is gone
+        files.drop(str(desk / "notes.txt"))
+        seen = await files.has(READY)
+        assert seen.refused == "the folder is gone: /home/user/Videos" and seen.lines == ()
+        files.start(True)
+        assert files.watch() == seen
+        files.clear()
+        disk.cwd = "/home/user"                       # nothing in the tree would be copied
+        files.drop(str(root / "home" / "user" / "Pictures"))
+        seen = await files.has(READY)
+        assert drawn(seen) == [("Pictures/", HERE)] and seen.counts.to_copy == 0
+        files.start(True)
+        assert files.watch() == seen
+        await until(lambda: threads() == [])
+
+    in_a_loop(scenario)
+
+
+def test_a_copy_that_is_stopped_is_done_and_says_so(disk, desk, music, held_back):
+    put(desk / "album", a_txt="12345", b_txt="123")
+    held_back.set()
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "album"))
+        await files.has(READY)
+        held_back.clear()
+        files.start(None)
+        await until(lambda: files.watch().through.folders == 1)
+        files.stop()
+        seen = await files.has(DONE)
+        assert seen.result == Result(MUSIC, folders=1, ended=STOPPED, names=("album/",))
+        assert held(music) == {"album": None} and left_behind(music) == []
+        await until(lambda: threads() == [])
+
+    in_a_loop(scenario)
+
+
+def test_a_walk_that_is_stopped_leaves_a_tree_that_cant_be_copied(disk, desk, held_back):
+    put(desk / "album", a_txt="12345")
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "album"))
+        files.stop()
+        seen = await files.has(READY)
+        assert (seen.refused, seen.lines) == (STOPPED, ())
+        files.start(None)
+        assert files.watch() == seen
+        held_back.set()
+        files.drop(str(desk / "album" / "a.txt"))     # one more drop, and it is looked at whole
+        assert drawn(await files.has(READY)) == [("album/", ""), ("  a.txt", ""), ("a.txt", "")]
+
+    in_a_loop(scenario)
+
+
+def test_clearing_empties_the_list_and_stops_the_walk(disk, desk, music, held_back):
+    put(desk, notes_txt="hello")
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "notes.txt"))
+        files.clear()                                 # while it is looked at
+        assert files.watch() == Seen(EMPTY, MUSIC)
+        await until(lambda: threads() == [])          # the walk ended, though nobody let it go
+        assert files.watch() == Seen(EMPTY, MUSIC) and files.drawn == []
+        held_back.set()
+        files.drop(str(desk / "notes.txt"))
+        await files.has(READY)
+        files.clear()                                 # with the tree there
+        assert files.watch() == Seen(EMPTY, MUSIC)
+        files.drop(str(desk / "notes.txt"))
+        await files.has(READY)
+        held_back.clear()
+        files.start(None)
+        copying = files.watch()
+        files.clear()                                 # not while it copies
+        assert files.watch() == copying
+        held_back.set()
+        await files.has(DONE)
+        files.clear()                                 # the result is forgotten
+        assert files.watch() == Seen(EMPTY, MUSIC) and held(music) == {"notes.txt": b"hello"}
+
+    in_a_loop(scenario)
+
+
+def test_a_drop_after_a_copy_starts_a_new_list_for_where_the_shell_is_then(disk, desk):
+    put(desk, notes_txt="hello", b_txt="b")
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "notes.txt"))
+        await files.has(READY)
+        files.start(None)
+        await files.has(DONE)
+        disk.cwd = PICTURES
+        assert files.drop("hello").startswith("no such file")     # refused: the result stays
+        assert files.watch().state == DONE
+        assert files.drop(str(desk / "b.txt")) is None
+        seen = await files.has(READY)
+        assert (seen.into, seen.names, seen.result) == (PICTURES, ("b.txt",), None)
+        assert drawn(seen) == [("b.txt", "")]
+
+    in_a_loop(scenario)
+
+
+def test_closing_stops_a_copy_and_waits_until_its_thread_is_gone(disk, desk, music, held_back):
+    put(desk / "album", a_txt="12345")
+    held_back.set()
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "album"))
+        await files.has(READY)
+        held_back.clear()
+        files.start(None)
+        await until(lambda: files.watch().through.folders == 1)
+        started = time.monotonic()
+        files.close()
+        assert time.monotonic() - started < 1 and threads() == []
+        await asyncio.sleep(0.01)                     # and what it ended with reaches nobody
+        assert files.watch().state == COPYING and DONE not in files.drawn
+        assert held(music) == {"album": None} and left_behind(music) == []
+
+    in_a_loop(scenario)
+
+
+def test_closing_waits_for_a_walk_too_and_for_one_that_was_replaced(disk, desk, monkeypatch):
+    put(desk, notes_txt="hello", b_txt="b")
+    real_look = hallux.importing.look
+
+    def slow_to_stop(disk, sources, into, stop=None, tell=None):
+        time.sleep(0.2 if len(sources) == 1 else 0)   # the first one, in the middle of a folder
+        stop.wait(5)
+        return real_look(disk, sources, into, stop, tell)
+
+    monkeypatch.setattr(hallux.importing, "look", slow_to_stop)
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "notes.txt"))
+        files.drop(str(desk / "b.txt"))               # the first walk is stopped, and still at it
+        assert len(threads()) == 2
+        files.close()
+        assert threads() == [] and files.drawn == []
+
+    in_a_loop(scenario)
+
+
+def test_a_thread_that_fails_says_so_in_the_tab_and_in_the_log(disk, desk, monkeypatch, caplog):
+    put(desk, notes_txt="hello")
+
+    def mistake(*args, **more):
+        raise RuntimeError("a mistake in here")
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "notes.txt"))
+        await files.has(READY)
+        monkeypatch.setattr(hallux.importing, "carry_out", mistake)
+        files.start(None)
+        seen = await files.has(DONE)
+        assert seen.result == Result(MUSIC, ended="failed: RuntimeError: a mistake in here")
+        monkeypatch.setattr(hallux.importing, "look", mistake)
+        files.drop(str(desk / "notes.txt"))
+        seen = await files.has(READY)
+        assert seen.refused == "couldn't be looked at: RuntimeError: a mistake in here"
+        files.start(None)
+        assert files.watch() == seen
+
+    in_a_loop(scenario)
+    assert caplog.text.count("an import's thread failed") == 2 and "Traceback" in caplog.text
+
+
+def test_while_it_is_looked_at_the_counts_grow_and_only_the_walk_that_counts_is_heard(
+        disk, desk, monkeypatch):
+    put(desk, a_txt="a", b_txt="b")
+    gates, real_look, real_copy = [], hallux.importing.look, hallux.importing.copy_whole
+    copies = threading.Event()
+
+    def telling(disk, sources, into, stop=None, tell=None):
+        gates.append(threading.Event())
+        mine = gates[-1]
+        tell(Counts(folders=0, files=len(sources) * 10, bytes=5))         # so far
+        mine.wait(5)
+        tell(Counts(folders=0, files=len(sources) * 100, bytes=50))
+        return real_look(disk, sources, into, stop, tell)
+
+    def held(source, place, stop=None, wrote=None):
+        copies.wait(5)
+        return real_copy(source, place, stop, wrote)
+
+    monkeypatch.setattr(hallux.importing, "look", telling)
+    monkeypatch.setattr(hallux.importing, "copy_whole", held)
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "a.txt"))
+        await until(lambda: files.watch().counts.files == 10)
+        assert files.watch() == Seen(LOOKING, MUSIC, ("a.txt",), counts=Counts(0, 10, 5))
+        await until(lambda: files.drawn == [LOOKING])             # its first word is drawn at once
+        files.drop(str(desk / "b.txt"))
+        await until(lambda: files.watch().counts.files == 20)
+        gates[0].set()                                # the walk that was replaced says more
+        await until(lambda: len(threads()) == 1)
+        assert files.watch().counts == Counts(0, 20, 5)           # and nobody hears it
+        gates[1].set()
+        seen = await files.has(READY)
+        assert seen.counts == Counts(files=2, bytes=2) and seen.through == Counts()
+        files.start(None)                             # a tenth of a second hasn't passed
+        assert files.watch().through == Counts()      # the copy starts at nothing,
+        copies.set()
+        await files.has(DONE)
+        assert COPYING in files.drawn                 # and its first word is drawn at once too
+
+    in_a_loop(scenario)
+
+
+@pytest.mark.parametrize("why, said", [({"stopped": True}, STOPPED), ({"refused": "no"}, "no")])
+def test_a_tree_that_is_refused_or_cut_short_cant_be_copied_whatever_it_counted(
+        disk, desk, monkeypatch, why, said):
+    put(desk, notes_txt="hello")
+    monkeypatch.setattr(hallux.importing, "look", lambda disk, sources, into, stop, tell: Tree(
+        into, counts=Counts(files=3, bytes=9), **why))
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "notes.txt"))
+        seen = await files.has(READY)
+        assert seen.refused == said and seen.counts.to_copy == 3
+        files.start(None)
+        assert files.watch() == seen and threads() == []
+
+    in_a_loop(scenario)
+
+
+def test_the_users_answer_about_what_exists_reaches_the_copy(disk, root, desk):
+    put(desk, cat_png="another cat")
+    cat = root / "home" / "user" / "Pictures" / "cat.png"
+
+    async def scenario():
+        files = Watched(disk)
+        for overwrite, result, holds in [
+                (False, Result(PICTURES, skipped={EXISTS: 1}), "a cat"),
+                (None, Result(PICTURES, skipped={MEANWHILE: 1}), "a cat"),
+                (True, Result(PICTURES, files=1, bytes=11, names=("cat.png",)), "another cat")]:
+            disk.cwd = PICTURES
+            files.drop(str(desk / "cat.png"))
+            assert drawn(await files.has(READY)) == [("cat.png", EXISTS)]
+            files.start(overwrite)
+            assert (await files.has(DONE)).result == result and cat.read_text() == holds
+
+    in_a_loop(scenario)
+
+
+def test_a_drop_into_a_directory_behind_the_fence_is_taken_and_its_tree_says_so(
+        disk, root, desk, tmp_path):
+    put(desk, notes_txt="hello")
+    put(tmp_path / "outside" / "sub")
+    (root / "home" / "user" / "out").symlink_to(tmp_path / "outside")
+
+    async def scenario():
+        files = Watched(disk)
+        disk.cwd = "/home/user/out/sub"               # a link that was made behind the shell's back
+        assert files.drop(str(desk / "notes.txt")) is None
+        seen = await files.has(READY)
+        assert drawn(seen) == [("notes.txt", NO_PLACE)] and seen.refused is None
+        files.start(None)
+        assert files.watch() == seen
+
+    in_a_loop(scenario)
+
+
+def test_a_thread_that_outlives_the_loop_reports_to_nobody(disk, desk, held_back, monkeypatch):
+    put(desk, notes_txt="hello")
+    raised = []
+    monkeypatch.setattr(threading, "excepthook", raised.append)
+
+    async def scenario():
+        Watched(disk).drop(str(desk / "notes.txt"))
+
+    in_a_loop(scenario)                               # the loop is closed, and the walk goes on
+    [thread] = threads()
+    held_back.set()
+    thread.join(5)
+    assert not thread.is_alive() and raised == []
+
+
+def test_closing_doesnt_wait_for_ever_for_a_thread_that_doesnt_answer(disk, desk, monkeypatch,
+                                                                     caplog):
+    put(desk, notes_txt="hello")
+    inside, let_go = threading.Event(), threading.Event()
+    monkeypatch.setattr(hallux.importing, "CLOSE_SECONDS", 0.05)
+    monkeypatch.setattr(hallux.importing, "copy_whole",
+                        lambda source, place, stop, wrote: inside.set() or let_go.wait(5) and False)
+
+    async def scenario():
+        files = Watched(disk)
+        files.drop(str(desk / "notes.txt"))
+        await files.has(READY)
+        files.start(None)
+        await until(inside.is_set)                    # in the middle of a file
+        started = time.monotonic()
+        files.close()                                 # a drive that doesn't answer, say
+        assert 0.04 < time.monotonic() - started < 1 and len(threads()) == 1
+
+    in_a_loop(scenario)
+    assert "an import didn't stop in 0 seconds" in caplog.text
+    let_go.set()
+    for thread in threads():
+        thread.join(5)
+    assert threads() == []
+
+
+def test_a_text_reads_as_a_drop_or_doesnt(disk, desk):
+    put(desk, notes_txt="hello")
+    files = Imports(disk)
+    assert files.reads(f"'{desk / 'notes.txt'}'") is True
+    assert files.reads("hello") is False and files.reads("") is False
+    assert files.watch().state == EMPTY               # asking adds nothing
+
+
+def test_what_would_be_copied_is_what_has_no_mark_that_skips_it():
+    assert Counts().to_copy == 0
+    assert Counts(folders=2, files=5, marks={EXISTS: 2, LEADS: 1}).to_copy == 7
+    assert Counts(folders=2, files=5, marks={HERE: 1, IN_THE_WAY: 2, NO_PLACE: 1, UNREADABLE: 1,
+                                             NOT_COPIED: 1, EXISTS: 1}).to_copy == 1

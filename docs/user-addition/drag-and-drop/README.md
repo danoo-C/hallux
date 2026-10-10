@@ -1,7 +1,7 @@
 # Plan: drag and drop into the machine
 
-**Status:** written on 2026-10-10, at the user's request. **Steps 1 to 3 are built,** steps
-4 to 7 are not ([The steps](#the-steps)). There is no
+**Status:** written on 2026-10-10, at the user's request. **Steps 1 to 4 are built,** steps
+5 to 7 are not ([The steps](#the-steps)). There is no
 separate design document: this file holds the design and the plan, and every step has a
 file of its own in this folder. The decisions in the table below are my proposals. The user
 set the frame (a tab of the panel, a scrollable tree of what is imported) and hasn't gone
@@ -293,8 +293,9 @@ seconds and after Ctrl-C.
 | `tests/test_importing.py`, `tests/test_panel_files.py` | New | 1 to 5 |
 | `tests/test_disk.py`, `test_panel.py`, `test_machine.py`, `test_jobdisk.py` | More tests in each | 2 to 6 |
 
-**The line numbers** in the steps are the code's at commit 0e4d0a8. Every step moves them,
-so each reference also names what stands there.
+**The line numbers** in the steps that are built are the code's at commit 0e4d0a8, where
+the plan was written. Those in the steps that aren't built yet are set again after every
+step: they are the code's after step 4. Each reference also names what stands there.
 
 ---
 
@@ -305,7 +306,7 @@ so each reference also names what stands there.
 | 1. Reading a drop | [01-reading-a-drop.md](01-reading-a-drop.md) | | Built on 2026-10-10 |
 | 2. The tree | [02-tree.md](02-tree.md) | 1 | Built on 2026-10-10 |
 | 3. The copy | [03-copy.md](03-copy.md) | 2 | Built on 2026-10-10 |
-| 4. The machine's side | [04-imports.md](04-imports.md) | 3 | |
+| 4. The machine's side | [04-imports.md](04-imports.md) | 3 | Built on 2026-10-10 |
 | 5. The Files tab | [05-files-tab.md](05-files-tab.md) | 4 | |
 | 6. Telling the AI | [06-telling-the-ai.md](06-telling-the-ai.md) | 4 | |
 | 7. The documentation and the user's try | [07-docs-and-try.md](07-docs-and-try.md) | 5, 6 | |

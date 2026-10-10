@@ -29,6 +29,7 @@ from hallux.addons import Addon, Events, stop_all
 from hallux.agents import Job, JobEvent, Jobs, Session, Worker, shared_options
 from hallux.config import Hardware
 from hallux.disk import Disk
+from hallux.importing import Imports
 from hallux.passwords import Passwords
 from hallux.protocol import (
     Action, Field, Form, Reply, ScreenStream, Secret, envelope, json_body, parse, resolve,
@@ -99,6 +100,10 @@ class Terminal(Protocol):
         """While the AI works: animate the bar, keep reading keys, call interrupt on Ctrl-C."""
 
     def set_status(self, **changes: object) -> None: ...
+
+    def refresh(self) -> None:
+        """Draw hallux's own part of the screen again, wherever it is now. Nothing, for a
+        terminal that has no panel."""
 
     # block mode: full-screen programs with editable fields (hallux.blockmode)
     async def show_form(self, screen: str, form: Form, patch: tuple | None = None) -> None:
@@ -192,6 +197,10 @@ class Machine:
                          on_report=self.job_reported, on_event=self.job_event_waits,
                          over_budget=self.over_budget, addons=self.addons,
                          running=lambda: self.running.model)
+        # What the user drops onto the window (hallux.importing): the panel's Files tab shows
+        # it and copies it into the disk. The AI takes no part in that. A walk or a copy
+        # that changes what the tab shows has the terminal draw it again.
+        self.imports = Imports(self.disk, changed=lambda: self.terminal.refresh())
 
     # ---------------------------------------------------------------- for hallux's own panel
 
@@ -293,7 +302,8 @@ class Machine:
             while await self.power_on():
                 log.info("reboot")
         finally:
-            self.terminal.stop()
+            self.imports.close()                 # a copy that runs is stopped: nothing of
+            self.terminal.stop()                 # the user's is written once Hallux is off
 
     async def power_on(self) -> bool:
         """One boot-to-shutdown lifetime. Returns True if the machine wants to reboot."""

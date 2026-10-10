@@ -94,3 +94,84 @@ With a real `Disk` on a temporary folder, and real threads:
 
 The tests pass, and the whole suite is as fast as before: no test waits on a real walk
 longer than a moment.
+
+## As built
+
+Built on 2026-10-10, on the branch `drag-and-drop`. 27 new tests (24 in
+`tests/test_importing.py`, 3 in `tests/test_machine.py`), 1749 in all. Two old test files
+changed, as the step says: the tests' `FakeTerminal` got its empty `refresh`, and a test of
+the scripted terminal got a line for its own. The whole suite takes 123 seconds, as before;
+the 24 new tests take about one. Still nobody can reach an import: the tab is step 5.
+
+**Where it differs from the text above:**
+
+- **A thread of its own, not `asyncio.to_thread`.** A daemon thread, as an addon's function
+  gets one (`call` in `hallux/addons.py`, for the same reason). asyncio waits for the
+  threads of its pool when the loop ends, so a copy that hangs on a drive that doesn't
+  answer would keep Hallux from quitting. `close()` still stops what runs and waits for
+  it, for two seconds at most (`CLOSE_SECONDS`). After that it says so in the log and goes
+  on, and the thread ends with Hallux.
+- **One `threading.Event` for each walk and each copy, not one for all.** With one, a walk
+  that is replaced by a new drop would have to be waited for before the event could be
+  cleared for the next. Now the old walk is stopped and the new one begins at once. For a
+  moment both run, and both only read. What the old one still reports, and what it ends
+  with, reaches nobody.
+- **`changed` is called for what a thread changes:** how far a walk or a copy is, ten times
+  a second at most, and its end, always. What a call of the tab changes (`drop`, `clear`,
+  `start`), the tab draws itself, as it draws after any key.
+- **`drop` returns `None` when it took the text,** and otherwise the words.
+
+**Decided while building,** where the text above leaves it open:
+
+- **`Seen`** has the state, `into`, `names` (what was dropped, in its order), the tree's
+  `lines`, `counts` and `refused`, `through` and `result`. In `empty`, `into` is where a
+  drop would go now. In `looking`, `counts` is how far the walk has come. In `copying`,
+  `through` is how far the copy is, of `counts`.
+- **"Something in it would be copied"** is `counts.to_copy`: how many things have no mark
+  that skips them. A file that exists counts: it is copied if the user says so.
+- **A walk that was stopped** leaves the state `ready`, with a tree that is refused as
+  `stopped`. It can't be copied, and one more drop looks at everything again. Only `stop()`
+  does that, and the tab has no key for it while a walk runs.
+- **A destination that is gone doesn't refuse the drop.** The tree does: `ready`, refused,
+  as the table of states has it. **A destination behind the fence** doesn't either: every
+  line of its tree says `can't go there`.
+- **Two things of one name in one drop** are refused, like a second one for the list.
+- **A mistake in a thread,** an error that the walk or the copy doesn't expect, is in the
+  log with its traceback. The tab gets a tree that is refused,
+  `couldn't be looked at: ` and the error, or a result that ended, `failed: ` and the
+  error. Without that the tab would say `counting…` for ever.
+- **The first word of every walk and every copy is drawn at once,** and then no more than
+  ten a second.
+- **The log's line** is `import into /home/user/Music: 2 files, 1 folders, 8 bytes; 0
+  skipped, 0 failed`, with `; stopped` or what else ended it. The copy's own thread writes
+  it, so a copy that Hallux's end stopped has its line too.
+- **The machine asks its terminal to draw when a thread reports,** not before. A terminal
+  that is `None`, which one old test builds a machine with, never gets that far.
+
+**For step 5:**
+
+- **The six functions** are `machine.imports.watch`, `drop`, `reads`, `start`, `stop` and
+  `clear`.
+- **`drop` and `start` have to be called in the event loop,** as a key's handler is. They
+  start a thread that reports back into that loop.
+- **Enter does something** when `seen.counts.to_copy` isn't 0. **The question is asked**
+  when `seen.counts.marks` has `exists`.
+- **`reads` and `drop` may ask `wslpath`,** which takes a few milliseconds, and two seconds
+  at most if it hangs.
+
+**Checked beyond the tests,** in a real event loop, with a task beside it that measures
+how long the loop is held:
+
+- **A big folder:** the repository's `.venv`, 6,196 files, was looked at in 1.2 seconds.
+  The tab would have seen the files grow: 0, 468, 649, 1,053, and on. A new drawing was
+  asked for 12 times, and the loop was never held longer than 5 ms.
+- **A copy:** the repository's `docs`, a package of 686 files and one file of 300 MB, 764
+  files and 324 MB in all, in half a second. The tab would have seen `61 files, 904 kB`,
+  `130 files, 1.8 MB` and on to the end. Six drawings, the loop never held longer than
+  1 ms, and what arrived is the same as its source.
+- **Stopped in the middle of a file that it replaced:** the result says `stopped`, the old
+  file is whole, and nothing with `.hallux-` in its name is left. After `close()` no
+  thread is left.
+- **The code was broken in 58 ways,** one at a time, and a test noticed each. At the first
+  go seven of sixty went unnoticed. The lines among them that turned out to do nothing are
+  gone, and the others have their tests now.
