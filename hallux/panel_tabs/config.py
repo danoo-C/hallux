@@ -1,7 +1,9 @@
 """The Config tab of hallux's own panel: the machine's settings, and how far its budgets are.
 
 The tab knows nothing of the machine. It is given four functions: view() says what to show,
-and change(name, text), save() and refill() do what the rows and the buttons ask for.
+and change(name, text), save() and refill() do what the rows and the buttons ask for. And it
+is told once whether the machine has an addon with an agent: only then does it draw the six
+settings of the addon agents.
 """
 from __future__ import annotations
 
@@ -22,21 +24,34 @@ from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from hallux import config
 from hallux.config import EFFORTS, MODELS, View
 from hallux.panel import Tab
-from hallux.statusbar import GRAY, RED
+from hallux.statusbar import GRAY, RED, spent
 
 LABELS = {                                    # every setting, in the order of its rows
     "model": "Model", "max_budget_usd": "Budget per boot", "tick_budget_usd": "Tick budget",
-    "event_budget_usd": "Event budget", "effort": "Effort", "fallback_model": "Fallback model",
-    "status_bar": "Status bar", "addons": "Addons", "keep_transcripts": "Transcripts",
-    "os_sandbox": "OS sandbox",
+    "event_budget_usd": "Event budget", "agent_model": "Agent model",
+    "agent_max_effort": "Max agent effort", "agent_max_running": "Agents at once",
+    "agent_job_budget_usd": "Budget per job", "agent_budget_usd": "Budget, all jobs",
+    "agent_timeout_seconds": "Time per job", "effort": "Effort",
+    "fallback_model": "Fallback model", "status_bar": "Status bar", "addons": "Addons",
+    "keep_transcripts": "Transcripts", "os_sandbox": "OS sandbox",
 }
+# The settings of the addon agents: they have rows only on a machine that has an agent.
+AGENTS = ("agent_model", "agent_max_effort", "agent_max_running", "agent_job_budget_usd",
+          "agent_budget_usd", "agent_timeout_seconds")
 GROUPS = {                                    # by when a change takes effect: config.WHEN
     "now": "Changes now", "reboot": "Changes at the machine's next reboot",
     "start": "Set when Hallux starts (edit config.toml)",
 }
 BUTTONS = ("Refill budgets", "Save", "Close")
-BUDGETS = ("max_budget_usd", "tick_budget_usd", "event_budget_usd")
-NAMES = ("model", "fallback_model")           # typed, with a list to pick from
+BUDGETS = ("max_budget_usd", "tick_budget_usd", "event_budget_usd", "agent_job_budget_usd",
+           "agent_budget_usd")                # shown and typed as dollars
+NAMES = ("model", "fallback_model", "agent_model")    # typed, with a list to pick from
+PICKED = ("effort", "agent_max_effort")       # picked from a list, and never typed
+HOW = {                                       # what else is typed, for the foot; the rest: dollars
+    "max_budget_usd": "type the dollars, or nothing for no cap",
+    "agent_max_running": "type a whole number", "agent_timeout_seconds": "type the seconds",
+}
+# A label is at most LABEL_WIDTH - 1 characters: one more would run into its value.
 INDENT, LABEL_WIDTH, VALUE_WIDTH = 4, 19, 18    # a model's name fits, with the cursor after it
 NOTE, REFUSED, CURRENT = f"fg:{GRAY}", f"fg:{RED}", "reverse"
 TYPED, SELECTED = "underline", "underline reverse"
@@ -63,10 +78,22 @@ class Drawn:
     cursor: Point                             # in the rows: the line to keep in view
 
 
-def stops() -> list[str]:
+def settings(agents: bool = False) -> list[str]:
+    """The settings that have a row, in their order. Those of the addon agents only when the
+    machine has an agent: on another machine they would change nothing."""
+    return [name for name in LABELS if agents or name not in AGENTS]
+
+
+def stops(agents: bool = False) -> list[str]:
     """What the arrow keys move over, in order: the rows that change, then the buttons."""
-    rows = [name for when in ("now", "reboot") for name in LABELS if config.WHEN[name] == when]
-    return rows + list(BUTTONS)
+    with_rows = settings(agents)
+    return [name for when in ("now", "reboot") for name in with_rows
+            if config.WHEN[name] == when] + list(BUTTONS)
+
+
+def seconds(amount: float) -> str:
+    """600, and 90.5: a number of seconds as it is typed, never 1e+06."""
+    return f"{amount:.6f}".rstrip("0").rstrip(".")
 
 
 def dollars(amount: float) -> str:
@@ -80,9 +107,11 @@ def dollars(amount: float) -> str:
 def shown(name: str, value: object) -> str:
     """A setting's value as its row shows it."""
     if value is None:
-        return "all that loaded" if name == "addons" else "none"
+        return {"addons": "all that loaded", "agent_model": "same as Model"}.get(name, "none")
     if name in BUDGETS:
         return dollars(value)
+    if name == "agent_timeout_seconds":
+        return f"{seconds(value)}s"
     if name == "addons":
         return ", ".join(value) or "none"
     if isinstance(value, bool):
@@ -94,17 +123,19 @@ def entered(name: str, value: object) -> str:
     """The line a row opens with: its value as it would be typed. Nothing for none."""
     if value is None:
         return ""
+    if name == "agent_timeout_seconds":
+        return seconds(value)
     return dollars(value)[1:] if name in BUDGETS else str(value)
 
 
 def choices(name: str, view: View) -> list[str]:
     """The list an open row offers to pick from. The other rows have none."""
-    if name == "effort":
+    if name in PICKED:
         return list(EFFORTS)
     if name not in NAMES:
         return []
     models = list(dict.fromkeys((*MODELS, view.running.model, view.hardware.model)))
-    return ["none", *models] if name == "fallback_model" else models
+    return models if name == "model" else ["none", *models]     # the others can be left out
 
 
 def note(name: str, view: View) -> str:
@@ -115,14 +146,16 @@ def note(name: str, view: View) -> str:
     elif name == "effort" and running.model_effort != hw.effort:
         parts.append(f"running now: {running.model_effort or 'none'}")
     elif name == "max_budget_usd" and view.spent_since_refill != view.spent_boot:
-        parts.append(f"spent since the refill: ${view.spent_since_refill:.2f} · "
-                     f"this boot: ${view.spent_boot:.2f}")
+        parts.append(f"spent since the refill: {spent(view.spent_since_refill)} · "
+                     f"this boot: {spent(view.spent_boot)}")
     elif name == "max_budget_usd":
-        parts.append(f"spent in this boot: ${view.spent_boot:.2f}")
+        parts.append(f"spent in this boot: {spent(view.spent_boot)}")
     elif name == "tick_budget_usd" and view.spent_ticks is not None:
-        parts.append(f"spent by this program: ${view.spent_ticks:.2f}")
+        parts.append(f"spent by this program: {spent(view.spent_ticks)}")
     elif name == "event_budget_usd":
-        parts.append(f"spent since you typed: ${view.spent_events:.2f}")
+        parts.append(f"spent since you typed: {spent(view.spent_events)}")
+    elif name == "agent_budget_usd":
+        parts.append(f"spent since you typed: {spent(view.spent_jobs)}")
     if name in view.paused:
         parts.append(f"{parts.pop()} (paused)" if parts else "(paused)")
     if name in view.from_flags:
@@ -130,18 +163,20 @@ def note(name: str, view: View) -> str:
     return " · ".join(parts)
 
 
-def draw(view: View, state: State) -> Drawn:
-    """The whole tab as text, from what the machine says and where the user is."""
-    at = stops()[state.at]
-    values = {name: shown(name, getattr(view.hardware, name)) for name in LABELS}
+def draw(view: View, state: State, agents: bool = False) -> Drawn:
+    """The whole tab as text, from what the machine says and where the user is. With `agents`,
+    the rows of the addon agents are in it."""
+    at = stops(agents)[state.at]
+    names = settings(agents)
+    values = {name: shown(name, getattr(view.hardware, name)) for name in names}
     width = max(VALUE_WIDTH, len(state.typed.text) + 1 if state.open else 0,
-                *(len(values[name]) for name in LABELS if config.WHEN[name] != "start"))
+                *(len(values[name]) for name in names if config.WHEN[name] != "start"))
     column = INDENT + LABEL_WIDTH                       # where the values start
     rows: list[list[Part]] = [[], [(NOTE, f"  {Path(*view.path.parts[-3:])}", None)]]
     cursor = Point(0, 0)
     for when, title in GROUPS.items():
         rows += [[], [("bold", f"  {title}", None)]]
-        for name in (name for name in LABELS if config.WHEN[name] == when):
+        for name in (name for name in names if config.WHEN[name] == when):
             label = f"{LABELS[name]:<{LABEL_WIDTH}}"
             if name != state.open:
                 style = CURRENT if name == at else ""
@@ -184,7 +219,10 @@ def draw(view: View, state: State) -> Drawn:
 
 def _warning(name: str) -> str:
     """A model name can't be checked here, so its open row says what a wrong one does. The
-    session refuses to switch to it; a boot that starts on it fails, and that ends Hallux."""
+    session refuses to switch to it; a boot that starts on it fails, and that ends Hallux.
+    A job is a new session each time: it fails on a wrong name."""
+    if name == "agent_model":
+        return "a wrong name fails every job"
     if name != "model":
         return ""
     return ("a wrong name is refused; saved, it ends Hallux at the next boot"
@@ -199,11 +237,13 @@ class ConfigTab(Tab):
     title = "Config"
 
     def __init__(self, view: Callable[[], View], change: Callable[[str, str], str | None],
-                 save: Callable[[], str | None], refill: Callable[[], str]) -> None:
+                 save: Callable[[], str | None], refill: Callable[[], str],
+                 agents: bool = False) -> None:
         self.view, self.change, self.save, self.refill = view, change, save, refill
+        self.agents = agents                             # the machine has an addon with an agent
         self.state = State()
         self.cursor = Point(0, 0)
-        text_row = Condition(lambda: self.state.open not in (None, "effort"))
+        text_row = Condition(lambda: self.state.open not in (None, *PICKED))
         rows = FormattedTextControl(self._rows, focusable=True,
                                     get_cursor_position=lambda: self.cursor)
         self.container = HSplit([                        # the rows scroll, the buttons stay
@@ -222,12 +262,11 @@ class ConfigTab(Tab):
     def hint(self) -> str:
         name = self.state.open
         if name is None:
-            press = "press" if stops()[self.state.at] in BUTTONS else "change"
+            press = "press" if self._stops()[self.state.at] in BUTTONS else "change"
             return f"↑ ↓ move · Enter {press}"
-        how = ("↑ ↓ pick" if name == "effort"
+        how = ("↑ ↓ pick" if name in PICKED
                else "type a name, or ↑ ↓ pick" if name in NAMES
-               else "type the dollars, or nothing for no cap" if name == "max_budget_usd"
-               else "type the dollars")
+               else HOW.get(name, "type the dollars"))
         return f"{how} · Enter take · Esc leave it as it was"
 
     def leave(self) -> bool:
@@ -241,14 +280,17 @@ class ConfigTab(Tab):
 
     # ---------------------------------------------------------------- drawing
 
+    def _stops(self) -> list[str]:
+        return stops(self.agents)
+
     def _rows(self) -> list:
-        drawn = draw(self.view(), self.state)            # read anew at every redraw
+        drawn = draw(self.view(), self.state, self.agents)   # read anew at every redraw
         self.cursor = drawn.cursor
         lines = [self._clickable(line) for line in drawn.rows]
         return [part for line in lines for part in (*line, ("", "\n"))][:-1]
 
     def _buttons(self) -> list:
-        return self._clickable(draw(self.view(), self.state).buttons)
+        return self._clickable(draw(self.view(), self.state, self.agents).buttons)
 
     def _clickable(self, line: list[Part]) -> list:
         return [(style, text) if target is None else (style, text, self._click(target))
@@ -262,7 +304,7 @@ class ConfigTab(Tab):
                 self._pick(target[1])
                 return self._take()
             self.leave()                                 # a row that was open is left as it was
-            self.state.at = stops().index(target)
+            self.state.at = self._stops().index(target)
             self._enter()
         return handle
 
@@ -271,7 +313,7 @@ class ConfigTab(Tab):
     def _bindings(self, text_row: Condition) -> KeyBindings:
         kb = KeyBindings()
         closed = Condition(lambda: self.state.open is None)
-        on_button = closed & Condition(lambda: stops()[self.state.at] in BUTTONS)
+        on_button = closed & Condition(lambda: self._stops()[self.state.at] in BUTTONS)
 
         def to(handler: Callable[[], object]) -> Callable:
             return lambda event: handler()
@@ -330,14 +372,14 @@ class ConfigTab(Tab):
         self.state.selected, self.state.refused = selected, None
 
     def _move(self, by: int, around: bool = False) -> None:
-        last = len(stops()) - 1
+        last = len(self._stops()) - 1
         to = self.state.at + by
         self.state.at = to % (last + 1) if around else max(0, min(last, to))
         self.state.answer = ""
 
     def _enter(self) -> None:
         """Enter or a click on the stop the cursor is on: open the row, or press the button."""
-        state, target = self.state, stops()[self.state.at]
+        state, target = self.state, self._stops()[self.state.at]
         state.answer, state.failed = "", False
         if target == "Close":
             self.host.close()

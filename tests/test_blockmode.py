@@ -95,6 +95,20 @@ def test_ctrl_c_always_reaches_the_ai():
     assert session(script).key == "C-c"
 
 
+@pytest.mark.parametrize("keymap", ["emacs", "nano", "vi"])
+def test_ctrl_z_always_reaches_the_ai_with_the_fields(keymap):
+    """Job control: the AI suspends the program, also one whose form doesn't list the key."""
+    async def script(block, keys):
+        await block.show("", Form((EDITOR,), keys=("C-x",), keymap=keymap))
+        keys("typed \x1a")
+        return await next_action(block)
+
+    action = session(script)
+    assert action.key == "C-z" and action.focus == "text"
+    (state,) = action.fields
+    assert state.text == "typed line one\nline two\n" and state.changed
+
+
 def test_clicks_outside_the_fields_go_to_the_ai():
     async def script(block, keys):
         await block.show("title bar\n", Form((EDITOR,), keys=("C-x",)))
@@ -461,6 +475,363 @@ def test_a_tick_that_isnt_sent_takes_nothing_back():
     assert second.fields[0].text == "two\n" and not second.fields[0].changed   # the AI wrote it
 
 
+# --- a wake from outside: a job's end, for a program that has no fields --------------------
+
+def test_a_wake_ends_the_wait_of_a_program_without_fields():
+    async def script(block, keys):
+        await block.show("player\n", TOP)
+        waiting = asyncio.ensure_future(block.next_action())
+        await asyncio.sleep(0.1)
+        said = block.wake()
+        return said, await asyncio.wait_for(waiting, 5), block.waiting
+
+    said, action, with_the_ai = session(script)
+    assert said is True and (action.key, action.focus, action.fields, action.events) == (
+        "wake", None, (), ())
+    assert with_the_ai                                  # as after any action
+
+
+def test_a_program_with_fields_isnt_woken_and_keeps_what_was_typed():
+    async def script(block, keys):
+        await block.show("  GNU nano 7.2   h.txt\n", Form((EDITOR,), keys=("C-o",), keymap="nano"))
+        waiting = asyncio.ensure_future(block.next_action())
+        keys("typed ")
+        await asyncio.sleep(0.2)
+        said = block.wake()
+        await asyncio.sleep(0.2)
+        still_waiting = not waiting.done()
+        keys("more " + CTRL["O"])
+        return said, still_waiting, await asyncio.wait_for(waiting, 5), block.actions.empty()
+
+    said, still_waiting, action, nothing_else = session(script)
+    assert said is False and still_waiting and nothing_else
+    assert action.key == "C-o" and action.fields[0].text == "typed more line one\nline two\n"
+
+
+def test_a_program_isnt_woken_while_an_action_is_with_the_ai():
+    async def script(block, keys):
+        await block.show("top\n", TOP)
+        keys("j")
+        first = await next_action(block)               # with the AI now
+        said = block.wake()
+        await block.show("top\n", TOP)                 # its answer
+        waiting = asyncio.ensure_future(block.next_action())
+        await asyncio.sleep(0.2)
+        nothing_came = not waiting.done()              # no wake was put behind the answer
+        then = block.wake()                            # the machine looks again, and it works
+        return first.key, said, nothing_came, then, (await asyncio.wait_for(waiting, 5)).key
+
+    assert session(script) == ("keys", False, True, True, "wake")
+
+
+def test_keys_typed_during_the_answer_to_a_wake_go_to_the_next_screen():
+    async def script(block, keys):
+        await block.show("player\n", TOP)
+        block.wake()
+        woken = await next_action(block)
+        keys("jk")                                     # typed while the AI answers the wake
+        await asyncio.sleep(0.3)
+        await block.show("player\n", TOP)
+        return woken.key, (await next_action(block)).events
+
+    assert session(script) == ("wake", ("<text>jk</text>",))
+
+
+def test_a_wake_that_isnt_sent_gives_the_keyboard_back():
+    async def script(block, keys):
+        await block.show("player\n", TOP)
+        block.wake()
+        woken = await next_action(block)
+        keys("j")
+        await asyncio.sleep(0.3)
+        block.keep_form()                              # the machine had nothing to send
+        return woken.key, (await next_action(block)).events
+
+    assert session(script) == ("wake", ("<text>j</text>",))
+
+
+def test_a_wake_and_a_tick_that_fall_together_are_one_action():
+    ticking = Form((), raw=True, tick=0.2)
+
+    async def script(block, keys):
+        await block.show("top\n", ticking)
+        tick = await next_action(block)                # the time is up: a tick, with the AI now,
+        behind_it = block.wake()                       # and a wake right behind it isn't taken
+        await block.show("top\n", ticking)
+        block.wake()                                   # a wake first, and the tick's time passes
+        await asyncio.sleep(0.4)                       # before anybody waits
+        first = await next_action(block)
+        return tick.key, behind_it, first.key, block.actions.empty()
+
+    assert session(script) == ("tick", False, "wake", True)
+
+
+# --- a form that is put aside and put back --------------------------------------------------
+
+NANO_FORM = Form((EDITOR,), keys=("C-o", "C-z"), keymap="nano")
+PLAYER = Form((), raw=True, footer="q quit")
+
+
+def test_a_suspended_editor_comes_back_with_its_text_its_cursor_and_its_focus():
+    async def script(block, keys):
+        await block.show("  GNU nano 7.2   h.txt\n", NANO_FORM)
+        keys("hello \x1b[B")                           # typed, and one line down
+        await asyncio.sleep(0.2)
+        buffer = block.areas["text"].buffer
+        before = block.field_text("text"), buffer.cursor_position, block._focused().id
+        await block.suspend(1)
+        aside = block.active, list(block.suspended)
+        back = await block.resume(1)
+        after = block.field_text("text"), buffer.cursor_position, block._focused().id
+        same_field = block.areas["text"].buffer is buffer
+        keys(CTRL["O"])                                # the AI never saw what was typed
+        return before, aside, back, after, same_field, await next_action(block), block.suspended
+
+    before, aside, back, after, same_field, action, left = session(script)
+    assert before == ("hello line one\nline two\n", 21, "text") == after
+    assert aside == (False, [1]) and back is True and same_field and left == {}
+    (state,) = action.fields
+    assert action.key == "C-o" and state.text == before[0] and state.cursor == (2, 7)
+    assert state.changed and state.modified
+
+
+def test_a_resume_over_a_program_that_is_on_screen_takes_its_place():
+    """Job control: a <resume> without a <suspend> of what is on screen ends that program."""
+    async def script(block, keys):
+        await block.show("  GNU nano 7.2   h.txt\n", NANO_FORM)
+        keys("hello ")
+        await asyncio.sleep(0.2)
+        await block.suspend(1)
+        await block.show("player\n", PLAYER)           # another program, without fields
+        back = await block.resume(1)                   # and the editor over it
+        on_screen = block.form.raw, list(block.areas), block._focused().id, block.composed[0]
+        keys("x" + CTRL["O"])                          # typed into the editor, at its cursor
+        return back, on_screen, await next_action(block), list(block.suspended)
+
+    back, on_screen, action, left = session(script)
+    assert back is True and left == []
+    assert on_screen[:3] == (False, ["text"], "text") and on_screen[3].startswith("  GNU nano 7.2")
+    assert action.key == "C-o" and action.fields[0].text == "hello xline one\nline two\n"
+
+
+def test_the_field_that_had_the_focus_has_it_again():
+    """Not the one the form names, and not the first one: the one the user was in."""
+    save_as = Form((Field("editor", "text", top=2, height=8, text="line one\n"),
+                    Field("line", "name", top=12, left=21, width=30, text="h.txt")),
+                   keys=("C-o",), focus="text")
+
+    async def script(block, keys):
+        await block.show("title\n\n\n\n\n\n\n\n\n\n\nFile Name to Write: \n", save_as)
+        block.app.layout.focus(block.areas["name"])    # as a click into that field does
+        keys("2")
+        await asyncio.sleep(0.2)
+        before = block._focused().id, block.field_text("name")
+        await block.suspend(1)
+        await block.resume(1)
+        after = block._focused().id
+        keys("3\r")                                    # Enter in a line field acts
+        return before, after, await next_action(block)
+
+    before, after, action = session(script)
+    assert before == ("name", "h.txt2") and after == "name"
+    assert (action.key, action.focus) == ("Enter", "name")
+    assert [state.text for state in action.fields] == ["line one\n", "h.txt23"]
+
+
+def test_what_the_ai_has_seen_and_what_was_saved_come_back_too():
+    async def script(block, keys):
+        await block.show("  GNU nano 7.2   h.txt\n", NANO_FORM)
+        keys("x" + CTRL["O"])
+        await next_action(block)                       # the AI sees the text, and saves it
+        block.field_saved("text")
+        await block.show("  GNU nano 7.2   h.txt\n", Form((Field("editor", "text", top=2, height=10),),
+                                                         keys=("C-o", "C-z"), keymap="nano"))
+        await block.suspend(1)
+        await block.resume(1)
+        keys(CTRL["O"])
+        unchanged = (await next_action(block)).fields[0]
+        await block.show("", block.form)
+        keys("y" + CTRL["O"])
+        return unchanged, (await next_action(block)).fields[0]
+
+    unchanged, typed = session(script)
+    assert (unchanged.text, unchanged.changed, unchanged.modified) == (
+        "xline one\nline two\n", False, False)         # the AI saw it, and it is saved
+    assert (typed.text, typed.changed, typed.modified) == ("xyline one\nline two\n", True, True)
+
+
+def test_a_vi_program_comes_back_in_the_mode_it_was_in():
+    """A form that is put back is shown in a new app, and a new app starts in insert mode.
+    Tried on 2026-10-05: normal mode before, insert mode after, and `x` typed an x."""
+    from prompt_toolkit.key_binding.vi_state import InputMode
+    vi = Form((EDITOR,), keys=("C-o",), keymap="vi")
+
+    async def script(block, keys):
+        await block.show("h.txt\n", vi)
+        keys("\x1b")                                   # Esc: normal mode
+        await asyncio.sleep(0.7)                       # it waits, to tell Esc from an arrow
+        before = block.app.vi_state.input_mode
+        await block.suspend(1)
+        await block.resume(1)
+        after = block.app.vi_state.input_mode
+        keys("x")                                      # deletes a character there
+        await asyncio.sleep(0.2)
+        normal = block.field_text("text")
+        keys("ihi \x1b")                               # and a form suspended while inserting
+        await asyncio.sleep(0.7)
+        keys("a")                                      # is in insert mode again
+        await asyncio.sleep(0.2)
+        await block.suspend(2)
+        await block.resume(2)
+        inserting = block.app.vi_state.input_mode
+        keys("Z")
+        await asyncio.sleep(0.2)
+        return before, after, normal, inserting, block.field_text("text")
+
+    before, after, normal, inserting, typed = session(script)
+    assert before == after == InputMode.NAVIGATION and normal == "ine one\nline two\n"
+    assert inserting == InputMode.INSERT and "Z" in typed
+
+
+def test_what_was_typed_before_a_suspend_can_be_undone_after_the_resume():
+    async def script(block, keys):
+        await block.show("  GNU nano 7.2   h.txt\n", NANO_FORM)
+        keys("alpha ")
+        await asyncio.sleep(0.2)
+        keys("beta ")
+        await asyncio.sleep(0.2)
+        typed = block.field_text("text")
+        await block.suspend(1)
+        await block.resume(1)
+        keys("\x1bu" * 6)                              # M-u, nano's undo, a few times
+        await asyncio.sleep(0.4)
+        return typed, block.field_text("text")
+
+    typed, undone = session(script)
+    assert typed == "alpha beta line one\nline two\n"
+    assert "beta" not in undone and len(undone) < len(typed) - 4     # its history came with it
+    assert undone.endswith("line one\nline two\n")
+
+
+def test_a_resumed_program_ticks_again():
+    async def script(block, keys):
+        await block.show("top - 01:02:03\n", Form((), raw=True, tick=0.2))
+        await block.suspend(1)
+        await block.resume(1)
+        started = asyncio.get_running_loop().time()
+        action = await next_action(block)
+        return block.form.tick, action.key, asyncio.get_running_loop().time() - started
+
+    tick, key, waited = session(script)
+    assert tick == 0.2 and key == "tick" and 0.15 < waited < 1.5
+
+
+def test_two_programs_under_two_names_come_back_each_as_itself():
+    async def script(block, keys):
+        await block.show("  GNU nano 7.2   h.txt\n", NANO_FORM)
+        keys("mine ")
+        await asyncio.sleep(0.2)
+        await block.suspend(1)
+        await block.show("player\ncomposing…\n", PLAYER)
+        await block.suspend(2)
+        names = list(block.suspended)
+        await block.resume(1)
+        editor = on_screen(block)[0], block.field_text("text"), block.form.keymap, block.form.raw
+        await block.resume(2)                          # in place of what is on screen
+        player = on_screen(block)[:2], on_screen(block)[-1], block.form.raw, block.areas
+        keys("j")
+        return names, editor, player, (await next_action(block)).events, list(block.suspended)
+
+    names, editor, player, events, left = session(script)
+    assert names == [1, 2] and left == []
+    assert editor == ("  GNU nano 7.2   h.txt", "mine line one\nline two\n", "nano", False)
+    assert player == (["player", "composing…"], "q quit", True, {})
+    assert events == ("<text>j</text>",)               # and it has the keyboard, as itself
+
+
+def test_resuming_a_name_that_isnt_kept_does_nothing():
+    async def script(block, keys):
+        nothing = await block.resume(7), block.active
+        await block.show("player\n", PLAYER)
+        await block.suspend(1)
+        other = await block.resume(2), block.active, list(block.suspended)
+        await block.suspend(1)                         # with nothing on screen: nothing to keep
+        return nothing, other, list(block.suspended)
+
+    assert session(script) == ((False, False), (False, False, [1]), [1])
+
+
+def test_a_forgotten_form_is_gone_and_only_eight_are_kept():
+    async def script(block, keys):
+        for name in range(1, 10):                      # nine: the first one goes
+            await block.show(f"program {name}\n", PLAYER)
+            await block.suspend(name)
+        nine = list(block.suspended)
+        await block.show("program 3 again\n", PLAYER)
+        await block.suspend(3)                         # a name given again is the newest
+        again = list(block.suspended)
+        block.forget(5)
+        block.forget(42)                               # no such name: nothing happens
+        one_gone = list(block.suspended), await block.resume(5), await block.resume(1)
+        await block.resume(3)
+        shown = on_screen(block)[0]
+        block.forget()                                 # and all of them, at the end of a boot
+        return nine, again, one_gone, shown, list(block.suspended)
+
+    nine, again, one_gone, shown, none = session(script)
+    assert nine == [2, 3, 4, 5, 6, 7, 8, 9] and again == [2, 4, 5, 6, 7, 8, 9, 3]
+    assert one_gone == ([2, 4, 6, 7, 8, 9, 3], False, False)
+    assert shown == "program 3 again" and none == []
+
+
+def test_a_form_resumed_on_a_smaller_window_is_fitted_and_keeps_its_footer_at_the_bottom():
+    from prompt_toolkit.data_structures import Size
+    from test_panel import Screen
+
+    async def main():
+        with create_pipe_input() as pipe:
+            block = BlockMode(input=pipe, output=Screen(24, 80))
+            try:
+                await block.show("player\ncomposing…\n\n\n\n\n\n\n\nlast line\n", PLAYER)
+                tall = on_screen(block)
+                await block.suspend(1)
+                block.output.size = Size(12, 60)       # the window shrank meanwhile
+                await block.resume(1)
+                return tall, on_screen(block)
+            finally:
+                await block.end()
+
+    tall, small = asyncio.run(asyncio.wait_for(main(), 10))
+    assert len(tall) == 24 and tall[:2] == ["player", "composing…"] and tall[-1] == "q quit"
+    assert len(small) == 12 and small[:2] == ["player", "composing…"] and small[-1] == "q quit"
+    assert "last line" in small                        # blank rows went, not the text
+
+
+def test_keys_typed_before_a_suspend_wait_for_the_shell_and_after_a_resume_go_to_the_form():
+    from prompt_toolkit.input.typeahead import get_typeahead
+
+    async def main():
+        with create_pipe_input() as pipe:
+            block = BlockMode(input=pipe, output=DummyOutput())
+            try:
+                await block.show("  GNU nano 7.2   h.txt\n", NANO_FORM)
+                pipe.send_text("\x1a")                 # Ctrl-Z: an action, with the AI now
+                await next_action(block)
+                pipe.send_text("ls")                   # typed while the AI answers it
+                await asyncio.sleep(0.3)
+                await block.suspend(1)                 # its answer: put the program aside
+                for_the_shell = [press.data for press in get_typeahead(pipe)]
+                await block.resume(1)
+                pipe.send_text("typed ")
+                await asyncio.sleep(0.3)
+                return for_the_shell, block.field_text("text")
+            finally:
+                await block.end()
+
+    for_the_shell, text = asyncio.run(asyncio.wait_for(main(), 10))
+    assert for_the_shell == ["l", "s"] and text == "typed line one\nline two\n"
+
+
 # --- hallux's own panel as a layer over a full-screen program ------------------------------
 
 CTRL_F12, ESC, DOWN, CTRL_SHIFT_DEL = "\x1b[24;5~", "\x1b", "\x1b[B", "\x1b[3;6~"
@@ -628,6 +999,52 @@ def test_a_tick_waits_for_the_panel_and_the_clock_starts_again():
 
     no_tick, key, waited = with_panel(script)
     assert no_tick and key == "tick" and 0.25 < waited < 1.0
+
+
+def test_a_wake_waits_for_the_panel_to_close():
+    async def script(block, keys, panel, settings):
+        await block.show("player\n", Form((), raw=True))
+        waiting = asyncio.ensure_future(block.next_action())
+        await asyncio.sleep(0.1)
+        keys(CTRL_F12)
+        await asyncio.sleep(0.3)
+        said = block.wake()                            # yes: it will come
+        await asyncio.sleep(0.3)
+        held_back = not waiting.done()
+        keys(CTRL_F12)                                 # the panel closes
+        action = await asyncio.wait_for(waiting, 5)
+        return said, held_back, action.key, block.actions.empty()
+
+    assert with_panel(script) == (True, True, "wake", True)
+
+
+def test_a_wake_that_waited_for_the_panel_goes_with_the_program():
+    async def script(block, keys, panel, settings):
+        await block.show("player\n", Form((), raw=True))
+        keys(CTRL_F12)
+        await asyncio.sleep(0.3)
+        said = block.wake()
+        await block.end()                              # the program ends under the panel
+        return said, block.actions.empty(), block.wake_asked
+
+    assert with_panel(script) == (True, True, False)
+
+
+def test_the_panel_opens_over_a_resumed_program_as_over_any_other():
+    async def script(block, keys, panel, settings):
+        await block.show("player\ncomposing…\n", Form((), raw=True))
+        await block.suspend(1)
+        await block.resume(1)
+        keys(CTRL_F12)
+        await asyncio.sleep(0.3)
+        over = block.layered, on_screen(block)[0]
+        keys(ESC)
+        await asyncio.sleep(0.3)
+        return over, block.layered, on_screen(block)[:2]
+
+    over, still, under = with_panel(script)
+    assert over[0] is True and over[1].endswith("[ Config ]")
+    assert still is False and under == ["player", "composing…"]
 
 
 def test_set_tick_starts_a_wait_that_had_no_tick():

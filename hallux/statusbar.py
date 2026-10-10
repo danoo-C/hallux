@@ -1,13 +1,19 @@
 """The status bar: the bottom row of the terminal, hallux's own front panel.
 
 It shows an activity light (gray when idle, a green-yellow spinner while the AI works),
-what the AI is doing, the model, the effort, what the session has cost and how long the
-last answer took. When nothing happens it names hallux's own keys: the hard exit, and the
-one that opens the panel (hallux.panel). The AI is told the screen is one row shorter and
-never draws here.
+what the AI is doing, the model, the effort, what everything has cost and how long the last
+answer took. While an addon agent's job runs it says which, for how long and with how many
+tokens: a job spends money while nobody looks at it. When nothing happens it names hallux's
+own keys: the hard exit, and the one that opens the panel (hallux.panel). The AI is told the
+screen is one row shorter and never draws here.
+
+The cost is written ~$1.42: it is what the tokens would cost at the API's list prices, and
+with a subscription nobody is billed that amount.
 
 In the scrolling shell the bar is pinned with a scroll region (rows 1..rows-1 scroll,
-the last row stays); in block mode it's a row of the full-screen layout.
+the last row stays); in block mode it's a row of the full-screen layout. While a full-screen
+program or the panel has the alternate screen, the shell's screen behind it has no region
+and no bar: the terminal moves the rows of a waiting screen when the window is resized.
 """
 from __future__ import annotations
 
@@ -30,7 +36,8 @@ VERBS = {"list_dir": "listing", "stat": "checking", "read_file": "reading", "fin
          "write_file": "writing", "edit_file": "editing", "make_dir": "creating",
          "chdir": "entering", "remove": "removing", "move": "moving", "copy": "copying",
          "save_field": "saving", "list_addons": "listing the addons",
-         "addon_help": "reading the manual of", "addon_listen": "listening to"}
+         "addon_help": "reading the manual of", "addon_listen": "listening to",
+         "list_processes": "listing the processes", "kill_process": "killing"}
 
 
 def describe(tool: str, args: dict) -> str:
@@ -42,7 +49,8 @@ def describe(tool: str, args: dict) -> str:
         return "remembering…"
     if tool == "addon_listen" and args.get("on") is False:
         return f"no longer listening to {args.get('name', '')}".strip()
-    target = str(args.get("path") or args.get("src") or args.get("name") or "")
+    target = str(args.get("path") or args.get("src") or args.get("name") or args.get("pid")
+                 or "")                          # a kill has a pid: "killing 30001"
     return f"{VERBS.get(tool, tool.replace('_', ' '))} {target}".strip()
 
 
@@ -51,6 +59,15 @@ def short_model(model: str) -> str:
     name = re.sub(r"-\d{8}$", "", model.removeprefix("claude-"))
     family, _, version = name.partition("-")
     return f"{family} {version.replace('-', '.')}".strip()
+
+
+@dataclass(frozen=True)
+class Running:
+    """A job of an addon's agent that runs, as the bar shows it."""
+    addon: str
+    status: str                       # its status line
+    began: float                      # when it started, on time.monotonic()'s clock
+    tokens: int = 0
 
 
 @dataclass
@@ -63,7 +80,9 @@ class Status:
     error: str | None = None
     note: str | None = None           # shown instead of the idle hint (e.g. ticks paused)
     listening: str = ""               # the addons whose events the AI hears: "window, bell"
-    cost: float = 0.0                 # dollars since hallux started
+    jobs: tuple[Running, ...] = ()    # the jobs that run now, oldest first
+    cost: float = 0.0                 # dollars since hallux started: the main session's,
+    jobs_cost: float = 0.0            # and what the jobs that have ended cost. Two sums
     seconds: float | None = None      # how long the last answer took
     started: float = field(default=0.0)
 
@@ -92,16 +111,23 @@ class StatusBar:
                 text += f" ({s.tools})"
         elif s.note:
             light, light_color, text, text_color = "•", GRAY, s.note, YELLOW_NOTE
+        elif s.jobs:                                     # before listening: it says more
+            light, light_color, text, text_color = "•", GRAY, None, GRAY
         elif s.listening:
             light, light_color, text, text_color = "•", GRAY, f"listening: {s.listening}", GRAY
         else:
             light, light_color, text, text_color = "•", GRAY, None, DIM
         info = " · ".join(part for part in (
             short_model(s.model), s.effort or "",
-            f"${s.cost:.2f}",
+            spent(s.cost + s.jobs_cost),
             f"{now - s.started:.1f}s" if s.busy else (f"{s.seconds:.1f}s" if s.seconds else ""),
         ) if part)
         room = max(0, width - len(info) - 5)             # " x " + text + "  " + info + " "
+        if s.busy and s.jobs and not s.error:            # its own activity, then "· 1 job"
+            also = f" · {len(s.jobs)} job{'s' * (len(s.jobs) > 1)}"
+            text = fit(text, max(0, room - len(also))) + also
+        elif text is None and s.jobs:
+            text = job_line(s.jobs, now, room)
         text = fit(idle_hint(room) if text is None else text, room)
         gap = max(1, width - 3 - len(text) - len(info) - 1)
         pieces = [(GRAY, " "), (light_color, light), (GRAY, " "), (text_color, text),
@@ -118,6 +144,39 @@ class StatusBar:
         out = [f"\x1b[0m\x1b[48;2;{bg}m\x1b[2K"]         # erase the row in the bar's color
         out += [f"\x1b[38;2;{_rgb(color)}m{text}" for color, text in self.segments(width)]
         return "".join(out) + "\x1b[0m"
+
+
+def clock(seconds: float) -> str:
+    """0:48, and past an hour the minutes run on: 62:05."""
+    seconds = max(0, int(seconds))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def tokens(count: int) -> str:
+    """900, 21k, 1.2M: tokens, as short as hallux writes them."""
+    return (f"{count / 1_000_000:.1f}M" if count >= 1_000_000
+            else f"{count // 1000}k" if count >= 1000 else str(count))
+
+
+def spent(amount: float) -> str:
+    """~$0.12: what was spent. It is what the tokens would cost at the API's list prices,
+    which nobody with a subscription is billed. A limit that the user typed is an exact
+    number and has no ~."""
+    return f"~${amount:.2f}"
+
+
+def job_line(jobs: tuple[Running, ...], now: float, room: int) -> str:
+    """What the idle bar says of the jobs that run. One job: its addon, its status line, its
+    time and its tokens. When that is too long the status is cut: the time and the tokens are
+    what moves, and cutting from the end would take them first. More jobs: how many, and
+    whose."""
+    if len(jobs) > 1:
+        return f"{len(jobs)} jobs: {', '.join(job.addon for job in jobs)}"
+    job = jobs[0]
+    head, tail = f"{job.addon}: ", f" · {clock(now - job.began)} · {tokens(job.tokens)} tok"
+    left = room - len(head) - len(tail)
+    status = job.status if len(job.status) <= left else job.status[:max(0, left - 1)] + "…"
+    return head + status + tail
 
 
 def idle_hint(room: int) -> str:
@@ -178,6 +237,18 @@ def install(rows: int) -> str:
 def draw(bar: StatusBar, rows: int, cols: int) -> str:
     """Re-pin the region and redraw the bar, leaving the cursor where it was."""
     return f"\x1b7\x1b[1;{rows - 1}r\x1b[{rows};1H{bar.ansi(cols - 1)}\x1b8"
+
+
+def reinstall(bar: StatusBar, rows: int, cols: int) -> str:
+    """Pin the region and draw the bar when the cursor may stand on the bottom row: back from
+    the alternate screen, after the window got shorter there. Text written on that row would
+    go over the bar, and wouldn't scroll.
+
+    One line down first (an index, which keeps the column): that scrolls the screen if the
+    cursor is on the bottom row, as install's newline does, and moves the cursor anywhere
+    else. Then the region and the bar, and the cursor a row up again, inside the region.
+    """
+    return f"\x1bD{draw(bar, rows, cols)}\x1b[1A"
 
 
 def uninstall(rows: int) -> str:

@@ -158,7 +158,11 @@ def test_stop_may_take_arguments_if_it_works_without_them(folder):
     ("blankdoc.py", fake(functions=func("ping() -> dict", doc="  ")), "ping has no docstring"),
     ("bare.py", fake(functions=func("ping(times) -> dict")), r"ping\(times\) has no type hint"),
     ("notes.py", fake(functions=func("ping(notes: list) -> dict")),
-     r"ping\(notes\): the type hint must be str, int, float or bool"),
+     r"ping\(notes\): the type hint must be str, int, float, bool or list\[str\]"),
+    ("numbers.py", fake(functions=func("ping(notes: list[int]) -> dict")),
+     r"ping\(notes\): the type hint must be str, int, float, bool or list\[str\]"),
+    ("nested.py", fake(functions=func("ping(notes: list[list[str]]) -> dict")),
+     r"ping\(notes\): the type hint must be"),
     ("maybe.py", fake(functions=func("ping(name: str | None = None) -> dict")),
      r"ping\(name\): the type hint must be"),
     ("star.py", fake(functions=func("ping(*names: str) -> dict")),
@@ -542,14 +546,14 @@ def test_list_addons_and_addon_help(attached, tmp_path):
 def test_without_addons_the_tools_are_todays(tmp_path):
     names = [t.name for t in tools.build_tools(Disk(tmp_path))]
     assert names == [t.name for t in tools.build_tools(Disk(tmp_path), addons=[])]
-    assert len(names) == 13 and not [n for n in names if "addon" in n]
+    assert len(names) == 14 and not [n for n in names if "addon" in n]
     assert tools.build_addon_servers([]) == ({}, [])
 
 
 def test_a_machine_gets_its_addons_tools(attached, tmp_path):
     bare = Machine(tmp_path, Hardware(), FakeTerminal()).options()
     assert list(bare.mcp_servers) == ["hallux"]
-    assert len(bare.allowed_tools) == 14          # the disk tools and save_field, as before
+    assert len(bare.allowed_tools) == 15          # the disk tools, save_field, list_processes
     assert all(name.startswith("mcp__hallux__") for name in bare.allowed_tools)
 
     options = Machine(tmp_path, Hardware(), FakeTerminal(), addons=attached).options()
@@ -686,7 +690,7 @@ def started(folder, world, monkeypatch, capsys):
 
     async def run_script(root, hardware, lines, echo, addons=(), events=None):
         given.update(root=root, lines=lines, addons=addons, events=events)
-        return []
+        return [], script.JobsRun()                     # the records, and the jobs' numbers
 
     def start():
         (world.parent / "cmds.txt").write_text("ls\n")
@@ -896,12 +900,13 @@ def test_a_function_that_takes_the_disk_fails_loudly_without_one(folder, caplog)
 def test_a_machine_hands_its_own_disk_to_its_addons(lines, folder, world, monkeypatch):
     given = []
     monkeypatch.setattr("hallux.machine.build_addon_servers",
-                        lambda loaded, disk=None: given.append(disk) or
-                        tools.build_addon_servers(loaded, disk))
+                        lambda loaded, disk=None, spawn=None: given.append((disk, spawn)) or
+                        tools.build_addon_servers(loaded, disk, spawn))
     loaded, _ = addons.load(folder)
     machine = Machine(world, Hardware(), FakeTerminal(), addons=loaded)
     assert machine.options().allowed_tools[-2:] == ["mcp__lines__count_lines", "mcp__lines__save"]
-    assert given == [machine.disk]
+    assert given == [(machine.disk, machine.jobs.spawn)]    # and what starts a job, for those
+                                                            # of them that have an agent
 
 
 # ---------------------------------------------------------------- stop() hooks
@@ -1513,3 +1518,359 @@ def test_what_the_hub_drops_is_noted_on_the_bar(wired, tmp_path, capsys):
     printed = capsys.readouterr().err
     assert "hallux: addon bell: event dropped: it is a list, not a dictionary\n" in printed
     assert "hallux: addon door: event dropped: more than 10 are waiting\n" in printed
+
+
+# ---------------------------------------------------------------- an addon's agent
+
+def agented(agent='return {"name": "composer", "prompt": "You compose one song.", '
+                  '"tools": [check], "effort": "high", "status": "composing…"}',
+            compose="compose(spawn, request: str, folder: str, edit: list[str] = []) -> dict",
+            body='return {"pid": spawn(request, folder, edit)}',
+            check="check(disk, path: str) -> dict", exposed="EXPOSED = [compose, check]",
+            top=""):
+    """The source of a fake addon with an agent that passes every check, any part replaced."""
+    whole = not agent or agent.startswith(("def ", "agent ="))    # not just agent()'s body
+    declared = agent if whole else f"def agent() -> dict:\n    {agent}"
+    return fake(top="\n\n\n".join(part for part in (top, declared) if part),
+                functions=func(compose, body, doc="Have the composer write a song.") + "\n\n\n"
+                          + func(check, 'return {"ok": True}', doc="Render a score without sound."),
+                exposed=exposed)
+
+
+@pytest.fixture
+def composer(folder):
+    """The fake addon with an agent, loaded."""
+    (folder / "music.py").write_text(agented())
+    [addon], skipped = addons.load(folder)
+    assert skipped == {}
+    return addon
+
+
+class Spawn:
+    """What stands in for hallux's spawn: it notes its calls and hands out pids, or refuses."""
+
+    def __init__(self, refuse=None):
+        self.calls, self.refuse = [], refuse
+
+    def __call__(self, *args):
+        if self.refuse:
+            raise self.refuse
+        self.calls.append(args)
+        return 30000 + len(self.calls)
+
+
+def invoke_with(spawn, function, disk=None, **args):
+    """invoke(), for a function that starts a job."""
+    jsonschema.validate(args, addons.schema_for(function))
+    result = asyncio.run(addons.call(function, args, disk, spawn))
+    return json.loads(result["content"][0]["text"]), result["is_error"]
+
+
+def test_a_good_declaration_loads_and_the_addon_holds_it(composer):
+    agent = composer.agent
+    assert (agent.name, agent.prompt, agent.effort, agent.status) == (
+        "composer", "You compose one song.", "high", "composing…")
+    assert list(agent.tools) == ["check"] and agent.tools["check"] is composer.functions["check"]
+    assert list(composer.functions) == ["compose", "check"]      # EXPOSED is a list of its own
+
+
+def test_effort_and_status_can_be_left_out_and_the_tools_can_be_empty(folder):
+    (folder / "music.py").write_text(agented(
+        agent='return {"name": "composer", "prompt": "You compose.", "tools": ()}'))
+    [addon], skipped = addons.load(folder)
+    assert skipped == {} and addon.agent == addons.Agent("composer", "You compose.", {})
+    assert (addon.agent.effort, addon.agent.status) == (None, None)
+
+
+def test_a_tool_of_the_agent_neednt_be_exposed(folder):
+    (folder / "music.py").write_text(agented(exposed="EXPOSED = [compose]"))
+    [addon], _ = addons.load(folder)
+    assert list(addon.functions) == ["compose"] and list(addon.agent.tools) == ["check"]
+
+
+def test_an_addon_without_agent_has_none(attached):
+    assert [addon.agent for addon in attached] == [None, None]
+
+
+SAYS = 'return {"name": "composer", "prompt": "You compose.", "tools": [check]'
+
+
+@pytest.mark.parametrize("source, reason", [
+    # agent() itself
+    (agented(agent='raise RuntimeError("no composer today")'), "RuntimeError: no composer today"),
+    (agented(agent='return ["composer"]'), r"agent\(\) returned a list, not a dictionary"),
+    (agented(agent="pass"), r"agent\(\) returned a NoneType, not a dictionary"),
+    (agented(agent='agent = {"name": "composer"}'),
+     r"agent\(\) must be a function that works without arguments"),
+    (agented(agent="def agent(world) -> dict:\n    return {}"),
+     r"agent\(\) must be a function that works without arguments"),
+    # its keys
+    (agented(agent=SAYS + ', "model": "claude-opus-5-5"}'),
+     r"agent\(\) has a key it can't have: model \(it takes name, prompt, tools, effort, status\)"),
+    (agented(agent='return {"prompt": "You compose.", "tools": []}'), r"agent\(\) has no name"),
+    (agented(agent='return {"name": "composer", "tools": []}'), r"agent\(\) has no prompt"),
+    (agented(agent='return {"name": "composer", "prompt": "You compose."}'),
+     r"agent\(\) has no tools"),
+    # each value
+    (agented(agent=SAYS.replace('"composer"', '"The Composer"') + "}"),
+     r"agent\(\)'s name must be lowercase letters and digits"),
+    (agented(agent=SAYS.replace('"composer"', "7") + "}"), r"agent\(\)'s name must be"),
+    (agented(agent=SAYS.replace('"You compose."', '"  "') + "}"),
+     r"agent\(\)'s prompt must be text, and not empty"),
+    (agented(agent=SAYS.replace('"You compose."', "None") + "}"), r"agent\(\)'s prompt must be"),
+    (agented(agent=SAYS.replace("[check]", "check") + "}"),
+     r"agent\(\)'s tools must be a list of functions"),
+    (agented(agent=SAYS.replace("[check]", '["check"]') + "}"),
+     r"agent\(\)'s tools holds a str, not a function"),
+    (agented(agent=SAYS.replace("[check]", "[check, check]") + "}"),
+     r"agent\(\)'s tools holds two functions called check"),
+    (agented(agent=SAYS.replace("[check]", "[check, print]") + "}"),
+     r"agent\(\)'s tools holds a builtin_function_or_method"),
+    (agented(agent=SAYS + "}", check="check(disk, path) -> dict"),
+     r"check\(path\) has no type hint"),                      # checked like an exposed function
+    (agented(agent=SAYS + ', "effort": "turbo"}'),
+     r"agent\(\)'s effort must be one of low, medium, high, xhigh, max, not 'turbo'"),
+    (agented(agent=SAYS + ', "status": "two\\nlines"}'),
+     r"agent\(\)'s status must be one line of at most 80 characters"),
+    (agented(agent=SAYS + ', "status": "x" * 81}'), r"agent\(\)'s status must be one line"),
+    (agented(agent=SAYS + ', "status": ""}'), r"agent\(\)'s status must be one line"),
+    (agented(agent=SAYS + ', "status": 5}'), r"agent\(\)'s status must be one line"),
+    # a job can't start a job
+    (agented(agent=SAYS.replace("[check]", "[check, compose]") + "}"),
+     r"compose is a tool of the agent and takes spawn: a job can't start a job"),
+    # an agent and what starts its job come together
+    (agented(compose="compose(request: str) -> dict", body="return {}"),
+     r"agent\(\) without an exposed function that takes spawn: nothing could start its job"),
+    (agented(exposed="EXPOSED = [check]"), r"agent\(\) without an exposed function that takes"),
+    (agented(agent=""), r"compose takes spawn, and the addon has no agent\(\) whose job it"),
+    # where spawn stands
+    (agented(compose="compose(request: str, spawn) -> dict", body="return {}"),
+     r"compose\(spawn\): spawn must be the first parameter, or the second after disk"),
+    (agented(compose="compose(disk, request: str, spawn) -> dict", body="return {}"),
+     r"compose\(spawn\): spawn must be the first parameter, or the second after disk"),
+    (agented(compose="compose(spawn, disk, request: str) -> dict", body="return {}"),
+     r"compose\(disk\): disk must be the first parameter"),
+    (agented(compose="compose(spawn, /, request: str) -> dict", body="return {}"),
+     r"compose\(spawn\): only named parameters"),
+])
+def test_a_bad_declaration_skips_the_addon_with_its_reason(folder, source, reason):
+    (folder / "music.py").write_text(source)
+    loaded, skipped = addons.load(folder)
+    assert loaded == [] and list(skipped) == ["music"]
+    assert re.search(reason, skipped["music"]), skipped["music"]
+
+
+def test_a_status_line_of_eighty_characters_is_fine(folder):
+    (folder / "music.py").write_text(agented(agent=SAYS + ', "status": "x" * 80}'))
+    [addon], skipped = addons.load(folder)
+    assert skipped == {} and len(addon.agent.status) == 80
+
+
+def test_an_addon_with_a_bad_agent_is_never_connected(folder):
+    """connect() stays the last check: only an addon that loads may report."""
+    (folder / "music.py").write_text(agented(
+        agent=SAYS + ', "effort": "turbo"}',
+        top="from pathlib import Path\n\n\n"
+            + func("connect(emit)", "Path(__file__).with_suffix('.connected').touch()", doc="")))
+    assert list(addons.load(folder)[1]) == ["music"]
+    assert not (folder / "music.connected").exists()
+
+
+def test_an_addon_with_an_agent_can_be_listened_to_without_connect(composer, folder, tmp_path):
+    (folder / "plain.py").write_text(fake())
+    hub = addons.Events()
+    assert composer.has_events                                   # the end of its jobs is an event
+    loaded, _ = addons.load(folder, events=hub)
+    hallux_tools = tools.build_tools(Disk(tmp_path), addons=loaded, events=hub)
+    assert [t.name for t in hallux_tools][-1] == "addon_listen"
+    assert call_tool(hallux_tools, "addon_listen", name="music") == ({"listening": ["music"]}, False)
+    assert call_tool(hallux_tools, "addon_listen", name="plain")[1] is True
+
+
+def test_an_addon_with_an_agent_gets_a_spawn_that_is_tied_to_it(folder, monkeypatch):
+    """What hallux hands in is Jobs.spawn, which takes the addon first. An addon function
+    calls spawn(brief, folder, edit), and the job is one of its own addon's agent."""
+    (folder / "music.py").write_text(agented())
+    (folder / "plain.py").write_text(fake())
+    [music, plain], _ = addons.load(folder)
+    given, calls, build = {}, [], tools.build_addon_tools
+
+    def kept(addon, disk=None, spawn=None):
+        given[addon.name] = spawn
+        return build(addon, disk, spawn)
+
+    def jobs_spawn(*args):
+        calls.append(args)
+        return 30001
+
+    monkeypatch.setattr(tools, "build_addon_tools", kept)
+    tools.build_addon_servers([music, plain], None, jobs_spawn)
+    assert given["plain"] is None                           # no agent: nothing to start
+    compose = {tool.name: tool for tool in build(music, None, given["music"])}["compose"]
+    answer = asyncio.run(compose.handler({"request": "a song", "folder": "/home/user/Music"}))
+    assert json.loads(answer["content"][0]["text"]) == {"pid": 30001}
+    assert calls == [(music, "a song", "/home/user/Music", [])]
+    tools.build_addon_servers([music, plain])               # without a spawn: nobody gets one
+    assert given == {"music": None, "plain": None}
+
+
+def test_the_ai_never_sees_spawn_and_cant_pass_one(composer):
+    compose = tools.build_addon_tools(composer, spawn=Spawn())[0]
+    assert compose.name == "compose" and compose.input_schema == {
+        "type": "object",
+        "properties": {"request": {"type": "string"}, "folder": {"type": "string"},
+                       "edit": {"type": "array", "items": {"type": "string"}}},
+        "required": ["request", "folder"], "additionalProperties": False}
+    with pytest.raises(jsonschema.ValidationError):
+        call_tool([compose], "compose", spawn="mine", request="a song", folder="/home/user/Music")
+    # Even past the schema, what the AI passes as spawn never replaces hallux's.
+    result = asyncio.run(compose.handler({"spawn": "mine", "request": "x", "folder": "/"}))
+    assert result["is_error"] and "multiple values for keyword argument 'spawn'" in (
+        result["content"][0]["text"])
+    assert [addons.takes_spawn(function) for function in composer.functions.values()] == [
+        True, False]
+
+
+def test_done_when_a_call_through_the_tool_reaches_spawn(composer, world):
+    """A fake addon with agent() and compose(spawn, request, folder, edit) loads, and a call
+    through its tool reaches a stand-in spawn with the request, the folder and the list."""
+    spawn = Spawn()
+    music = tools.build_addon_tools(composer, Disk(world), spawn)
+    assert call_tool(music, "compose", request="dark techno with a cello",
+                     folder="/home/user/Music", edit=["/home/user/Music/neon.score"]) == (
+        {"pid": 30001}, False)
+    assert call_tool(music, "compose", request="a second one", folder="Music") == (
+        {"pid": 30002}, False)                                   # edit is optional
+    assert spawn.calls == [("dark techno with a cello", "/home/user/Music",
+                            ["/home/user/Music/neon.score"]),    # the list, as a list
+                           ("a second one", "Music", [])]
+
+
+def test_a_function_with_disk_and_spawn_gets_both(world):
+    def remix(disk, spawn, path: str) -> dict:
+        """Have a score changed."""
+        return {"pid": spawn(disk.read_text(path), "/tmp", [path])}
+
+    (world / "a.score").parent.mkdir(parents=True, exist_ok=True)
+    (world / "a.score").write_text("BPM = 120\n")
+    spawn = Spawn()
+    assert addons.schema_for(remix)["properties"] == {"path": {"type": "string"}}
+    assert invoke_with(spawn, remix, Disk(world), path="/a.score") == ({"pid": 30001}, False)
+    assert spawn.calls == [("BPM = 120\n", "/tmp", ["/a.score"])]
+
+
+def test_a_refusal_reaches_the_ai_as_a_failed_fork_reads(composer, caplog):
+    compose = composer.functions["compose"]
+    assert invoke_with(Spawn(addons.Refused("EAGAIN")), compose, request="a song", folder="/") == (
+        {"error": "EAGAIN"}, True)
+    refusal = addons.Refused("ENOENT", "/home/user/Music/a.score")
+    assert invoke_with(Spawn(refusal), compose, request="a song", folder="/") == (
+        {"error": "ENOENT", "path": "/home/user/Music/a.score"}, True)
+    assert caplog.text == ""                                     # no fault of the addon's
+    assert str(refusal) == "ENOENT: /home/user/Music/a.score" and str(addons.Refused("EAGAIN")) == "EAGAIN"
+
+
+def test_an_addon_can_catch_a_refusal_like_any_error():
+    def queue(spawn, request: str) -> dict:
+        """Start a job, or say that it has to wait."""
+        try:
+            return {"pid": spawn(request, "/tmp", [])}
+        except Exception as problem:
+            return {"queued": str(problem)}
+
+    assert invoke_with(Spawn(addons.Refused("EAGAIN")), queue, request="a song") == (
+        {"queued": "EAGAIN"}, False)
+
+
+def test_a_spawn_that_is_kept_is_dead_after_its_call():
+    kept, spawn = [], Spawn()
+
+    def keeps(spawn, request: str) -> dict:
+        """Start a job, and keep what started it."""
+        kept.append(spawn)
+        return {"pid": spawn(request, "/tmp", [])}
+
+    assert invoke_with(spawn, keeps, request="one") == ({"pid": 30001}, False)
+    with pytest.raises(addons.Refused) as dead:
+        kept[0]("a job behind everyone's back", "/tmp", [])
+    assert dead.value.code == "ESTALE" and spawn.calls == [("one", "/tmp", [])]
+    assert invoke_with(spawn, keeps, request="two") == ({"pid": 30002}, False)   # a new call works
+
+
+def test_a_function_that_runs_on_after_its_timeout_cant_start_a_job(monkeypatch):
+    monkeypatch.setattr(addons, "TIMEOUT", 0.05)
+    release, spawn, late = threading.Event(), Spawn(), []
+
+    def dawdles(spawn, request: str) -> dict:
+        """Start a job, much too late."""
+        release.wait(5)
+        try:
+            return {"pid": spawn(request, "/tmp", [])}
+        except Exception as problem:
+            late.append(problem)
+            raise
+
+    assert invoke_with(spawn, dawdles, request="a song") == ({"error": "timed out"}, True)
+    release.set()                                                # hallux stopped waiting long ago
+    for thread in threading.enumerate():
+        if thread.name == "addon test_addons.dawdles":
+            thread.join(5)
+    assert [type(problem) for problem in late] == [addons.Refused] and late[0].code == "ESTALE"
+    assert spawn.calls == []                                     # no job was started
+
+
+def test_a_function_that_starts_a_job_fails_loudly_without_a_spawn(composer, caplog):
+    music = tools.build_addon_tools(composer)                    # as every machine before step 10
+    assert call_tool(music, "compose", request="a song", folder="/") == (
+        {"error": "compose starts a job, and this call can't start one"}, True)
+    assert "addon call music.compose got no spawn" in caplog.text
+
+
+def test_a_list_of_strings_is_an_argument():
+    def compose(request: str, edit: list[str] = []) -> dict:
+        """Take a list."""
+        return {"got": edit, "is_a_list": isinstance(edit, list)}
+
+    def needs(files: list[str]) -> dict: ...
+
+    schema = addons.schema_for(compose)
+    assert schema["properties"]["edit"] == {"type": "array", "items": {"type": "string"}}
+    assert schema["required"] == ["request"]                     # optional, with its default
+    assert addons.schema_for(needs)["required"] == ["files"]
+    jsonschema.Draft202012Validator.check_schema(schema)
+    assert invoke(compose, request="x", edit=["a.score", "b.score"]) == (
+        {"got": ["a.score", "b.score"], "is_a_list": True}, False)
+    assert invoke(compose, request="x") == ({"got": [], "is_a_list": True}, False)
+    for wrong in ("a.score", [1, 2], [["a.score"]], None):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"request": "x", "edit": wrong}, schema)
+    addons.schema_for(compose)["properties"]["edit"]["items"]["type"] = "changed by someone"
+    assert addons.schema_for(needs)["properties"]["files"]["items"] == {"type": "string"}
+
+
+def test_a_list_hint_written_as_text_is_read(folder):
+    (folder / "late.py").write_text(fake(
+        top="from __future__ import annotations",
+        functions=func("tag(names: list[str], loud: bool = False) -> dict"),
+        exposed="EXPOSED = [tag]"))
+    [late], skipped = addons.load(folder)
+    assert skipped == {} and addons.schema_for(late.functions["tag"])["properties"]["names"] == {
+        "type": "array", "items": {"type": "string"}}
+
+
+def test_the_effort_names_are_the_loaders_and_the_configs():
+    assert config.EFFORTS is addons.EFFORTS == ("low", "medium", "high", "xhigh", "max")
+
+
+def test_every_addon_that_exists_loads_and_music_has_its_composer():
+    """The real addons folder: nothing is skipped for a reason other than a library that
+    isn't installed, and one addon has an agent."""
+    loaded, skipped = addons.load(app.ADDONS_FOLDER)
+    for name in [n for n in sys.modules if n.startswith(addons.MODULE_PREFIX)]:
+        sys.modules[name].stop() if hasattr(sys.modules[name], "stop") else None
+        del sys.modules[name]
+    assert all(reason.startswith("No module named") for reason in skipped.values()), skipped
+    assert {addon.name for addon in loaded} | set(skipped) == {"music", "window"}
+    agents = {addon.name: addon.agent.name for addon in loaded if addon.agent is not None}
+    assert agents == ({"music": "composer"} if "music" not in skipped else {})
+

@@ -77,3 +77,63 @@ In `tests/test_addon_music.py`:
 
 `check` of the design's drum beat returns `{"ok": true, "seconds": 8.0, "peak": 98}` on a
 computer with the sound server switched off.
+
+## As built
+
+Built on 2026-10-05, on the branch `addon-agents`. 19 new tests, 1099 in all. Three old
+tests changed, all in this step's files: the two that list the addon's functions, and the
+manual's limit. Decided while building:
+
+- **The second way to start the child is one word:** `python -m music_engine check`.
+- **The score comes in as one message,** `{"text": "..."}`, like every message to the child
+  that plays. JSON is plain ASCII on the pipe, so no encoding can garble a score. The answer
+  is one line without an `id`: there is one question.
+- **A check child always ends well, with one line.** A score with mistakes is an answer. So
+  is a bug in the render: `addon bug: …`, with the traceback on its error output, as from
+  the child that plays. So is an input that is no message: `addon bug: check takes a text`.
+- **For the addon, a child that ends badly has no answer,** whatever it printed first:
+  `the check stopped: it crashed (…)`. One that ends well without an answer:
+  `the check stopped`.
+- **`CHECK_SECONDS`** is a number of its own, 8.0, beside `RENDER_SECONDS`. After it the
+  child is ended, and the words are `play`'s.
+- **Colours off is three things** in a child's environment: `FORCE_COLOR` is taken out, and
+  `NO_COLOR=1` and `PYTHON_COLORS=0` are set. Both children are started that way.
+- **The test of the colours is with the addon's tests,** not with the child's as this file
+  has it above. The message is made by the addon, and the addon is what starts a child with
+  colours off. With `FORCE_COLOR` set in the shell, one test fails now where two did: the
+  window addon's.
+- **`play` and `check` read the file through one function,** so the limit of 64 KB and its
+  words are the same.
+- **The manual's line** is two lines, 145 characters. The manual is 8132 characters, and
+  368 are left under the new limit for step 13.
+
+**`check` takes `loop`, as `play` does:** `check(path, loop)`. This file has it above as
+`check(disk, path)`. For most songs it makes no difference. A loop whose tails ring past
+its end is rendered with those tails mixed into its later rounds, and `play` then reports
+one round's length and a higher peak. Tried: a note of 0.1 seconds with a ringing tail
+gives `0.2 s, peak 78` once, and `0.1 s, peak 148, turned down to 67` as a loop. Without
+`loop`, a composer that checks a song meant to loop would see the wrong peak. It was added
+on 2026-10-05, after the step was built and committed: I recommended it, and the user
+answered "okay". Two more tests hold it, 1101 in all.
+
+**Measured on 2026-10-05,** on this computer, ten runs each, from the start of the child to
+its answer:
+
+| | Median | Slowest |
+|---|---|---|
+| Python alone | 0.02 s | 0.04 s |
+| Python and numpy | 0.14 s | 0.17 s |
+| A check of the smallest song | 0.15 s | 0.16 s |
+| A check of the design's drum beat, 8 seconds of sound | 0.17 s | 0.21 s |
+
+One run of the heaviest song in the child's tests, 64 voices for 30 seconds: 1.47 s.
+
+So the start costs about 0.15 of the 8 seconds, nearly all of it numpy, and less than the
+0.25 the music plan measured. That answers the design's "How long a check child takes to
+start".
+
+**The "Done when" holds:** with SDL pointed at a sound driver that doesn't exist, `check`
+of the drum beat returns `{"ok": true, "seconds": 8.0, "peak": 98}`, and `play` fails there.
+
+**Not tried:** the main agent using `check`. It has the tool and the manual's line from
+this step on; whether it reaches for it shows only with a real model.

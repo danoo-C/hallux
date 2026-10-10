@@ -237,6 +237,98 @@ def test_what_play_reports_about_a_loud_song(child):
         "ok": True, "seconds": 0.1, "peak": 200, "turned_down_to": 49, "clipped": ["beep"]}
 
 
+# ---------------------------------------------------------------- checking
+
+def check(text, env=(), cwd=ADDONS, message=None, **more):
+    """Start the child for a check of this score. Returns its one line as the answer it has
+    to be, and the ended process: a check child ends by itself."""
+    done = subprocess.run(
+        [sys.executable, "-m", "music_engine", "check"], cwd=cwd, text=True, timeout=30,
+        input=json.dumps({"text": text} | more) if message is None else message, capture_output=True,
+        env=os.environ | {"SDL_AUDIODRIVER": "disk"} | dict(env))
+    assert done.returncode == 0 and done.stdout.count("\n") == 1, (done.stdout, done.stderr)
+    return json.loads(done.stdout), done
+
+
+def test_a_check_answers_what_play_answers(child):
+    loud = BEEP.replace("sin(p) * vel >> 8", "sin(p) * 2") + "    (0, 4, A4 C5, beep)\n"
+    for text in (SHORT, LONG, RINGS, loud):
+        assert check(text)[0] == child.ask(cmd="play", text=text), text
+    assert check(SHORT)[0] == {"ok": True, "seconds": 0.2, "peak": 78}       # and no id
+    assert check(loud)[0] == {
+        "ok": True, "seconds": 0.1, "peak": 200, "turned_down_to": 49, "clipped": ["beep"]}
+
+
+def test_a_check_of_a_loop_answers_what_play_answers_for_the_loop(child):
+    once, loop = rendered(RINGS).report(), rendered(RINGS, loop=True).report()
+    assert once != loop                                              # the tails are mixed in
+    assert check(RINGS)[0] == check(RINGS, loop=False)[0] == {"ok": True} | once
+    assert check(RINGS, loop=True)[0] == {"ok": True} | loop
+    assert check(RINGS, loop=True)[0] == child.ask(cmd="play", text=RINGS, loop=True)
+    child.ask(cmd="stop")
+
+
+def test_a_check_of_a_score_with_mistakes_has_every_problem(child):
+    bad = BEEP + "    (0, 4, A4, beeb)\n    (4, 4, H5, beep)\n"
+    assert check(bad)[0] == child.ask(cmd="play", text=bad) == {
+        "error": "line 10: unknown instrument or variable: beeb\n"
+                 "line 11: beep is an instrument: its value is a note such as A4, not H5"}
+
+
+def test_a_check_needs_no_sound_device_and_opens_none(tmp_path):
+    answer, _ = check(SHORT, env={"SDL_AUDIODRIVER": "nosuchdriver"})
+    assert answer == {"ok": True, "seconds": 0.2, "peak": 78}        # where a play can't start
+    check(SHORT, env={"SDL_DISKAUDIOFILE": str(tmp_path / "sound.raw")})
+    assert not (tmp_path / "sound.raw").exists()                     # nothing went to a card
+
+
+def test_a_check_child_never_loads_pygame(tmp_path):
+    """Checked in the child itself: there, whoever asks for pygame gets an error."""
+    (tmp_path / "sitecustomize.py").write_text(
+        "import sys\n\n\nclass NoPygame:\n"
+        "    def find_spec(self, name, path, target=None):\n"
+        "        if name.split('.')[0] == 'pygame':\n"
+        "            raise ImportError('this child must not load pygame')\n"
+        "        return None\n\n\nsys.meta_path.insert(0, NoPygame())\n")
+    answer, done = check(SHORT, env={"PYTHONPATH": str(tmp_path)})
+    assert answer == {"ok": True, "seconds": 0.2, "peak": 78} and done.stderr == ""
+    playing = Child(tmp_path, env={"PYTHONPATH": str(tmp_path)})     # the child that plays does
+    try:
+        assert playing.hello is None and playing.process.wait(5) == 1
+        assert "this child must not load pygame" in playing.errors.read_text()
+    finally:
+        playing.kill()
+
+
+def test_a_check_of_what_is_no_message_is_an_answer():
+    for message in ("", "not a message", "[1, 2]", '{"text": 5}', '{"score": "BPM = 120"}',
+                    '{"text": "BPM = 120", "loop": "yes"}'):
+        assert check("", message=message)[0] == {
+            "error": "addon bug: check takes a text, and true or false for loop"}
+
+
+def test_a_bug_in_a_check_is_an_answer_and_not_a_crash(tmp_path):
+    shutil.copytree(ADDONS / "music_engine", tmp_path / "music_engine")
+    with open(tmp_path / "music_engine" / "render.py", "a") as broken:
+        broken.write("\n\ndef render(*args):\n    raise RuntimeError('the mixer melted')\n")
+    answer, done = check(SHORT, cwd=tmp_path)
+    assert answer == {"error": "addon bug: RuntimeError: the mixer melted"}
+    assert "Traceback" in done.stderr                                # for whoever looks
+
+
+def test_a_check_keeps_its_line_clear_of_what_a_library_prints(tmp_path):
+    (tmp_path / "sitecustomize.py").write_text(
+        "import os, sys\n\n\nclass Chatty:\n"
+        "    def find_spec(self, name, path, target=None):\n"
+        "        if name == 'numpy':\n"
+        "            print('a library says hello', flush=True)\n"
+        "            os.write(1, b'and so does its C code\\n')\n"
+        "        return None\n\n\nsys.meta_path.insert(0, Chatty())\n")
+    answer, done = check(SHORT, env={"PYTHONPATH": str(tmp_path)})
+    assert answer == {"ok": True, "seconds": 0.2, "peak": 78}        # the one line, unharmed
+    assert "a library says hello" in done.stderr and "and so does its C code" in done.stderr
+
+
 # ---------------------------------------------------------------- the messages
 
 def test_no_sound_device(tmp_path):

@@ -57,6 +57,7 @@ IN_PLACE = {("tab",): "Tab", ("c-l",): "C-l", ("c-r",): "C-r", ("c-s",): "C-s",
             ("c-x",): "C-x", ("escape", "."): "M-.",
             **{(f"f{n}",): f"F{n}" for n in range(1, 13)}}
 CTRL_C_PRESSES, CTRL_C_WINDOW = 3, 1.0          # this many Ctrl-C within a second: hard exit
+BEAT_SECONDS = 1.0                              # how often a running job's time is drawn again
 RESTORE_TERMINAL = ("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"   # mouse reporting off
                     "\x1b[?2004l\x1b[?1049l"                        # paste mode, main screen
                     "\x1b[0m\x1b[?25h")                             # plain colors, cursor on
@@ -100,6 +101,8 @@ class Terminal:
         self.kept: list[str] | None = None               # during a visit: what was written
         self.over_prompt = False                         # the visit began at the shell prompt,
         self.event_waits = False                         # and an event asked the prompt to end
+        self.beat: asyncio.Task | None = None            # draws again while a job runs
+        self.jobs_run = False                            # one does: the machine said so
 
         prompt_output = self._prompt_output()
         self.session: PromptSession = PromptSession(
@@ -129,6 +132,8 @@ class Terminal:
                 asyncio.get_running_loop().add_signal_handler(signal.SIGWINCH, self._check_size)
 
     def stop(self) -> None:
+        if self.beat is not None:
+            self.beat.cancel()
         self.raw.close()
         if self.pinned:
             self._write(statusbar.uninstall(self.output.get_size().rows))
@@ -296,7 +301,7 @@ class Terminal:
                 animation.cancel()
                 if self.bar:                             # the bar stops when the answer ends,
                     self.bar.update(busy=False)          # not when the panel closes
-                    self._refresh()
+                    self.refresh()
                 # The answer isn't over until a visit to the panel is: the panel's app has
                 # the keyboard, and it has to give it back to the reader above before that
                 # reader lets go. All that follows an answer waits here with it.
@@ -307,16 +312,38 @@ class Terminal:
                 store_typeahead(self.input, typed)
 
     def set_status(self, **changes: object) -> None:
+        if "jobs" in changes:                            # also without a bar: the panel's
+            self.jobs_run = bool(changes["jobs"])        # tabs show the jobs, and their times
         if self.bar:
             self.bar.update(**changes)
-            self._refresh()
+        if self.bar or "jobs" in changes:
+            self.refresh()
+        if self.jobs_run and self.beat is None:
+            with contextlib.suppress(RuntimeError):      # no loop runs: nothing draws
+                self.beat = asyncio.get_running_loop().create_task(self._beat())
 
     async def _animate(self) -> None:
         while True:
             await asyncio.sleep(statusbar.FRAME_SECONDS)
-            self._refresh()
+            self.refresh()
 
-    def _refresh(self) -> None:
+    async def _beat(self) -> None:
+        """Once a second while a job runs: its time moves, on the bar and in the panel's
+        tabs, also while the prompt waits and nothing else is drawn. With no job nothing is
+        drawn, as before. While the AI works, the bar's light draws many times a second
+        already."""
+        try:
+            while self.jobs_run:
+                await asyncio.sleep(BEAT_SECONDS)
+                if self.jobs_run and self.interrupt is None:     # the AI isn't at work
+                    self.refresh()
+        finally:
+            self.beat = None
+
+    def refresh(self) -> None:
+        """Draw hallux's own part of the screen again, wherever it is now: the bar at the
+        shell, block mode's screen in a full-screen program, the panel while one is open at
+        the shell."""
         if self.block.active:
             self.block.invalidate()
         elif self.kept is not None:                      # the bar is the panel's last row now
@@ -345,8 +372,7 @@ class Terminal:
         # it starts. Those were typed for the shell, so they are taken out for the visit.
         earlier = get_typeahead(self.input)
         store_typeahead(self.input, keys)
-        if self.pinned:                                  # the panel has the whole screen,
-            self._write("\x1b7\x1b[r\x1b8")              # as a full-screen program has
+        self._take_bar_off()                             # the panel has the whole screen
         self.kept = []                                   # from here on write() doesn't print
         try:
             await self.panel.run(self.input, self.output)    # on the alternate screen
@@ -354,8 +380,7 @@ class Terminal:
             kept, self.kept = self.kept, None
             after = get_typeahead(self.input)
             store_typeahead(self.input, earlier)
-            self._check_size()                           # the window may have another size now
-            self._draw_bar()                             # pins the region again, before any text:
+            self._put_bar_back()                         # pins the region again, before any text:
             for text in kept:                            # unpinned, the text would scroll the
                 self.write(text)                         # bar's row away and end up on it
         return after
@@ -363,8 +388,8 @@ class Terminal:
     # ---------------------------------------------------------------- block mode
 
     async def show_form(self, screen: str, form: Form, patch=None) -> None:
-        if self.pinned and not self.block.active:        # the full-screen app has its own bar
-            self._write("\x1b7\x1b[r\x1b8")
+        if not self.block.active:                        # the full-screen app has its own bar
+            self._take_bar_off()
         await self.block.show(screen, form, patch)
 
     async def next_action(self) -> Action:
@@ -376,10 +401,38 @@ class Terminal:
     def set_tick(self, seconds: float) -> None:
         self.block.set_tick(seconds)
 
+    def wake_form(self) -> bool:
+        return self.block.wake()
+
     async def end_form(self) -> None:
         if self.block.active:
             await self.block.end()
-            self._draw_bar()                             # re-pins the scroll region
+            self._put_bar_back()                         # re-pins the scroll region
+
+    async def suspend_form(self, job: int) -> None:
+        """Put the program on screen aside under this number, as it is, and give the screen
+        back to the shell, as end_form does. resume_form brings it back."""
+        if self.block.active:
+            await self.block.suspend(job)
+            self._put_bar_back()                         # re-pins the scroll region
+
+    async def resume_form(self, job: int) -> bool:
+        """Put the program of this number back on screen exactly as it was: its screen, its
+        fields with what was typed into them, its cursor. False, and nothing happens, when
+        none is kept under that number."""
+        if job not in self.block.suspended:
+            return False
+        if not self.block.active:                        # the full-screen app has its own bar
+            self._take_bar_off()
+        return await self.block.resume(job)
+
+    def forget_form(self, job: int | None = None) -> None:
+        """Drop the program that is kept under this number. Without one: all that are kept."""
+        self.block.forget(job)
+
+    def suspended_forms(self) -> list[int]:
+        """The numbers of the programs that are kept, oldest first."""
+        return list(self.block.suspended)
 
     def field_text(self, id: str) -> str:
         return self.block.field_text(id)
@@ -435,6 +488,24 @@ class Terminal:
             return ""
         size = self.output.get_size()
         return statusbar.draw(self.bar, size.rows, size.columns)
+
+    def _take_bar_off(self) -> None:
+        """Before the alternate screen is taken: the shell's screen waits behind it without
+        the region and without the bar. A bar that waited there wouldn't stay on the bottom
+        row: when the window's width changes meanwhile, the terminal lays the waiting screen
+        out again, and a line that wraps differently moves every row below it. The bar that
+        is drawn afterwards wouldn't cover the old one, and it would scroll into the text."""
+        if self.pinned:
+            self._write(statusbar.uninstall(self.output.get_size().rows))
+
+    def _put_bar_back(self) -> None:
+        """Back on the shell's screen: the region and the bar, for the size the window has
+        now. No bar waited there, so there is no old row to wipe. But the cursor is where
+        the terminal put it, and after a resize that can be the bottom row: see reinstall."""
+        if self.pinned:
+            self.pinned = size = self.output.get_size()
+            if not self.block.active and self.kept is None:
+                self._write(statusbar.reinstall(self.bar, size.rows, size.columns))
 
     def _check_size(self) -> None:
         """After a resize: move the bar to the new bottom row and re-pin the region."""

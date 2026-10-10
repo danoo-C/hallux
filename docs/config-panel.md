@@ -377,8 +377,10 @@ it does isn't known.
 
 **At the shell:**
 
-1. Hallux takes the bar's scroll region off, as it does before a full-screen program
-   (`hallux/terminal.py:259`).
+1. Hallux takes the bar's scroll region off and erases the bar's row, as it does before a
+   full-screen program (`_take_bar_off` in `hallux/terminal.py`). No bar waits on the
+   shell's screen: if the window is resized while the panel is open, the terminal moves the
+   rows of that screen, and a bar left there would end up in the text.
 2. The panel runs on the terminal's alternate screen. The terminal itself keeps the shell's
    screen, with its scrollback. Full-screen programs come and go this way today.
 3. While the panel is open, what the AI writes isn't printed. Hallux keeps it, in order

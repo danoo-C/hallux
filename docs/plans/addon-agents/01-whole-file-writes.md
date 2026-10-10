@@ -60,3 +60,49 @@ In `tests/test_disk.py`:
 ## Done when
 
 The tests of the disk pass, old and new, and no test of another file had to change.
+
+## As built
+
+Built on 2026-10-05, on the branch `addon-agents`. 14 new tests, 1080 in all; no test of
+another file changed. Decided while building:
+
+- **The helper is `write_whole(real, data)`,** a function of `hallux/disk.py` beside the
+  `Disk`. It takes a real path, so the landing of step 5 can call it with bytes.
+- **The file beside it** is named `.<name>.hallux-<eight hex digits>`, such as
+  `.notes.md.hallux-3f9a1c0e`. `TEMP_MARK` holds the `.hallux-`.
+- **A file Hallux may not write is still refused.** The plan didn't name this. A rename
+  needs only the folder's leave, so a file of mode 444 would have become writable. The
+  helper first opens the old file for writing, without changing it, and fails with what
+  that says: `EACCES`, as before.
+- **What is no regular file is written in place.** A directory fails with `EISDIR`, as
+  before. A pipe or a device is written into, never replaced by a file.
+- **In place too, whenever no file can be made beside it:** the folder isn't Hallux's to
+  write, or the name is too long for a longer one beside it. A folder that isn't there
+  fails with `ENOENT`, as before.
+- **The log says when a write went in place** for that reason:
+  `<path> was written in place: no file can be made beside it`. It is the one case where a
+  reader can still see half a file, so it isn't silent.
+- **The mode is set before the text is written.** The new text of a private file is never
+  in a file that others may read, not even for a moment.
+- **Text becomes bytes before anything is touched.** Text that is no UTF-8, half a
+  character, used to empty the file and then fail. Now it fails, and the file is as it was.
+- **What it gives up beside a second name:** the owner, the group and the extended
+  attributes of a file that Hallux's user didn't make. The new file is that user's.
+- **The memory and `config.toml` keep their own way** of writing beside and renaming. They
+  weren't touched.
+- **The lines of `disk.py` moved.** `write_whole` is at 63, `write_file` at 228 and
+  `edit_file` at 240, where this step's first lines say 169 and 177. The design's three
+  references into the file are set again.
+
+**Tried on 2026-10-05,** with a throwaway script. A thread reads a file of 400 KB through
+the disk again and again, as an addon function does, while the file is saved a few thousand
+times in three seconds.
+
+| | Reads | Of a half-written file |
+|---|---|---|
+| With this step | 12,654 | 0 |
+| With the code before it | 20,158 | 18,006 |
+
+**Nothing here needs a terminal or a model,** so nothing is left to try by hand. What a
+user can see in a running machine: a file saved in nano has the mode it had, and its
+folder's time of change moves.

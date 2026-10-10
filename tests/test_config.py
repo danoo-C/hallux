@@ -75,6 +75,15 @@ def test_haiku_gets_no_effort():
     ('addons = ["window", 3]\n', "addons must be a list of addon names"),
     ('addons = ["window.py"]\n', "addons must be a list of addon names"),
     ('addons = ["Window"]\n', "addons must be a list of addon names"),
+    ("agent_max_running = -1\n", "agent_max_running must be a whole number, 0 or more"),
+    ("agent_max_running = 2.5\n", "agent_max_running must be a whole number, 0 or more"),
+    ("agent_max_running = true\n", "agent_max_running must be a whole number, 0 or more"),
+    ("agent_job_budget_usd = 0\n", "agent_job_budget_usd must be a positive number"),
+    ("agent_budget_usd = -1\n", "agent_budget_usd must be a number, 0 or more"),
+    ('agent_max_effort = "turbo"\n', "agent_max_effort must be one of low, medium, high"),
+    ("agent_timeout_seconds = 0\n", "agent_timeout_seconds must be a positive number"),
+    ('agent_model = ""\n', "agent_model must be a model name"),
+    ("agent_model = 5\n", "agent_model must be a model name"),
     ('model = "claude-opus-5-5\n', r"config\.toml: Illegal character"),   # broken TOML
 ])
 def test_bad_config_is_a_readable_error(tmp_path, text, message):
@@ -103,6 +112,12 @@ def test_a_wrong_file_is_named_with_its_setting(tmp_path):
     ("event_budget_usd", 0.0), ("event_budget_usd", 2),
     ("tick_budget_usd", float("inf")),             # no limit, for who writes it into the file
     ("addons", None), ("addons", ()), ("addons", ("window", "sound_card")),
+    ("agent_model", None), ("agent_model", "claude-haiku-4-5"),
+    ("agent_max_effort", "low"), ("agent_max_effort", "max"),
+    ("agent_max_running", 0), ("agent_max_running", 8),
+    ("agent_job_budget_usd", 0.01), ("agent_job_budget_usd", 3),
+    ("agent_budget_usd", 0), ("agent_budget_usd", 2.5),
+    ("agent_timeout_seconds", 1), ("agent_timeout_seconds", 90.5),
 ])
 def test_check_takes_a_good_value(name, value):
     assert config.check(name, value) is None
@@ -130,6 +145,18 @@ def test_check_takes_a_good_value(name, value):
     ("addons", "window", 'must be a list of addon names, like ["window"]'),
     ("addons", ("window", 3), 'must be a list of addon names, like ["window"]'),
     ("addons", ("Window",), 'must be a list of addon names, like ["window"]'),
+    ("agent_model", "", "must be a model name like claude-opus-5-5"),
+    ("agent_max_effort", None, "must be one of low, medium, high, xhigh, max, not None"),
+    ("agent_max_effort", "turbo", "must be one of low, medium, high, xhigh, max, not 'turbo'"),
+    ("agent_max_running", -1, "must be a whole number, 0 or more"),
+    ("agent_max_running", 2.0, "must be a whole number, 0 or more"),
+    ("agent_max_running", "2", "must be a whole number, 0 or more"),
+    ("agent_job_budget_usd", 0, "must be a positive number"),
+    ("agent_job_budget_usd", float("nan"), "must be a positive number"),
+    ("agent_budget_usd", -0.5, "must be a number, 0 or more"),
+    ("agent_budget_usd", None, "must be a number, 0 or more"),
+    ("agent_timeout_seconds", 0, "must be a positive number"),
+    ("agent_timeout_seconds", "600", "must be a positive number"),
 ])
 def test_check_says_why_a_value_is_wrong(name, value, words):
     assert config.check(name, value) == words
@@ -146,7 +173,9 @@ def test_every_setting_says_when_a_change_takes_effect():
     assert set(config.WHEN) == {f.name for f in fields(Hardware)}
     assert set(config.WHEN.values()) == {"now", "reboot", "start"}
     now = {name for name, when in config.WHEN.items() if when == "now"}
-    assert now == {"tick_budget_usd", "event_budget_usd", "max_budget_usd", "model"}
+    agents = {name for name in config.WHEN if name.startswith("agent_")}
+    assert len(agents) == 6 and agents < now      # every job is a new session: from the next job
+    assert now - agents == {"tick_budget_usd", "event_budget_usd", "max_budget_usd", "model"}
 
 
 @pytest.mark.parametrize("name, text, value", [
@@ -163,6 +192,16 @@ def test_every_setting_says_when_a_change_takes_effect():
     ("fallback_model", "claude-haiku-4-5", "claude-haiku-4-5"),
     ("fallback_model", "", None),                  # empty: none
     ("effort", "xhigh", "xhigh"),
+    ("agent_model", " claude-haiku-4-5 ", "claude-haiku-4-5"),
+    ("agent_model", "", None),                     # empty: the model the machine runs on
+    ("agent_max_effort", "medium", "medium"),
+    ("agent_max_running", "3", 3),                 # a whole number, and not 3.0
+    ("agent_max_running", "0", 0),
+    ("agent_job_budget_usd", "$0.50", 0.5),
+    ("agent_budget_usd", "0", 0.0),
+    ("agent_timeout_seconds", "600", 600.0),
+    ("agent_timeout_seconds", "90s", 90.0),
+    ("agent_timeout_seconds", " 90.5 s ", 90.5),
 ])
 def test_typed_makes_a_value(name, text, value):
     made = config.typed(name, text)
@@ -189,6 +228,20 @@ def test_typed_makes_a_value(name, text, value):
     ("effort", "", "must be one of low, medium, high, xhigh, max, not ''"),
     ("model", "", "must be a model name like claude-opus-5-5"),
     ("model", "   ", "must be a model name like claude-opus-5-5"),
+    ("agent_max_running", "2.5", "must be a whole number, 0 or more"),
+    ("agent_max_running", "-1", "must be a whole number, 0 or more"),
+    ("agent_max_running", "", "must be a whole number, 0 or more"),
+    ("agent_max_running", "two", "must be a whole number, 0 or more"),
+    ("agent_max_running", "9" * 7, "must be a whole number, 0 or more"),
+    ("agent_timeout_seconds", "0", "must be a positive number"),
+    ("agent_timeout_seconds", "0s", "must be a positive number"),
+    ("agent_timeout_seconds", "", "must be a positive number"),
+    ("agent_timeout_seconds", "10 min", "must be a positive number"),
+    ("agent_timeout_seconds", "1e3", "must be a positive number"),
+    ("agent_job_budget_usd", "0", "must be a positive number"),
+    ("agent_job_budget_usd", "", "must be a positive number"),      # it can't be left out
+    ("agent_budget_usd", "", "must be a number, 0 or more"),
+    ("agent_max_effort", "", "must be one of low, medium, high, xhigh, max, not ''"),
     ("status_bar", "off", "is set when Hallux starts: edit config.toml"),
     ("addons", "window", "is set when Hallux starts: edit config.toml"),
     ("keep_transcripts", "on", "is set when Hallux starts: edit config.toml"),
@@ -219,7 +272,8 @@ def test_save_changes_one_line_of_the_readme_example(tmp_path):
     assert "#" in was["effort"] and "#" in was["max_budget_usd"] and len(lines) == len(before)
     assert config.load(tmp_path) == Hardware(
         "claude-opus-5-5", "high", "claude-haiku-4-5", 3.0, tick_budget_usd=1.25,
-        addons=("window",))
+        addons=("window",), agent_model="claude-opus-5-5")      # its other agent lines are
+                                                                # the defaults
 
 
 def test_save_keeps_what_follows_the_value(tmp_path):
@@ -326,3 +380,122 @@ def test_load_reads_what_save_wrote(tmp_path):
     assert config.load(tmp_path) == Hardware(
         "claude-sonnet-5-5", "max", "claude-haiku-4-5", 2.0,
         tick_budget_usd=0.00001, event_budget_usd=0.0)
+
+
+# --- the six settings of the addon agents ---------------------------------------------------------
+
+def test_the_agents_settings_have_defaults(tmp_path):
+    hw = config.load(tmp_path)
+    assert (hw.agent_model, hw.agent_max_effort, hw.agent_max_running) == (None, "high", 2)
+    assert (hw.agent_job_budget_usd, hw.agent_budget_usd, hw.agent_timeout_seconds) == (2.0, 4.0, 600)
+
+
+def test_the_agents_settings_are_read_from_the_file(tmp_path):
+    """The step's "Done when": a config.toml with all six loads."""
+    write_config(tmp_path, 'agent_model = "claude-sonnet-5-5"\nagent_max_effort = "xhigh"\n'
+                           "agent_max_running = 0\nagent_job_budget_usd = 0.5\n"
+                           "agent_budget_usd = 4\nagent_timeout_seconds = 90\n")
+    assert config.load(tmp_path) == Hardware(
+        agent_model="claude-sonnet-5-5", agent_max_effort="xhigh", agent_max_running=0,
+        agent_job_budget_usd=0.5, agent_budget_usd=4, agent_timeout_seconds=90)
+    write_config(tmp_path, "agent_max_running = -1\n")
+    with pytest.raises(ValueError) as e:
+        config.load(tmp_path)
+    assert str(e.value) == (f"{tmp_path / '.hallux' / 'config.toml'}: agent_max_running must be a "
+                            f"whole number, 0 or more")
+
+
+def test_a_budget_per_job_above_the_budget_for_all_jobs_is_refused(tmp_path):
+    """No job could ever start. A budget for all jobs of 0 turns the agents off instead."""
+    write_config(tmp_path, "agent_job_budget_usd = 5.0\n")       # the other is 4.00 by default
+    with pytest.raises(ValueError) as e:
+        config.load(tmp_path)
+    assert str(e.value) == (f"{tmp_path / '.hallux' / 'config.toml'}: agent_job_budget_usd (5.0) "
+                            f"must not be more than agent_budget_usd (4.0)")
+    write_config(tmp_path, "agent_job_budget_usd = 3.0\nagent_budget_usd = 0\n")
+    assert config.load(tmp_path).agent_budget_usd == 0
+    write_config(tmp_path, "agent_job_budget_usd = 3.0\nagent_budget_usd = 3\n")
+    assert config.load(tmp_path).agent_job_budget_usd == 3.0     # as much as all jobs: fine
+
+
+def test_the_check_of_the_two_budgets_by_itself():
+    wrong = Hardware(agent_job_budget_usd=3.0, agent_budget_usd=2.0)
+    assert config.check_together(Hardware()) is None
+    assert config.check_together(Hardware(agent_job_budget_usd=2.0)) is None
+    assert config.check_together(Hardware(agent_job_budget_usd=3.0, agent_budget_usd=0)) is None
+    assert config.check_together(wrong) == (
+        "agent_job_budget_usd (3.0) must not be more than agent_budget_usd (2.0)")
+    # behind the setting that was changed, in its row of the panel: short enough for 80 columns
+    assert config.check_together(wrong, "agent_job_budget_usd") == "is over the budget for all jobs"
+    assert config.check_together(wrong, "agent_budget_usd") == "is under the budget per job"
+    assert config.check_together(wrong, "model") == config.check_together(wrong)
+
+
+def test_typed_knows_nothing_of_the_other_budget():
+    """It is given a name and a text. The machine checks the two together."""
+    assert config.typed("agent_job_budget_usd", "3") == 3.0       # above the default for all jobs
+
+
+def test_save_writes_an_agents_setting(tmp_path):
+    write_config(tmp_path, "# mine\nagent_max_running = 2   # at once\n")
+    config.save(tmp_path, {"agent_max_running": 3, "agent_timeout_seconds": 90.0,
+                           "agent_model": "claude-haiku-4-5"})
+    assert saved(tmp_path) == ("# mine\nagent_max_running = 3   # at once\n"
+                               'agent_timeout_seconds = 90.0\nagent_model = "claude-haiku-4-5"\n')
+    config.save(tmp_path, {"agent_model": None})                  # none again: its line goes
+    assert "agent_model" not in saved(tmp_path)
+    assert config.load(tmp_path) == Hardware(agent_max_running=3, agent_timeout_seconds=90.0)
+
+
+def test_save_takes_two_budgets_that_are_right_only_together(tmp_path):
+    """Save writes the changes in the order the settings were first touched, and checks the
+    file after each. The budget per job, written first, is above what the file still says for
+    all jobs. Tried in the check of 2026-10-05: with the pair in that check, Save refused."""
+    changes = {"agent_job_budget_usd": 5.0, "agent_budget_usd": 10.0}
+    config.save(tmp_path, changes)
+    assert saved(tmp_path) == "agent_job_budget_usd = 5.0\nagent_budget_usd = 10.0\n"
+    assert config.load(tmp_path) == Hardware(**changes)
+
+
+def test_save_refuses_a_file_that_would_hold_a_wrong_pair(tmp_path):
+    text = "agent_budget_usd = 0.5   # edited by hand while Hallux ran\n"
+    write_config(tmp_path, text)
+    with pytest.raises(ValueError) as e:
+        config.save(tmp_path, {"agent_job_budget_usd": 0.75, "effort": "high"})
+    assert str(e.value) == ("config.toml: agent_job_budget_usd (0.75) must not be more than "
+                            "agent_budget_usd (0.5). Nothing saved.")
+    assert saved(tmp_path) == text
+    assert [f.name for f in (tmp_path / ".hallux").iterdir()] == ["config.toml"]
+    config.save(tmp_path, {"agent_job_budget_usd": 0.25})         # a pair the file can hold
+    assert config.load(tmp_path).agent_job_budget_usd == 0.25
+
+
+def test_save_mends_a_wrong_pair_in_the_file(tmp_path):
+    write_config(tmp_path, "agent_job_budget_usd = 3.0\n")       # wrong by now: load refuses it
+    config.save(tmp_path, {"agent_job_budget_usd": 1.5})
+    assert config.load(tmp_path).agent_job_budget_usd == 1.5
+
+
+def test_the_model_of_an_agent():
+    """Without agent_model: the model the main session really runs on, not the setting. The two
+    differ when the setting holds a name that is no model."""
+    assert config.agent_model(Hardware(), "claude-opus-5-5") == "claude-opus-5-5"
+    assert config.agent_model(Hardware(model="claude-banana-9"), "claude-opus-5-5") == "claude-opus-5-5"
+    assert config.agent_model(Hardware(agent_model="claude-haiku-4-5"), "claude-opus-5-5") == (
+        "claude-haiku-4-5")
+
+
+@pytest.mark.parametrize("asked, hardware, model, gets", [
+    ("xhigh", Hardware(), "claude-opus-5-5", "high"),             # above the cap: capped
+    ("max", Hardware(agent_max_effort="max"), "claude-opus-5-5", "max"),
+    ("medium", Hardware(), "claude-opus-5-5", "medium"),          # below it: what it asks
+    ("high", Hardware(agent_max_effort="low"), "claude-opus-5-5", "low"),
+    (None, Hardware(), "claude-opus-5-5", "low"),                 # no ask: the machine's effort
+    (None, Hardware(effort="max"), "claude-opus-5-5", "high"),    # capped the same way
+    (None, Hardware(effort=None), "claude-opus-5-5", None),       # the machine has none either
+    ("high", Hardware(effort=None), "claude-opus-5-5", "high"),
+    ("high", Hardware(), "claude-haiku-4-5", None),               # Haiku has no effort levels
+    (None, Hardware(), "claude-haiku-4-5-20251001", None),
+])
+def test_the_effort_of_an_agent(asked, hardware, model, gets):
+    assert config.agent_effort(hardware, asked, model) == gets

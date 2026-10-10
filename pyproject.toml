@@ -39,4 +39,4 @@ testpaths = ["tests"]
 include = ["hallux*"]
 
 [tool.setuptools.package-data]
-hallux = ["prompt.md"]
+hallux = ["prompt.md", "agent.md", "prompt_jobs.md"]

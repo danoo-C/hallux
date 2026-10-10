@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 import html
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Callable
 
 from prompt_toolkit.application import Application, get_app
@@ -42,6 +42,7 @@ POWER_CUT_KEY = "c-s-delete"                   # the hard exit: Ctrl+Shift+Del
 OPEN_KEY = "c-f12"                             # opens and closes hallux's own panel (hallux.panel)
 ESCAPE_SECONDS = 0.05                          # in the panel: how long Esc waits to be told from
                                                # the start of an arrow key
+SUSPENDED_MAX = 8                              # forms that are put aside at a time
 
 SPECIAL_KEYS = {
     "Enter": "enter", "Escape": "escape", "Tab": "tab", "Backspace": "backspace",
@@ -203,6 +204,22 @@ class Background(FormattedTextControl):
         return NotImplemented
 
 
+@dataclass
+class Suspended:
+    """A form that was put aside, with all that block mode needs to show it again exactly as
+    it was. The fields are the objects they were, not copies: their text, their cursors,
+    what they had scrolled to and their undo history come back with them."""
+    form: Form                                 # its fields, keys, keymap, tick; and its focus
+    composed: list[str]                        # the screen as it was shown, row by row
+    footer_rows: int
+    field_tops: dict[str, tuple[int, int]]
+    areas: dict[str, TextArea]
+    kinds: dict[str, tuple]
+    seen: dict[str, str | None]                # what the AI has seen of each field,
+    baseline: dict[str, str]                   # and what counts as saved
+    vi_mode: object = None                     # of a program with vi keys: normal or insert
+
+
 class BlockMode:
     def __init__(self, input=None, output=None, bar: StatusBar | None = None,
                  power_cut: Callable[[], None] = lambda: None,
@@ -233,6 +250,8 @@ class BlockMode:
         self.layered = False                           # it is open, as a layer over the program
         self.layer_gone = asyncio.Event()              # ... and set when it isn't
         self.layer_gone.set()
+        self.wake_asked = False                        # under it, a wake waits for it to close
+        self.suspended: dict[object, Suspended] = {}   # forms put aside, by name, oldest first
         self.under: tuple = ()                         # what the program had before the layer
         self.clock = asyncio.Event()                   # set: the wait for a tick starts again
 
@@ -324,6 +343,25 @@ class BlockMode:
                 self.waiting = True                     # keys pressed now wait for the redraw
                 return Action(key="tick", focus=None)
 
+    def wake(self) -> bool:
+        """End the wait for an action from outside: next_action returns an action called wake,
+        the way it returns a tick when the time is up. Keys pressed from then on wait for the
+        next screen, as after any action. Returns whether it did.
+
+        Only a program without fields is woken, and only while it has the keyboard. In a form
+        with fields nothing happens and the answer is no: a wake reaches the AI without the
+        fields, and its answer could lose what the user typed. The same while an action is
+        with the AI. While the panel is open over the program the answer is yes, and the wake
+        comes when the panel has closed."""
+        if (self.app is None or self.form is None or self.form.fields or self.waiting
+                or self.running.done()):
+            return False
+        if self.layered:
+            self.wake_asked = True                     # it waits with everything else
+        else:
+            self._send(Action(key="wake", focus=None))
+        return True
+
     def set_tick(self, seconds: float) -> None:
         """Give the program on screen this tick. A wait that is running starts again with it."""
         if self.form is not None:
@@ -347,6 +385,7 @@ class BlockMode:
         """Leave block mode: the shell screen comes back."""
         if self.app is None:
             return
+        self.wake_asked = False                        # nothing is left to wake
         self._close_panel()                            # it can't stay open over nothing
         self._release_keys()                           # prompt_toolkit keeps unprocessed keys
         if self.app.is_running:                        # as type-ahead for the shell prompt
@@ -362,6 +401,50 @@ class BlockMode:
         self.seen_before = None
         self.composed, self.footer_rows, self.field_tops = None, 0, {}
         self.waiting = False
+
+    # ---------------------------------------------------------------- a form put aside
+
+    async def suspend(self, name: object) -> None:
+        """Put the form on screen aside under this name, and leave block mode as end() does.
+        Without a form on screen nothing happens. At most SUSPENDED_MAX are kept: one more
+        drops the oldest."""
+        if self.app is None or self.form is None:
+            return
+        focused = self._focused()
+        # Its fields keep what they hold: a text or a cursor in the form would set them again.
+        fields = tuple(replace(f, text=None, cursor=None) for f in self.form.fields)
+        form = replace(self.form, fields=fields, focus=focused.id if focused else None)
+        vi_mode = self.app.vi_state.input_mode if form.keymap == "vi" else None
+        self.suspended.pop(name, None)                  # a name that is given again is new
+        self.suspended[name] = Suspended(form, list(self.composed or []), self.footer_rows,
+                                         self.field_tops, self.areas, self.kinds, self.seen,
+                                         self.baseline, vi_mode)
+        while len(self.suspended) > SUSPENDED_MAX:
+            del self.suspended[next(iter(self.suspended))]
+        await self.end()                                # it makes new, empty ones of all these
+
+    async def resume(self, name: object) -> bool:
+        """Put the form of this name back, as it was, in place of whatever is on screen: no
+        model call, and no text from the AI. False, and nothing happens, without one of that
+        name. After a window resize the screen is fitted to the new size, as for a patch."""
+        kept = self.suspended.pop(name, None)
+        if kept is None:
+            return False
+        self.areas, self.kinds, self.seen, self.baseline = (kept.areas, kept.kinds, kept.seen,
+                                                            kept.baseline)
+        self.composed, self.footer_rows = kept.composed, kept.footer_rows
+        self.field_tops = kept.field_tops
+        await self.show("", kept.form, patch=())        # an empty patch: the screen it had
+        if kept.vi_mode is not None:                    # a new app starts in insert mode, and
+            self.app.vi_state.input_mode = kept.vi_mode     # :w would be typed into the text
+        return True
+
+    def forget(self, name: object = None) -> None:
+        """Drop the form of this name. Without a name: all of them."""
+        if name is None:
+            self.suspended.clear()
+        else:
+            self.suspended.pop(name, None)
 
     def invalidate(self) -> None:
         if self.app is not None:
@@ -410,6 +493,9 @@ class BlockMode:
             self.app.invalidate()
         self.layer_gone.set()
         self.clock.set()                               # the program's clock starts again
+        if self.wake_asked:                            # asked for while the panel was open
+            self.wake_asked = False
+            self.wake()
 
     async def panel_gone(self) -> None:
         """Wait until the panel isn't open over the program: the end of an answer waits here."""
@@ -570,7 +656,8 @@ class BlockMode:
         if "Enter" in form.keys:                         # a pager as a menu: the cursor's
             kb.add("enter", filter=pager, eager=True)(self._action("Enter"))  # line is the pick
         printable_ok = pager | vi_navigation_mode        # letters type text in editors
-        for name in dict.fromkeys((*form.keys, "C-c")):  # Ctrl-C always reaches the AI
+        always = ("C-c", "C-z")                          # the AI interrupts, or suspends: they
+        for name in dict.fromkeys((*form.keys, *always)):    # reach it whatever the form lists
             keys = key_sequence(name)
             if keys is None or name == "Enter":          # Enter never acts in an editor
                 continue

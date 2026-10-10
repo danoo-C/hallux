@@ -1,6 +1,7 @@
 import errno
 import os
 import re
+import stat
 
 import pytest
 
@@ -187,6 +188,163 @@ def test_edit_file_replaces_exactly_once(disk, root):
         disk.edit_file("/home/user/.bashrc", "nothing like this", "x")
     with pytest.raises(ValueError, match="5 times"):
         disk.edit_file("/home/user/.bashrc", "l", "x")        # alias ll="ls -l" has five
+
+
+# ---------------------------------------------------------------- whole files: never half
+
+not_as_root = pytest.mark.skipif(getattr(os, "geteuid", lambda: 1)() == 0,
+                                 reason="root may write where nobody else may")
+
+
+def left_behind(folder):
+    """The files a write made beside the one it wrote, and should have taken away."""
+    return [path.name for path in folder.iterdir() if hallux.disk.TEMP_MARK in path.name]
+
+
+def test_a_reader_that_has_the_file_open_reads_the_old_text_to_its_end(disk, root):
+    notes = root / "home" / "user" / "notes.md"
+    with notes.open() as reader:                      # opened before the write, read after it
+        disk.write_file("/home/user/notes.md", "new text\n")
+        assert reader.read() == "hello\n"
+    with notes.open() as reader:
+        disk.edit_file("/home/user/notes.md", "new", "newer")
+        assert reader.read() == "new text\n"
+    assert notes.read_text() == "newer text\n" and left_behind(notes.parent) == []
+
+
+def test_a_write_and_an_edit_keep_the_files_mode(disk, root):
+    script = root / "home" / "user" / "run.sh"
+    script.write_text("#!/bin/sh\necho a\n")
+    script.chmod(0o750)
+    disk.write_file("/home/user/run.sh", "#!/bin/sh\necho b\n")
+    assert stat.S_IMODE(script.stat().st_mode) == 0o750
+    disk.edit_file("/home/user/run.sh", "echo b", "echo c")
+    assert stat.S_IMODE(script.stat().st_mode) == 0o750
+    assert script.read_text() == "#!/bin/sh\necho c\n"
+
+
+def test_the_mode_is_set_while_the_new_file_is_still_empty(disk, root, monkeypatch):
+    """A private file's new text is never in a file that others may read."""
+    secret = root / "home" / "user" / "key"
+    secret.write_text("old\n")
+    secret.chmod(0o600)
+    sizes, chmod = [], os.chmod
+    monkeypatch.setattr(hallux.disk.os, "chmod",
+                        lambda path, mode: (sizes.append(os.stat(path).st_size), chmod(path, mode)))
+    disk.write_file("/home/user/key", "new and private\n")
+    assert sizes == [0] and stat.S_IMODE(secret.stat().st_mode) == 0o600
+    assert secret.read_text() == "new and private\n"
+
+
+def test_a_new_file_gets_the_mode_a_new_file_always_got(disk, root):
+    (root / "plain.txt").write_text("x")              # the way a file was made before
+    disk.write_file("/made.txt", "x")
+    assert (root / "made.txt").stat().st_mode == (root / "plain.txt").stat().st_mode
+
+
+def test_writing_through_a_link_changes_its_target_and_the_link_stays(disk, root):
+    home = root / "home" / "user"
+    (home / "latest").symlink_to("notes.md")
+    disk.write_file("/home/user/latest", "through the link\n")
+    assert (home / "latest").is_symlink() and os.readlink(home / "latest") == "notes.md"
+    assert (home / "notes.md").read_text() == "through the link\n"
+    disk.edit_file("/home/user/latest", "through", "still through")
+    assert (home / "latest").is_symlink()
+    assert (home / "notes.md").read_text() == "still through the link\n"
+    assert sorted(path.name for path in home.iterdir()) == ["latest", "notes.md"]
+
+
+def test_a_write_that_cant_start_fails_as_before_and_leaves_nothing(disk, root):
+    fails(errno.ENOENT, disk.write_file, "/no/such/dir/file", "x")
+    fails(errno.EISDIR, disk.write_file, "/home", "x")
+    fails(errno.ENOENT, disk.edit_file, "/home/user/nope.txt", "a", "b")
+    assert sorted(path.name for path in root.iterdir()) == [".hallux", "home"]
+    assert [path.name for path in (root / "home").iterdir()] == ["user"]
+    assert [path.name for path in (root / "home" / "user").iterdir()] == ["notes.md"]
+
+
+def test_a_write_that_fails_halfway_leaves_the_old_file(disk, root, monkeypatch):
+    def gives_up(source, target):
+        raise OSError(errno.EIO, "the disk gave up")
+
+    notes = root / "home" / "user" / "notes.md"
+    monkeypatch.setattr(hallux.disk.os, "replace", gives_up)
+    fails(errno.EIO, disk.write_file, "/home/user/notes.md", "new\n")
+    fails(errno.EIO, disk.edit_file, "/home/user/notes.md", "hello", "bye")
+    fails(errno.EIO, disk.write_file, "/home/user/other.md", "new\n")
+    assert notes.read_text() == "hello\n"
+    assert [path.name for path in notes.parent.iterdir()] == ["notes.md"]
+
+
+def test_text_that_cant_be_written_leaves_the_file_as_it_was(disk, root):
+    with pytest.raises(ValueError):                   # half a character is no UTF-8
+        disk.write_file("/home/user/notes.md", "broken \ud800")
+    assert (root / "home" / "user" / "notes.md").read_text() == "hello\n"
+    assert left_behind(root / "home" / "user") == []
+
+
+@not_as_root
+def test_a_file_in_a_folder_that_takes_no_new_file_is_written_in_place(disk, root, caplog):
+    home = root / "home" / "user"
+    notes = home / "notes.md"
+    inode = notes.stat().st_ino
+    home.chmod(0o555)                                 # its files can be written, none can be made
+    try:
+        with caplog.at_level("INFO", logger="hallux"):
+            disk.write_file("/home/user/notes.md", "in place\n")
+        disk.edit_file("/home/user/notes.md", "in place", "still in place")
+        fails(errno.EACCES, disk.write_file, "/home/user/new.txt", "x")       # as before
+    finally:
+        home.chmod(0o755)
+    assert notes.read_text() == "still in place\n" and notes.stat().st_ino == inode
+    assert [path.name for path in home.iterdir()] == ["notes.md"]
+    assert f"{notes} was written in place" in caplog.text     # the log says where it happened
+
+
+def test_a_name_too_long_to_have_a_second_file_beside_it_is_written_in_place(disk, root):
+    name = "n" * (os.pathconf(root, "PC_NAME_MAX") - 3)       # no room for a longer name
+    (root / name).write_text("old\n")
+    inode = (root / name).stat().st_ino
+    disk.write_file(f"/{name}", "new\n")
+    assert (root / name).read_text() == "new\n" and (root / name).stat().st_ino == inode
+
+
+@not_as_root
+def test_a_file_that_may_not_be_written_is_refused_as_before(disk, root):
+    notes = root / "home" / "user" / "notes.md"
+    notes.chmod(0o444)                                # the folder would take a new file
+    fails(errno.EACCES, disk.write_file, "/home/user/notes.md", "x")
+    fails(errno.EACCES, disk.edit_file, "/home/user/notes.md", "hello", "bye")
+    assert notes.read_text() == "hello\n" and stat.S_IMODE(notes.stat().st_mode) == 0o444
+    assert left_behind(notes.parent) == []
+
+
+def test_an_edit_that_doesnt_match_leaves_the_file_untouched(disk, root):
+    notes = root / "home" / "user" / "notes.md"
+    before = notes.stat()
+    with pytest.raises(ValueError, match="0 times"):
+        disk.edit_file("/home/user/notes.md", "nothing like this", "x")
+    after = notes.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    assert notes.read_text() == "hello\n" and left_behind(notes.parent) == []
+
+
+def test_appending_stays_in_place(disk, root):
+    notes = root / "home" / "user" / "notes.md"
+    inode = notes.stat().st_ino
+    with notes.open() as reader:                      # a reader sees the old text, or more of it
+        assert disk.write_file("/home/user/notes.md", "more\n", append=True)["size"] == 11
+        assert reader.read() == "hello\nmore\n"
+    assert notes.stat().st_ino == inode and left_behind(notes.parent) == []
+
+
+def test_write_whole_takes_bytes_as_they_are(root):
+    sound = root / "home" / "user" / "sound.bin"
+    hallux.disk.write_whole(sound, b"\xff\x00\r\n")       # no text, and no line ending changed
+    assert sound.read_bytes() == b"\xff\x00\r\n"
+    hallux.disk.write_whole(sound, "text\r\n")
+    assert sound.read_bytes() == b"text\r\n"
+    assert sorted(path.name for path in sound.parent.iterdir()) == ["notes.md", "sound.bin"]
 
 
 def test_make_dir(disk, root):

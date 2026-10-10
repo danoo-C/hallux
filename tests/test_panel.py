@@ -136,6 +136,28 @@ def test_the_tab_row_has_every_title_and_brackets_on_the_shown_one():
     assert rows[1] == "this is Config" and rows[-1] == " x marks Config · a d c tabs · Esc close"
 
 
+def test_a_tab_says_what_esc_does_in_it():
+    """Details says back: its Esc goes to the Agents tab. Tried on 2026-10-05 with a stand-in,
+    the foot read `Esc back · a d c tabs · Esc close`."""
+    tabs = three()
+    tabs[1].esc = "back"
+    tabs[1].hint = lambda: "← → other agent"
+    panel = Panel(tabs)
+
+    async def script(press):
+        feet = [drawn(panel)[-1]]
+        await press("d")
+        feet.append(drawn(panel)[-1])
+        tabs[1].typing = True                # while it is, Esc and the letters are its own
+        await press("x")
+        return feet + [drawn(panel)[-1]]
+
+    config, details, typing = session(panel, script)
+    assert config == " x marks Config · a d c tabs · Esc close"       # as before
+    assert details == " ← → other agent · a d c tabs · Esc back"      # once, and no Esc close
+    assert typing == " ← → other agent"
+
+
 def test_one_tab_has_a_tab_row_too():
     panel = Panel([StandIn("Config")])
 

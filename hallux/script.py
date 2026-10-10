@@ -5,6 +5,7 @@ A script has one entry per line:
     ls -la          a command: typed, then Enter (at a password prompt: the password)
     @key C-c        a key for the machine (C-c, Tab, C-l, ...)
     @action C-x     an action key in a full-screen program (block mode)
+    @wait jobs 180  go on when no addon agent's job runs, or after that many seconds
     # a comment     skipped
 
 When the script runs out, Ctrl-D is sent until the machine halts. The transcript is what
@@ -12,6 +13,7 @@ the screen would show, without colors.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import re
 import time
@@ -26,6 +28,8 @@ from hallux.protocol import Action, Form, plain
 from hallux.statusbar import short_model
 
 LINE_ENDING_KEYS = ("C-c", "C-d", "C-z", "C-\\")
+WAIT = re.compile(r"@wait jobs(?:\s+(\d+(?:\.\d+)?))?\s*")     # the seconds can be left out
+WAIT_STEP = 0.05                                        # how often a wait looks at the jobs
 
 
 @dataclass
@@ -38,6 +42,14 @@ class Record:
     cost: float = 0.0
     tools: list[str] = field(default_factory=list)
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class JobsRun:
+    """The addon agents' jobs of a scripted run, for its summary: how many were started, and
+    what they cost together. Their cost is in no Record: a job belongs to no line."""
+    count: int = 0
+    cost: float = 0.0
 
 
 class ScriptEnded(Exception):
@@ -59,6 +71,7 @@ class ScriptTerminal:
         self.records: list[Record] = []
         self.spent = 0.0
         self.eofs = 0
+        self.jobs_running: Callable[[], int] = lambda: 0    # run_script() says how to ask
 
     def _new_record(self, typed: str, prompt: str = "") -> None:
         self.records.append(Record(typed=typed, prompt=prompt))
@@ -70,7 +83,30 @@ class ScriptTerminal:
         pass
 
     async def read_line(self, prompt: str, default: str = "") -> str | Key | Interrupted:
-        return self._next(prompt, default)
+        if self._waits():
+            await self._wait_for_jobs(prompt)
+            return Interrupted(default, len(default))   # the machine looks for what ended:
+        return self._next(prompt, default)              # it may go out before the next line
+
+    def _waits(self) -> bool:
+        return bool(self.lines) and WAIT.fullmatch(self.lines[0].strip()) is not None
+
+    async def _wait_for_jobs(self, prompt: str = "") -> None:
+        """`@wait jobs 180`: the script goes on when no job runs, or after that many seconds.
+        Without it a script would run out while a job works, the machine would halt, and the
+        job would be killed. Without the seconds it waits as long as the jobs run, which
+        their own timeout bounds."""
+        line = self.lines.pop(0).strip()
+        seconds = WAIT.fullmatch(line).group(1)
+        self.echo(plain(prompt) + f"[{line}]\n")
+        self._new_record(line, prompt)
+        started = time.monotonic()
+        while self.jobs_running() and (seconds is None
+                                       or time.monotonic() - started < float(seconds)):
+            await asyncio.sleep(WAIT_STEP)
+        self.records[-1].seconds += time.monotonic() - started
+        if left := self.jobs_running():
+            self.write(f"[{left} job{'s' * (left > 1)} still running after {seconds} s]\n")
 
     def interrupt_prompt(self) -> bool:
         return False                                    # a script gets no events
@@ -140,6 +176,9 @@ class ScriptTerminal:
         self.write(f"{screen}{footer}\n[full screen: {fields}; keys {' '.join(form.keys)}]\n")
 
     async def next_action(self) -> Action:
+        if self._waits():
+            await self._wait_for_jobs()
+            return Action(key="wake", focus=None)       # the machine looks for what ended
         if self.lines and self.lines[0].startswith("@action "):
             line = self.lines.pop(0)
             self._new_record(line)
@@ -152,8 +191,23 @@ class ScriptTerminal:
     def set_tick(self, seconds: float) -> None:
         pass
 
+    def wake_form(self) -> bool:
+        return False                                    # a script's program waits for nobody
+
     async def end_form(self) -> None:
         pass
+
+    async def suspend_form(self, job: int) -> None:     # a transcript has no screen to keep
+        pass
+
+    async def resume_form(self, job: int) -> bool:
+        return False
+
+    def forget_form(self, job: int | None = None) -> None:
+        pass
+
+    def suspended_forms(self) -> list[int]:
+        return []
 
     def field_text(self, id: str) -> str:
         raise ValueError(f"no field {id!r}: scripts can't type into fields")
@@ -164,22 +218,30 @@ class ScriptTerminal:
 
 async def run_script(root: Path, hardware: Hardware, lines: list[str],
                      echo: Callable[[str], None] = lambda text: None,
-                     addons: Sequence[Addon] = (), events: Events | None = None) -> list[Record]:
+                     addons: Sequence[Addon] = (), events: Events | None = None,
+                     **more: object) -> tuple[list[Record], JobsRun]:
+    """Run the script on a machine of its own. Returns the records, and the jobs' numbers
+    beside them. `more` is the machine's: the tests hand in a pretend model."""
     terminal = ScriptTerminal(lines, echo)
+    machine = Machine(root, hardware, terminal, addons=addons, events=events, **more)
+    terminal.jobs_running = lambda: len(machine.jobs.running())
     try:
-        await Machine(root, hardware, terminal, addons=addons, events=events).run()
+        await machine.run()
     except ScriptEnded:
         pass
-    return terminal.records
+    return terminal.records, JobsRun(machine.jobs.started, machine.jobs.spent)
 
 
-def summary(records: list[Record], hardware: Hardware) -> str:
+def summary(records: list[Record], hardware: Hardware, jobs: JobsRun = JobsRun()) -> str:
     boots = [r for r in records if r.typed in ("(boot)", "(reboot)")]
     parts = [f"{r.typed[1:-1]} {r.seconds:.1f}s ({len(r.tools)} tool calls)" for r in boots]
+    trips = [r for r in records if not r.typed.startswith("@wait")]      # a wait is none
     total = sum(r.seconds for r in records)
+    cost = sum(r.cost for r in records) + jobs.cost     # the main session's, and the jobs'
+    of_jobs = f" ({jobs.count} job{'s' * (jobs.count > 1)}: ${jobs.cost:.2f})" * bool(jobs.count)
     return (f"{short_model(hardware.model)} · {hardware.model_effort or 'default'} — "
-            + ", ".join(parts) + f" — {len(records)} round trips, {total:.0f}s, "
-            f"${sum(r.cost for r in records):.2f}")
+            + ", ".join(parts) + f" — {len(trips)} round trips, {total:.0f}s, "
+            f"${cost:.2f}{of_jobs}")
 
 
 # ---------------------------------------------------------------- the reboot check

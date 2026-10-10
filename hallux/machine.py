@@ -24,19 +24,22 @@ from claude_agent_sdk import (
     AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, StreamEvent, ToolUseBlock,
 )
 
-from hallux import config, sandbox
+from hallux import config
 from hallux.addons import Addon, Events, stop_all
+from hallux.agents import Job, JobEvent, Jobs, Session, Worker, shared_options
 from hallux.config import Hardware
 from hallux.disk import Disk
 from hallux.passwords import Passwords
 from hallux.protocol import (
     Action, Field, Form, Reply, ScreenStream, Secret, envelope, json_body, parse, resolve,
 )
-from hallux.statusbar import PANEL_KEY, describe
+from hallux.statusbar import PANEL_KEY, Running, describe
 from hallux.tools import SERVER, build_addon_servers, build_server
 
 log = logging.getLogger("hallux")
 SYSTEM_PROMPT = (files("hallux") / "prompt.md").read_text(encoding="utf-8")
+JOBS_PROMPT = (files("hallux") / "prompt_jobs.md").read_text(encoding="utf-8")    # its last
+                                                 # section, on a machine that can start a job
 TICKS_PAUSED = "live updates paused: tick budget used"       # the bar's note for it
 
 
@@ -54,6 +57,16 @@ class Interrupted:
     """The prompt was ended from outside while a line was being typed: an addon has an event."""
     line: str                    # what was typed so far
     cursor: int = 0              # characters before the cursor
+
+
+@dataclass(frozen=True)
+class Suspended:
+    """What the machine knows of a full-screen program that was put aside (Ctrl-Z). The
+    terminal keeps its screen; these three the machine forgets when a program is left."""
+    fields: dict[str, Field]     # the fields it had on screen
+    tick_spent: float            # what it had spent on ticks: a suspend isn't a way around
+                                 # the tick budget
+    tick_asked: float            # the tick it asked for
 
 
 class Terminal(Protocol):
@@ -101,18 +114,48 @@ class Terminal(Protocol):
     def set_tick(self, seconds: float) -> None:
         """Give the program on screen this tick; its clock starts again with it."""
 
+    def wake_form(self) -> bool:
+        """End the wait of a program without fields: next_action returns an action called
+        wake. False, and nothing happens, in a program with fields and while the AI is busy
+        with the screen."""
+
     async def end_form(self) -> None: ...
+
+    async def suspend_form(self, job: int) -> None:
+        """Put the program on screen aside under this number, as it is, and leave block mode
+        as end_form does."""
+
+    async def resume_form(self, job: int) -> bool:
+        """Put the program of this number back on screen as it was. False, and nothing
+        happens, when none is kept under it."""
+
+    def forget_form(self, job: int | None = None) -> None:
+        """Drop the program kept under this number; without one, all of them."""
+
+    def suspended_forms(self) -> list[int]:
+        """The numbers of the programs that are kept, oldest first."""
 
     def field_text(self, id: str) -> str: ...
 
     def field_saved(self, id: str) -> None: ...
 
 
+def events_block(events: Sequence[JobEvent]) -> str:
+    """The job events that go in front of a message, as the <events> the AI knows, on a line
+    of their own. Nothing, without events."""
+    if not events:
+        return ""
+    body = "".join(f"\n{envelope('event', json_body(event.data), addon=event.addon)}"
+                   for event in events) + "\n"
+    return envelope("events", body) + "\n"
+
+
 class Machine:
     def __init__(self, root: Path, hardware: Hardware, terminal: Terminal,
                  client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient,
                  addons: Sequence[Addon] = (), events: Events | None = None,
-                 from_flags: Iterable[str] = ()):
+                 from_flags: Iterable[str] = (),
+                 worker_factory: Callable[[Job], Worker] | None = None):
         self.disk = Disk(root)
         self.hardware = hardware                 # the settings as they are now
         self.running = hardware                  # what this boot's session runs on: see power_on
@@ -136,8 +179,19 @@ class Machine:
         self.tick_spent = 0.0                    # raw mode: dollars spent on ticks this run
         self.tick_asked = 0.0                    # the tick the program on screen asked for,
         self.ticks_stopped = False               # and whether a budget has stopped its ticks
+        self.suspended: dict[int, Suspended] = {}    # the programs put aside, by the AI's
+                                                 # job number: the terminal has their screens
         self.last_turn_cost = 0.0
         self.stream: ScreenStream | None = None  # what the last answer showed while written
+        self.wake: Callable[[], None] | None = None     # ends the shell prompt, while one that
+                                                 # an event may end is being read
+        # The jobs of the addons' agents (hallux.agents). They read the settings as they are,
+        # ask whether the boot is over its budget, and say when one of them reports or ends.
+        # A job's worker is a Claude session of its own, unless a test hands in a stand-in.
+        self.jobs = Jobs(self.disk, lambda: self.hardware, worker_factory or self.session,
+                         on_report=self.job_reported, on_event=self.job_event_waits,
+                         over_budget=self.over_budget, addons=self.addons,
+                         running=lambda: self.running.model)
 
     # ---------------------------------------------------------------- for hallux's own panel
 
@@ -147,9 +201,10 @@ class Machine:
                   "event_budget_usd": "event_budget_usd" in self.notes,
                   "tick_budget_usd": "tick_budget_usd" in self.notes}
         return config.View(
-            hardware=self.hardware, running=self.running, spent_boot=self.session_spent,
-            spent_since_refill=self.session_spent - self.refilled_at,
+            hardware=self.hardware, running=self.running, spent_boot=self.boot_spent(),
+            spent_since_refill=self.boot_spent() - self.refilled_at,
             spent_ticks=self.tick_spent if self.in_form else None, spent_events=self.event_spent,
+            spent_jobs=self.jobs.spent_since_refill,
             paused=frozenset(name for name, used_up in paused.items() if used_up),
             from_flags=frozenset(self.from_flags), unsaved=frozenset(self.unsaved),
             path=self.disk.root / config.CONFIG_FILE)
@@ -164,7 +219,10 @@ class Machine:
         old = getattr(self.hardware, name)
         if value == old:                         # Enter on a row that was left as it was
             return None
-        self.hardware = dataclasses.replace(self.hardware, **{name: value})
+        changed = dataclasses.replace(self.hardware, **{name: value})
+        if reason := config.check_together(changed, name):       # two that can't both hold
+            return reason
+        self.hardware = changed
         self.unsaved[name] = value
         self.from_flags.discard(name)            # the flag's value is gone for this run
         log.info("config: %s %s -> %s", name, old, value)
@@ -186,10 +244,14 @@ class Machine:
     def refill(self) -> str:
         """Start the counting of every budget anew, at the limits as they are. What was really
         spent stays on the bar. Returns a line for the panel."""
-        log.info("budgets refilled: events $%.2f, ticks $%.2f, boot $%.2f", self.event_spent,
-                 self.tick_spent, self.session_spent - self.refilled_at)
+        log.info("budgets refilled: events $%.2f, ticks $%.2f, boot $%.2f, jobs $%.2f",
+                 self.event_spent, self.tick_spent, self.boot_spent() - self.refilled_at,
+                 self.jobs.spent_since_refill)
         self.event_spent = self.tick_spent = 0.0
-        self.refilled_at = self.session_spent    # the boot's cap counts from here
+        self.suspended = {job: dataclasses.replace(was, tick_spent=0.0)     # and of a program
+                          for job, was in self.suspended.items()}          # that is put aside
+        self.jobs.refill()
+        self.refilled_at = self.boot_spent()     # the boot's cap counts from here
         self.settle()
         return "budgets refilled"
 
@@ -197,30 +259,36 @@ class Machine:
 
     def options(self) -> ClaudeAgentOptions:
         server, allowed = build_server(self.disk, fields=self.terminal, addons=self.addons,
-                                       events=self.events)
-        addon_servers, addon_tools = build_addon_servers(self.addons, self.disk)
+                                       events=self.events, jobs=self.jobs,
+                                       screens=self.terminal.suspended_forms)
+        addon_servers, addon_tools = build_addon_servers(self.addons, self.disk, self.jobs.spawn)
         hw = self.hardware
         return ClaudeAgentOptions(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=self.system_prompt(),
             model=hw.model,
             effort=hw.model_effort,
             fallback_model=hw.fallback_model,     # no max_budget_usd: hallux checks that itself
             mcp_servers={SERVER: server} | addon_servers,
-            strict_mcp_config=True,             # no MCP servers from your own Claude config
-            tools=[],                           # no built-in Bash/Read/Write/... at all
             allowed_tools=allowed + addon_tools,
-            permission_mode="dontAsk",          # anything not allowed above is denied
-            setting_sources=[],                 # ignore your CLAUDE.md and settings
-            include_partial_messages=True,      # the answer as it's written, for streaming
-            # hallux.log has everything; Claude Code needn't keep its own transcript, which
-            # would also show hallux sessions in your `claude --resume` list
-            extra_args={} if hw.keep_transcripts else {"no-session-persistence": None},
-            cli_path=sandbox.wrapper(self.disk.hidden) if hw.os_sandbox else None,
+            **shared_options(hw, self.disk.hidden),     # what a job's session gets too
         )
+
+    def system_prompt(self) -> str:
+        """The prompt, and at its end the section on jobs for a machine that has an addon with
+        an agent. Lines that only some machines get don't stand in the middle of it."""
+        if not any(addon.agent for addon in self.addons):
+            return SYSTEM_PROMPT
+        return f"{SYSTEM_PROMPT.rstrip()}\n\n{JOBS_PROMPT}"
+
+    def session(self, job: Job) -> Worker:
+        """The worker of a job: a Claude session of its own, made as the machine's own is. It
+        is told the model this boot really runs on, for a machine without agent_model."""
+        return Session(job, lambda: self.running.model, self.client_factory)
 
     async def run(self) -> None:
         """Power on, reboot as often as the machine asks, return when it halts."""
         await self.terminal.start()
+        self.jobs.start()                        # inside the loop: a job's worker runs in it
         try:
             while await self.power_on():
                 log.info("reboot")
@@ -231,6 +299,7 @@ class Machine:
         """One boot-to-shutdown lifetime. Returns True if the machine wants to reboot."""
         self.disk.cwd = "/"
         self.session_spent = self.refilled_at = 0.0
+        self.jobs.new_boot()
         self.forget_events()
         for reason in ("event_budget_usd", "max_budget_usd", "model"):
             self.note(reason, None)              # a new boot: nothing spent, heard or waiting
@@ -245,6 +314,9 @@ class Machine:
                                         fatal=True, activity="booting…", new_machine=first)
                 restore = ""                     # the line to put back at the next prompt
                 while not (reply.halt or reply.reboot):
+                    if reply.resume is not None:     # fg: a program that was put aside
+                        reply = await self.resume(client, reply.resume)
+                        continue
                     if reply.form is not None:   # a full-screen program in block mode
                         reply = await self.block_mode(client, reply)
                         continue
@@ -253,9 +325,10 @@ class Machine:
                     if self.hold() and not getattr(self.terminal, "attended", True):
                         log.info("halt: the budget is used, and a script can't raise it")
                         return False
-                    events = [] if secret else self.events.take()   # none at a password prompt
+                    events = [] if secret else self.events.take()   # none at a password prompt,
+                    due = [] if secret else self.due()              # and no job's end by itself
                     try:
-                        if events:
+                        if events or due:
                             line = None          # they come before the keyboard is read again
                         elif secret:
                             line = await self.terminal.read_secret(self.prompt)
@@ -265,8 +338,8 @@ class Machine:
                         line = Key("C-d", "", keep_line=False)
                     except KeyboardInterrupt:
                         line = Key("C-c", "", keep_line=False)
-                    if events:                   # the line to put back stays as it is
-                        reply = await self.send_events(client, events)
+                    if events or due:            # the line to put back stays as it is
+                        reply = await self.send_events(client, events, due)
                     elif isinstance(line, Interrupted):
                         restore = line.line      # an event ended the read: it's sent next
                         continue
@@ -299,15 +372,18 @@ class Machine:
                         restore = reply.edit
                 return reply.reboot
             finally:                             # halt, reboot or a crash: a program that
-                await self.leave_block_mode()    # is still on screen ends with the boot
-                self.stop_addons()
+                await self.leave_block_mode()    # is still on screen ends with the boot, one
+                self.forget()                    # that was put aside is dropped,
+                await self.jobs.end_boot()       # and every job ends, before the addons'
+                self.stop_addons()               # hooks: a job may be inside an addon function
                 self.forget_events()
 
     async def read_shell_line(self, restore: str) -> str | Key | Interrupted:
         """Read a line at the shell prompt. While the AI listens to an addon, an event ends
-        the read, and what was typed so far comes back as Interrupted."""
-        if not self.events.listening():          # nothing can arrive: the AI isn't at work
-            return await self.terminal.read_line(self.prompt, restore)
+        the read, and what was typed so far comes back as Interrupted: an addon's own event,
+        or the end of one of its agent's jobs."""
+        if not self.events.listening():          # nothing can arrive: the AI isn't at work,
+            return await self.terminal.read_line(self.prompt, restore)     # and a job's end waits
         loop = asyncio.get_running_loop()
         reading = True
 
@@ -315,25 +391,63 @@ class Machine:
             if reading and not self.terminal.interrupt_prompt():
                 loop.call_later(0.01, wake)      # the prompt isn't up yet: try again
 
+        self.wake = wake
         self.events.on_arrival = lambda: loop.call_soon_threadsafe(wake)
-        if self.events.pending():                # one slipped in before anyone watched
+        if self.events.pending() or self.due():  # one slipped in before anyone watched
             loop.call_soon(wake)
         try:
             return await self.terminal.read_line(self.prompt, restore)
         finally:
             reading = False
-            self.events.on_arrival = None
+            self.wake = self.events.on_arrival = None
 
-    async def send_events(self, client: ClaudeSDKClient, events: list[tuple[str, dict]]) -> Reply:
-        """Tell the AI what the addons it listens to have reported, oldest first."""
+    async def send_events(self, client: ClaudeSDKClient, events: list[tuple[str, dict]],
+                          due: Sequence[JobEvent] = (), stay: bool = False) -> Reply | None:
+        """Tell the AI what the addons it listens to have reported, oldest first, and after
+        that how its jobs ended: every job event that waits, also one that couldn't have gone
+        out by itself. `due` are the ones this message is sent for. Each gets its mark: an
+        event starts one message of its own, or a model that is down is called in a loop.
+        `stay` is send()'s."""
+        for event in due:
+            event.had_turn = True
+        ended = self.jobs.waiting()
+        told = events + [(event.addon, event.data) for event in ended]
         body = "".join(f"\n{envelope('event', json_body(data), addon=name)}"
-                       for name, data in events) + "\n"
-        names = ", ".join(sorted({name for name, _ in events}))
+                       for name, data in told) + "\n"
+        names = ", ".join(sorted({name for name, _ in told}))
         before = self.spent
-        reply = await self.send(client, "events", body, activity=f"{names}: event")
+        reply = await self.send(client, "events", body, activity=f"{names}: event",
+                                carried=ended, stay=stay)
         self.event_spent += self.spent - before
         self.check_events()
         return reply
+
+    def due(self) -> list[JobEvent]:
+        """The job events that may go out by themselves now, in a message of their own. This
+        one question decides both whether the prompt is ended for them and whether they are
+        sent: if an event that has to wait counted as waiting, the prompt would be ended
+        again and again. An event may go out when its addon is listened to, event budget is
+        left, the boot isn't over its budget, and it hasn't had a message of its own yet."""
+        if self.over_budget() or self.event_spent >= self.hardware.event_budget_usd:
+            return []
+        heard = self.events.listening()
+        return [event for event in self.jobs.waiting()
+                if event.addon in heard and not event.had_turn]
+
+    def job_event_waits(self) -> None:
+        """A job has ended, or something an event waited for has changed: a budget, the
+        boot's cap. If an event may go out by itself now, whoever waits for the keyboard is
+        woken. At the shell prompt the prompt ends, as it does for an addon's event. A
+        full-screen program without fields is woken: a player would otherwise sit on
+        "composing…" until a key is pressed. One with fields isn't: the wake would reach the
+        AI without the fields, and its answer could lose what the user typed there."""
+        if not self.due():
+            return
+        if self.wake is not None:
+            self.wake()
+        elif self.in_form and not self.fields:
+            self.terminal.wake_form()            # no, while the AI is busy with the screen:
+                                                 # block_mode looks again when it is shown
 
     def check_events(self) -> None:
         """What the hub had to drop goes onto the bar. And events are model calls that nobody
@@ -352,8 +466,10 @@ class Machine:
                 else "events are off: event_budget_usd is 0")
 
     def refill_event_budget(self) -> None:
-        """The user typed a line: somebody is at the keyboard, so events may spend again."""
+        """The user typed a line: somebody is at the keyboard, so events may spend again, and
+        so may the addons' jobs."""
         self.event_spent = 0.0
+        self.jobs.refill()
         self.settle()
 
     def settle(self) -> None:
@@ -377,11 +493,38 @@ class Machine:
                 self.ticks_stopped = False       # ticks again, as it asked to
                 self.terminal.set_tick(self.tick_asked)
         self.check_events()
+        self.job_event_waits()                   # one that waited for a budget may go out now
+
+    def boot_spent(self) -> float:
+        """What this boot has spent: the main session, and each job once it has ended. The two
+        are kept apart: an event's turn is measured as the change of the main session's sum."""
+        return self.session_spent + self.jobs.spent_boot
 
     def over_budget(self) -> bool:
-        """The boot has a cap, and has spent it since it started or since the last refill."""
+        """The boot has a cap, and has spent it since it started or since the last refill. A
+        job that still runs isn't in it, so a boot can pass its cap by what its running jobs
+        spend: at most the budget for all jobs."""
         cap = self.hardware.max_budget_usd
-        return cap is not None and self.session_spent - self.refilled_at >= cap
+        return cap is not None and self.boot_spent() - self.refilled_at >= cap
+
+    def job_reported(self) -> None:
+        """A job reported or ended: the bar shows the jobs that run, and what those that have
+        ended cost. That cost can take the boot over its cap while the machine sits at the
+        prompt, where nothing else would ask: the bar says so at once, and not after the next
+        line was typed into it."""
+        self.show_jobs()
+        if self.over_budget():
+            self.hold()
+
+    def show_jobs(self) -> None:
+        """Tell the bar which jobs run, and the jobs' sum. The sum goes beside the main
+        session's and not into it: a scripted run books every rise of the session's cost to
+        the line that was typed last, and a job's cost would land on whatever that was.
+        It is told at every report, also one that changes nothing on the bar: the terminal
+        then draws again, and the panel's tabs show what a job says and does."""
+        self.terminal.set_status(
+            jobs=tuple(Running(job.addon.name, job.status, job.began, job.tokens)
+                       for job in self.jobs.running()), jobs_cost=self.jobs.spent)
 
     def ticks_used_up(self) -> bool:
         """The program run has spent its tick budget. No tick goes to the AI, and every other
@@ -398,7 +541,7 @@ class Machine:
         if getattr(self.terminal, "attended", True):             # somebody can raise it
             note += f" · raise it: {PANEL_KEY}"
         if self.notes.get("max_budget_usd") != note:             # said once
-            log.warning("%s ($%.2f spent)", note, self.session_spent - self.refilled_at)
+            log.warning("%s ($%.2f spent)", note, self.boot_spent() - self.refilled_at)
             self.notify([note], "max_budget_usd")
         self.events.pause()
         return True
@@ -472,18 +615,36 @@ class Machine:
         """Show the AI's form, let the user work in it, send back the action they end with."""
         form, to_load = resolve(reply.form, self.fields)
         form = self.load_files(form, to_load)
-        held = self.hold()
-        self.tick_asked = form.tick
-        if form.tick and self.ticks_used_up():
-            form = dataclasses.replace(form, tick=0)             # live updates stop here
-            self.note("tick_budget_usd", TICKS_PAUSED)
-        elif held:
-            form = dataclasses.replace(form, tick=0)             # a tick couldn't be sent
-        self.ticks_stopped = bool(self.tick_asked) and not form.tick
+        held, tick = self.tick_for(form.tick)
+        form = dataclasses.replace(form, tick=tick)
         self.fields = {field.id: field for field in form.fields}
         self.in_form = True
         await self.terminal.show_form(reply.screen, form, reply.patch)
-        while True:
+        return await self.attend(client, held)
+
+    def tick_for(self, asked: float) -> tuple[bool, float]:
+        """A program comes on screen and asks for this tick: whether the boot's budget holds
+        its messages back, and the tick it gets. That is none while its tick budget is used
+        up, and the bar says so, and none while the boot is over its budget: a tick couldn't
+        be sent."""
+        held = self.hold()
+        self.tick_asked = tick = asked
+        if asked and self.ticks_used_up():
+            tick = 0                              # live updates stop here
+            self.note("tick_budget_usd", TICKS_PAUSED)
+        elif held:
+            tick = 0
+        self.ticks_stopped = bool(asked) and not tick
+        return held, tick
+
+    async def attend(self, client: ClaudeSDKClient, held: bool,
+                     action: Action | None = None) -> Reply:
+        """Let the user work in the program on screen, and send back the action they end
+        with. An action that is handed in goes out without a wait: the first tick of a
+        program that came back."""
+        if action is None:                        # a job that ended while the AI answered: the
+            self.job_event_waits()                # wait below would never hear of it
+        while action is None:
             if held and not getattr(self.terminal, "attended", True):
                 log.info("halt: the budget is used, and a script can't raise it")
                 await self.leave_block_mode()
@@ -494,6 +655,15 @@ class Machine:
                 log.error("block mode ended unexpectedly")
                 await self.leave_block_mode()
                 return await self.send(client, "key", "", name="C-c")
+            if action.key == "wake":              # a job's end, and nobody pressed a key
+                # Asked again: the event may have gone out meanwhile, in front of a key.
+                due = [] if self.fields else self.due()
+                woken = await self.send_events(client, [], due, stay=True) if due else None
+                if woken is not None:
+                    return woken                  # the program's next screen, or its patch
+                self.terminal.keep_form()         # nothing to send, or the model failed on
+                action = None                     # it: the program stays, and takes keys
+                continue
             held = self.hold()
             late = action.key == "tick" and self.ticks_used_up()   # its budget was lowered
             if not held and not late:
@@ -502,10 +672,14 @@ class Machine:
             self.ticks_stopped = bool(self.tick_asked)
             if late:
                 self.note("tick_budget_usd", TICKS_PAUSED)
+            action = None
         if action.key == "tick":                  # raw mode: time passed, nothing was pressed
-            reply = await self.send(client, "tick", activity="updating…")
+            rows = self.jobs.table()              # with the jobs, while there are any: a
+            reply = await self.send(              # program that shows them needs no tool call
+                client, "tick", json_body({"jobs": rows}) if rows else "", activity="updating…")
             self.tick_spent += self.last_turn_cost
             return reply
+        self.jobs.refill()                        # a key or an action: somebody is there
         if action.events:                         # raw mode: every key, as events
             return await self.send(client, "keys", "".join(action.events))
         attrs: dict[str, object] = {"key": action.key}
@@ -514,6 +688,71 @@ class Machine:
         if action.row is not None:
             attrs |= {"row": action.row, "col": action.col}
         return await self.send(client, "action", self.field_report(action), **attrs)
+
+    # ---------------------------------------------------------------- job control
+    # Ctrl-Z, fg, bg and jobs are bash's, and bash is the AI: the job numbers are its own.
+    # What hallux adds is that a suspended program's screen is kept, so fg needs no redraw.
+
+    async def job_control(self, reply: Reply) -> None:
+        """What an answer's job-control tags ask for, but for <resume>: that one is the
+        caller's, since a program that comes back has to be attended (see resume)."""
+        for tag in reply.unread:
+            log.warning("ignored %s: a job is a number", tag)
+        for job in reply.forget:
+            log.info("   job %d: forgotten", job)
+            self.forget(job)
+        if reply.suspend is not None:
+            await self.suspend(reply.suspend)
+
+    async def suspend(self, job: int) -> None:
+        """Ctrl-Z: put the program on screen aside as this job, and leave it. The terminal
+        keeps its screen and what was typed into it. The machine keeps what leaving a program
+        forgets: its fields, what it has spent on ticks, the tick it asked for."""
+        if not self.in_form:
+            log.warning("<suspend job=\"%d\"/> without a full-screen program on screen: "
+                        "nothing is kept", job)
+            return
+        log.info("   job %d: suspended", job)
+        self.suspended[job] = Suspended(self.fields, self.tick_spent, self.tick_asked)
+        await self.terminal.suspend_form(job)
+        kept = self.terminal.suspended_forms()    # it keeps only so many, and a script's none
+        self.suspended = {job: was for job, was in self.suspended.items() if job in kept}
+        await self.leave_block_mode()
+
+    async def resume(self, client: ClaudeSDKClient, job: int) -> Reply:
+        """fg: put the program of this job back on screen as it was, in place of whatever is
+        there, and attend it. One that asked for a tick gets a tick at once, so that it can
+        patch what changed while it was away; whether its ticks run is decided as for a new
+        screen. If its screen is gone, the AI is told at once, and draws the program again."""
+        if not await self.terminal.resume_form(job):
+            self.suspended.pop(job, None)
+            if self.hold():                       # the boot's budget is used: nothing is sent
+                log.info("   job %d: its screen is gone, and the budget is used", job)
+            else:
+                log.info("   job %d: its screen is gone", job)
+                answer = await self.send(client, "gone", job=job)
+                if answer.resume is None:
+                    return answer
+                # Not twice: a model that insists would be called in a loop.
+                log.warning("ignored <resume job=\"%d\"/> in the answer to <gone>", answer.resume)
+            await self.leave_block_mode()         # nothing came back: the shell it is, with the
+            return Reply(screen="", prompt=None)  # prompt it had
+        log.info("   job %d: resumed", job)
+        was = self.suspended.pop(job, Suspended({}, 0.0, 0.0))
+        self.note("tick_budget_usd", None)        # of a program this one took the place of
+        self.fields, self.tick_spent, self.in_form = was.fields, was.tick_spent, True
+        held, tick = self.tick_for(was.tick_asked)
+        self.terminal.set_tick(tick)
+        return await self.attend(client, held, Action("tick", None) if tick else None)
+
+    def forget(self, job: int | None = None) -> None:
+        """Drop the program that is kept as this job: it ended, or was killed. Without a
+        number, all of them: a boot is over."""
+        if job is None:
+            self.suspended.clear()
+        else:
+            self.suspended.pop(job, None)
+        self.terminal.forget_form(job)
 
     def load_files(self, form: Form, ids: set[str]) -> Form:
         """Fill these file="..." fields from the disk: the text never passes through the AI."""
@@ -545,18 +784,43 @@ class Machine:
     async def send(self, client: ClaudeSDKClient, tag: str, body: str = "", *,
                    fatal: bool = False, halt_on_error: bool = False,
                    activity: str = "thinking…", new_machine: bool = False,
-                   **attrs: object) -> Reply:
-        """Send one envelope and show the reply: a screen and a prompt, or a form."""
-        text, interrupted = await self.exchange(client, self.envelope(tag, body, **attrs),
-                                                activity, fatal)
-        if interrupted:                          # Ctrl-C while the AI was working
+                   carried: list[JobEvent] | None = None, stay: bool = False,
+                   **attrs: object) -> Reply | None:
+        """Send one envelope and show the reply: a screen and a prompt, or a form.
+
+        Every job event that waits goes along, as an <events> block in front of the message.
+        It is told when the answer has come back: a message the model fails on leaves it
+        waiting, for the next message of any kind. `carried` are the job events a message
+        holds in its own body, which then gets no block. A boot has none: it starts with no
+        jobs.
+
+        A message the model fails on ends a full-screen program, so that nobody is stuck in
+        it. With `stay` it doesn't, and None comes back: the message was one that nobody at
+        the keyboard asked for, and a player isn't taken off the screen for it.
+
+        The answer's job-control tags are followed here, but for <resume>: an answer with one
+        comes back as it is, nothing of it shown, and the caller's loop puts the program
+        back."""
+        if carried is None:
+            carried = [] if tag == "boot" else self.jobs.waiting()
+            front = events_block(carried)
+        else:
+            front = ""
+        text, interrupted = await self.exchange(
+            client, front + self.envelope(tag, body, **attrs), activity, fatal)
+        if interrupted:                          # Ctrl-C while the AI was working: nothing of
+            carried = self.jobs.waiting()        # that answer was shown, so they go again
             text, _ = await self.exchange(
-                client, self.envelope("key", "", name="C-c", interrupted="yes"), activity, fatal)
+                client, events_block(carried)
+                + self.envelope("key", "", name="C-c", interrupted="yes"), activity, fatal)
         if text is None:                         # the model failed; the error is reported
             if fatal:
                 raise SystemExit(1)
+            if stay:
+                return None
             await self.leave_block_mode()        # never leave anyone stuck in a form
             return Reply(screen="", prompt=None, halt=halt_on_error)
+        self.jobs.told(carried)
         reply = parse(text)
         shown = self.stream.shown if self.stream else ""
         self.apply_writes(reply, new_machine)
@@ -565,6 +829,11 @@ class Machine:
                 self.disk.chdir(reply.cwd)
             except (OSError, ValueError) as e:
                 log.warning("can't change to %s: %s", reply.cwd, e)
+        await self.job_control(reply)
+        if reply.resume is not None:             # fg: the kept screen comes back, and one in
+            if shown:                            # this answer isn't shown. What streamed of
+                self.terminal.retract(shown)     # it is taken back
+            return reply
         if reply.form is not None:               # block mode shows it; the shell prompt stays
             if shown:                            # a full-screen screen that streamed (the AI
                 self.terminal.retract(shown)     # put the form last): take it back

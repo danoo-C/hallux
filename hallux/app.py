@@ -18,7 +18,8 @@ from pathlib import Path
 from hallux import addons, config
 from hallux.addons import Addon
 from hallux.config import Hardware
-from hallux.disk import HIDDEN_NAME
+from hallux.disk import HIDDEN_NAME, Disk
+from hallux.jobdisk import sweep
 
 log = logging.getLogger("hallux")
 ADDONS_FOLDER = Path(__file__).resolve().parent.parent / "addons"    # at the root of the repo
@@ -58,6 +59,7 @@ def main() -> None:
     log.info("power on: %s", hardware)
     events = addons.Events()                    # what the addons report, for the whole run
     attached, notes = attach(root, hardware, events=events)    # once: a change needs a restart
+    start_up(root, hardware, attached)          # before the two kinds of run part: both get it
     if headless:
         _complain(notes)
         sys.exit(_headless(root, hardware, flags, attached, events))
@@ -76,9 +78,13 @@ def main() -> None:
     machine = Machine(root, hardware, terminal, addons=attached, events=events,
                       from_flags=from_flags)
     from hallux.panel import Panel              # hallux's own panel, opened with Ctrl+F12:
-    from hallux.panel_tabs.config import ConfigTab      # one tab, around the machine
-    settings = ConfigTab(machine.view, machine.change, machine.save, machine.refill)
-    terminal.set_panel(Panel([settings], bar=bar, power_cut=terminal.power_cut,
+    from hallux.panel_tabs.agents import AgentsTab      # three tabs, around the machine
+    from hallux.panel_tabs.config import ConfigTab
+    from hallux.panel_tabs.details import DetailsTab
+    settings = ConfigTab(machine.view, machine.change, machine.save, machine.refill,
+                         agents=any(addon.agent for addon in attached))    # their six rows
+    watching = [tab(machine.jobs.watch, machine.jobs.kill) for tab in (AgentsTab, DetailsTab)]
+    terminal.set_panel(Panel([*watching, settings], bar=bar, power_cut=terminal.power_cut,
                              ctrl_c=terminal.count_ctrl_c))
     try:
         asyncio.run(machine.run())
@@ -104,6 +110,25 @@ def attach(root: Path, hardware: Hardware, folder: Path | None = None,
     return loaded, [f"addon {name} skipped: {reason}" for name, reason in skipped.items()]
 
 
+def start_up(root: Path, hardware: Hardware, attached: list[Addon]) -> None:
+    """What every run does before its machine is made, for the addons' agents. The copies of a
+    job's files that a crash or the hard exit left are deleted, each with a line in the log.
+    And the log says what each agent's jobs will run on: the model, and the effort, with a
+    word when the agent asked for more than agent_max_effort allows."""
+    for name in sweep(Disk(root)):
+        log.warning("job %s: its copies were left over, and are deleted", name)
+    for addon in attached:
+        if addon.agent is None:
+            continue
+        asked = addon.agent.effort
+        model = config.agent_model(hardware, hardware.model)
+        effort = config.agent_effort(hardware, asked, model)
+        capped = (f" (it asked for {asked}; agent_max_effort is {hardware.agent_max_effort})"
+                  if asked and effort and effort != asked else "")
+        log.info("agent %s.%s: %s, effort %s%s", addon.name, addon.agent.name, model,
+                 effort or "none", capped)
+
+
 def _complain(notes: list[str]) -> None:
     """Without a status bar, the notes go where the other hallux messages go."""
     for note in notes:
@@ -120,14 +145,14 @@ def _headless(root: Path, hardware: Hardware, flags: argparse.Namespace,
     else:
         lines = flags.script.read_text(encoding="utf-8").splitlines()
     try:
-        records = asyncio.run(run_script(root, hardware, lines,
-                                         echo=lambda text: print(text, end="", flush=True),
-                                         addons=attached, events=events))
+        records, jobs = asyncio.run(run_script(
+            root, hardware, lines, echo=lambda text: print(text, end="", flush=True),
+            addons=attached, events=events))
     except Exception as e:
         log.exception("crash")
         print(f"hallux: {e}", file=sys.stderr)
         return 1
-    print(f"\n── {summary(records, hardware)}", file=sys.stderr)
+    print(f"\n── {summary(records, hardware, jobs)}", file=sys.stderr)
     if not flags.check:
         return 0
     report, passed = reboot_report(records)

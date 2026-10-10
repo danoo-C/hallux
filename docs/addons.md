@@ -11,7 +11,9 @@ it), and events (section 9). The first addon was a window with a text box,
 The music addon of section 7 is the second, `addons/music.py`
 ([plans/addon-music/](plans/addon-music/README.md)).
 
-**What isn't:** worker agents (section 8).
+**Worker agents were built another way than section 8 sketched them.** In the sketch the
+main agent waits for its worker. What is built is a worker that runs beside it, as a
+background job: [addon-agents.md](addon-agents.md).
 
 **Where the code went further than this document:**
 - The loader makes nine checks, not four. An exposed function needs a docstring and type
@@ -37,8 +39,8 @@ The six open questions at the end were all settled as recommended.
    calls `prompt()` and skips any addon that fails.
 4. **The machine gets a short list at boot and reads a manual only when it needs one.** The
    main prompt stays the same; it only gains a short section on how addons work.
-5. **Later, an addon may bring a worker agent** that does long tasks and never writes to the
-   screen.
+5. **An addon may bring a worker agent** that does long tasks and never writes to the
+   screen. It is built, as a background job: [addon-agents.md](addon-agents.md).
 
 ---
 
@@ -245,6 +247,12 @@ songs for the user, and each played on the first try.
 ---
 
 ## 8. Later: worker agents
+
+**This section is the old sketch, and it wasn't built.** In it the main agent waits for its
+worker, and can't draw meanwhile. The design that replaced it is
+[addon-agents.md](addon-agents.md), which is built: an addon's agent runs beside the main
+agent as a background job, with a pid, its own folder and its own budget, and its end
+arrives as an event. What follows is kept as it was written.
 
 An addon may bring its own agent. The main agent runs it when a task is large.
 

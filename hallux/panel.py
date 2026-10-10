@@ -36,6 +36,7 @@ class Tab:
     container: AnyContainer           # its part of the screen
     bindings: KeyBindingsBase         # its keys: they act only while it is the shown tab
     typing = False                    # True while a row is open for typing: the letters are its own
+    esc = "close"                     # what Esc does in it, for the foot: Details says "back"
     host: Panel
 
     def attach(self, host: Panel) -> None:
@@ -206,7 +207,7 @@ class Panel:
         if not self.tab.typing:                          # while it is, the letters and Esc are its
             if len(self.tabs) > 1:
                 keys.append(" ".join(tab.title[:1].lower() for tab in self.tabs) + " tabs")
-            keys.append("Esc close")
+            keys.append(f"Esc {self.tab.esc}")
         return [(f"fg:{GRAY}", " " + " · ".join(key for key in keys if key))]
 
     # ---------------------------------------------------------------- the host's keys

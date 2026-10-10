@@ -55,6 +55,9 @@ user@hallux:~$ cowsay moo
     action keys go to the AI.
   - **Raw mode**, for `top`, `htop`, games and menus: every key and click goes to the AI, with
     optional live updates.
+  - **Job control:** Ctrl-Z puts a full-screen program aside, and `fg` brings it back exactly
+    as it was, unsaved text included. Hallux keeps the screen, so the AI doesn't write it
+    again.
 - **A modern terminal:**
   - colors and window titles;
   - streaming output, shown while it's being written;
@@ -64,9 +67,13 @@ user@hallux:~$ cowsay moo
   so far and how long the last answer took. The AI can never draw on it.
 - **A settings panel:** Ctrl+F12 opens Hallux's own panel over whatever is on screen. Budgets
   and the model change while the machine runs, and Save writes them to the machine's
-  `config.toml`. The AI never learns of it.
+  `config.toml`. Two more tabs show the background jobs, live. The AI never learns of it.
 - **Addons:** real hardware for the machine, one Python file each. The example opens a real
   window on your desktop that the machine can read and paint.
+- **Background jobs:** an addon can bring an agent, a second Claude session that does a long
+  task while you go on working at the shell. The music addon's composer writes whole songs
+  that way. `ps` and `jobs` list a job, `kill` ends it, and its work appears on the disk
+  when it is done.
 - **Safe by construction:**
   - the AI has no tools except Hallux's own and the addons you install;
   - every path is jailed to the machine's folder;
@@ -145,7 +152,8 @@ same machine back.
 |---|---|
 | Typing, arrows, Backspace, Home/End, ↑/↓ | Line editing, handled instantly by the terminal |
 | Ctrl-C, Ctrl-D, Ctrl-Z, Ctrl-L, Ctrl-R, Tab, F1–F12, … | Sent to the machine, which reacts like bash or the running program would |
-| **Ctrl+F12** | Opens Hallux's own settings panel, over the shell or a full-screen program. Esc or Ctrl+F12 closes it. The key never reaches the machine |
+| Ctrl-Z in a full-screen program, then `fg` | The program is put aside with its screen and everything typed into it, and the shell is back. `fg` brings it back as it was, `jobs` lists what is suspended, and `kill %1` ends it |
+| **Ctrl+F12** | Opens Hallux's own panel, over the shell or a full-screen program: the settings in its Config tab, and the background jobs in its Agents and Details tabs. Esc or Ctrl+F12 closes it. The key never reaches the machine |
 | **Ctrl+Shift+Del**, or **Ctrl-C three times within a second** | Hard power-off: Hallux quits immediately, whatever the AI is doing |
 
 ### The `hallux` command
@@ -177,6 +185,10 @@ tools and decides what to do with them. An addon defines no commands.
 - **An addon can report events,** such as a button pressed in its window. The AI hears them
   only after it has asked to listen, and each event it hears is a model call. A budget,
   `event_budget_usd`, limits what events may spend while you aren't typing.
+- **An addon can bring an agent:** a worker that runs as a background job. It is a Claude
+  session of its own, with its own instructions, and it works in one folder, without a
+  screen. The call that starts it returns a pid at once, the shell stays free, and the
+  job's end arrives as an event. See [Background jobs](#background-jobs).
 
 ### The example: a real window
 
@@ -242,14 +254,55 @@ SONG:
   tune.score: 16.8 s, peak 64%
   ```
 
+- **`check(path, loop)`** renders a score without a sound and returns what `play` would
+  return for it. A song that is playing plays on.
+- **`compose(request, folder, edit)`** has the composer write a song: the addon's agent,
+  which works in the background (see [Background jobs](#background-jobs)). It writes one
+  score file into the folder, or changes the scores listed in `edit`, and checks its work
+  with `check` until the score is clean.
+
+  ```text
+  user@hallux:~$ hallux install a program called compose: "compose WHAT" has the music
+  addon's composer write that song into ~/Music, in the background
+  user@hallux:~$ compose a drum solo in four parts
+  compose: job 30001 started
+  user@hallux:~$ ls ~/Music                                 # the shell is free meanwhile
+  user@hallux:~$
+  [1]+  Done                    compose a drum solo in four parts
+  compose: job 30001 wrote ~/Music/drum-solo.score (265 s)
+  user@hallux:~$ play ~/Music/drum-solo.score
+  ```
+
 - **A score is an ordinary file.** It survives a reboot, you can edit it in `nano`, and
   playing it again costs one call.
-- **Writing a score is the slow part:** half a minute or so for a new song. Rendering it
+- **Writing a score is the slow part:** half a minute or so for a new song that the machine
+  writes itself, and some minutes for one the composer writes at high effort. Rendering it
   takes a fraction of a second.
 - **To hear a score without the machine:** `.venv/bin/python tests/music_play.py FILE`.
 
 The format, the instruments and the limits are in [docs/addon-music.md](docs/addon-music.md).
 What the AI reads before it writes a score is the manual in `addons/music.py`.
+
+### Background jobs
+
+A job is real work that an addon's agent does while the machine goes on answering you. The
+machine starts it by calling an addon function, such as the music addon's `compose`.
+
+- **A job has a pid, from 30001 up,** and it is real. `ps`, `top` and `jobs` show it among
+  the processes the machine imagines, and `kill 30001` ends it.
+- **The status bar shows a running job:** `music: balancing the mix · 0:48 · 21k tok`.
+- **Its work lands when it ends well.** Until then nothing of it is in the folder. A job
+  that is killed or fails leaves the folder as it was.
+- **Its end is an event.** A machine that listens to the addon hears it at once, and bash
+  prints its `Done` line. Otherwise it comes with your next line.
+- **Ctrl+F12 shows the jobs.** The Agents tab lists every job and every agent that could
+  start one. Enter opens Details: what the job is doing, call by call, as it happens. `k`
+  kills a running job.
+- **Limits:** one agent per addon, one job of it at a time, and two jobs at once over all
+  addons. Each job has a budget and a time limit: see [Configuration](#configuration).
+- **A reboot or a power-off ends every job.**
+
+The design is in [docs/addon-agents.md](docs/addon-agents.md).
 
 ### Writing an addon
 
@@ -276,16 +329,70 @@ EXPOSED = [roll]
 - **The first line of the docstring** is the summary the machine sees at boot.
 - **`prompt()`** returns the manual.
 - **`EXPOSED`** lists the functions the AI may call. Nothing else in the file is reachable.
-- **Each function** needs a docstring and type hints (`str`, `int`, `float` or `bool`). It
-  returns a small dictionary, and it returns quickly: after 10 seconds the AI gets an error.
+- **Each function** needs a docstring and type hints (`str`, `int`, `float`, `bool` or
+  `list[str]`). It returns a small dictionary, and it returns quickly: after 10 seconds the
+  AI gets an error.
 - **A file of the machine** is read through a handle, never opened by the addon itself: that
   would work around the path jail. A function whose first parameter is called `disk`, as in
   `def play(disk, path: str)`, gets one with `read_text(path)` and `write_text(path, content)`.
   The AI never sees that parameter.
-- **Optional:** `stop()`, called when a boot ends, to close whatever is still open; and
-  `connect(emit)`, to report events.
+- **Optional:** `stop()`, called when a boot ends, to close whatever is still open;
+  `connect(emit)`, to report events; and `agent()`, for work in the background.
 
 The design is in [docs/addons.md](docs/addons.md) and [docs/addon-events.md](docs/addon-events.md).
+
+**An addon with an agent** has two more parts: `agent()`, which says who the agent is, and
+a function with a parameter called `spawn`, which starts its job.
+
+```python
+# addons/poet.py
+"""A poet: writes a poem into a folder while you go on working."""
+
+
+def prompt() -> str:
+    return ("write(request, folder) has the poet write a poem into that folder. It returns "
+            "a pid at once, and the poem isn't there yet. Its end comes as an event.")
+
+
+def agent() -> dict:
+    return {
+        "name": "poet",                          # how its jobs show in ps and in the panel
+        "prompt": "Write the poem you are asked for as one text file in your folder.",
+        "tools": [],                             # the functions of this file it may call
+    }
+
+
+def write(spawn, request: str, folder: str) -> dict:
+    """Have the poet write a poem into this folder. Returns the pid of its job at once."""
+    return {"pid": spawn(request, folder)}
+
+
+EXPOSED = [write]
+```
+
+- **`agent()`** returns a dictionary. `name`, `prompt` and `tools` are required. `effort`
+  asks for an effort, and `status` is the job's status line until it sets one itself.
+- **`tools`** lists the functions of the addon that the agent may call. It is separate from
+  `EXPOSED`: a function can be for the agent, for the machine, or for both.
+- **`spawn(brief, folder, edit)`** starts a job and returns its pid at once. The AI never
+  sees the parameter. A function that takes `disk` too has `disk` first.
+  - `brief` is the job's task, as text: at most 2000 characters.
+  - `folder` is where the job works. It has to exist, and can't be `/`, a home folder
+    itself or a system folder.
+  - `edit` lists up to 8 files in that folder that the job may change. Without it the job
+    can only create files.
+  - It raises when the job can't start, and the AI gets the reason as an error name:
+    `EAGAIN` when the agent's job already runs or a budget is used up.
+- **What a job can reach:** four file tools in its folder (`list_dir`, `read_file`,
+  `write_file`, `edit_file`), `set_status` for one line of text, and the functions in
+  `tools`. It has no screen, no memory tools, no other addon, and it can't start a job.
+- **What it writes goes to private copies.** They are put in place when the job ends well:
+  at most 16 files and 1 MB. If somebody changed one of the files meanwhile, nothing is
+  replaced: the job's versions land beside them, with `.new` added to their names.
+- **The model and the limits aren't the addon's.** `config.toml` decides them: see
+  [Configuration](#configuration).
+
+The design is in [docs/addon-agents.md](docs/addon-agents.md).
 
 > **An addon runs with your full rights.** It runs inside Hallux, outside the path jail and
 > outside `os_sandbox`. Putting a file into `addons/` is the same as running it, so only
@@ -308,6 +415,14 @@ event_budget_usd = 0.25          # addon events, since the last line you typed
 addons = ["window"]              # the addons this machine gets; left out: all that loaded
 keep_transcripts = false         # let Claude Code also keep its own session transcript
 os_sandbox = false               # run Claude Code under bubblewrap
+
+# The addons' agents and their background jobs. The numbers are the defaults.
+agent_model = "claude-opus-5-5"  # the model of every job; left out: the one the machine runs on
+agent_max_effort = "high"        # an agent gets the effort it asks for, or this if it asks for more
+agent_max_running = 2            # jobs at the same time, over all addons; 0 turns the agents off
+agent_job_budget_usd = 2.0       # what one job may cost; a job that uses it up is killed
+agent_budget_usd = 4.0           # all jobs together, since you last typed a line or pressed a key
+agent_timeout_seconds = 600      # how long one job may run
 ```
 
 **Ctrl+F12 opens the settings panel:** at the shell, while the AI answers, and over a
@@ -317,6 +432,7 @@ changes the machine while it runs.
 | Setting | A change takes effect |
 |---|---|
 | `model`, `max_budget_usd`, `tick_budget_usd`, `event_budget_usd` | At once. A new model answers the next line |
+| The six `agent_…` settings | With the next job: every job is a new session. The panel shows them on a machine that has an addon with an agent |
 | `effort`, `fallback_model` | At the machine's next `reboot` |
 | `status_bar`, `addons`, `keep_transcripts`, `os_sandbox` | When Hallux starts: edit `config.toml` |
 
@@ -329,6 +445,14 @@ changes the machine while it runs.
   it in the panel, or press Ctrl-D to power off.
 - **The first answer after a model switch costs more, once:** the new model reads the whole
   conversation of the boot at the full price.
+- **`agent_budget_usd` is filled again when you do something:** a typed line, or a key in a
+  full-screen program. It is there to stop a loop in which jobs start each other while
+  nobody is at the keyboard. Refill budgets fills it too.
+- **A job that uses up `agent_job_budget_usd` or `agent_timeout_seconds` is killed,** and
+  nothing it wrote lands.
+- **Jobs count towards `max_budget_usd`, each when it has ended.** A job that still runs
+  isn't counted, so a boot can pass its cap by what its running jobs spend: at most
+  `agent_budget_usd`.
 
 ## Cost and speed
 
@@ -341,6 +465,18 @@ the machine's log. A few ways to keep it in check:
 - **Rely on partial redraws:** full-screen programs only resend the rows that change.
 - **Give a machine only the addons it uses.** Each addon adds its tools to every request,
   and every event it reports to a listening machine is a call of its own.
+
+**The `~` in front of a cost,** as in `~$1.42` on the bar and in the panel, says what kind
+of number it is: what the tokens would cost at the API's list prices. With a Claude
+subscription nobody is billed that amount.
+
+**A background job is a second session, with a cost of its own.** The panel's Agents tab
+shows it for each job, and the bar's total has it once the job has ended.
+- **The first composition,** a drum solo written on Opus at high effort, took 265 seconds
+  and cost $0.78.
+- **A job can pass `agent_job_budget_usd` by one model message:** the budget is looked at
+  after each message, never inside one.
+- **What a killed job cost can be short by one message,** the one that the kill cut.
 
 ## Safety and privacy
 
@@ -361,8 +497,15 @@ the machine's log. A few ways to keep it in check:
 - **Addons are the exception to the jail.** An addon is Python code that runs with your full
   rights, and what it returns goes to the model. Hallux only loads addons from `addons/` in
   this repo, never from a folder a machine can write to. See [Addons](#addons).
+- **A background job reaches less than the machine does.** It works in one folder, which
+  the machine names when it starts the job: never `/`, a home folder itself or a system
+  folder. It creates new files and changes only the files it was given; every other file
+  is read-only for it, and it can't create a dotfile. Its work stays in private copies
+  until it ends well, and is never written over a change that somebody else made
+  meanwhile. It has no screen, no access to the machine's memory, and it can't start a job.
 - **Everything else the machine reads is sent to Anthropic's API,** because that's where the
-  model runs. Don't put real secrets into a world folder.
+  model runs. That holds for a job too: what it reads in its folder goes there. Don't put
+  real secrets into a world folder.
 
 ## Project layout
 
@@ -377,11 +520,15 @@ hallux/
   blockmode.py       full-screen programs: block mode and raw mode
   statusbar.py       the bottom status row
   panel.py           Hallux's own settings panel (Ctrl+F12): the host with its tab row
-  panel_tabs/        the panel's tabs, one file each: config.py
+  panel_tabs/        the panel's tabs, one file each: agents.py, details.py, config.py
   disk.py, tools.py  the path jail and the agent's tools
   addons.py          loading addons, calling their functions, their events
+  agents.py          the addons' agents: the background jobs, their caps and their sessions
+  jobdisk.py         a job's fenced disk: one folder, private copies, the landing
   passwords.py       password prompts: checked locally, never sent to the AI
   prompt.md          the system prompt: most of the machine's behavior
+  prompt_jobs.md     its last section, for a machine that can start a job
+  agent.md           the rules every background worker gets
   script.py          headless runs and the reboot check
   sandbox.py         optional bubblewrap wrapper
   config.py          config.toml and flags
@@ -410,6 +557,8 @@ and persistence, is checked with `--check reboot` and `--script`.
 - [docs/config-panel.md](docs/config-panel.md): the settings panel
 - [docs/addons.md](docs/addons.md): addons, and [docs/addon-events.md](docs/addon-events.md):
   their events
+- [docs/addon-music.md](docs/addon-music.md): the music addon and its score format
+- [docs/addon-agents.md](docs/addon-agents.md): addon agents, background jobs and job control
 
 ## License
 

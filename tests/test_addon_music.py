@@ -4,6 +4,7 @@ the sound card into a file, and stand-in children do what a real one doesn't do 
 import asyncio
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -114,11 +115,16 @@ def beginning_of(sound_file, text):
 def test_the_file_passes_every_check_of_the_loader(addon):
     assert addon.name == "music"
     assert addon.summary == "A sound card: plays score files with bytebeat instruments."
-    assert list(addon.functions) == ["play", "stop"]
+    assert list(addon.functions) == ["play", "stop", "check", "compose"]
     assert addon.stop is addon.functions["stop"]          # the hook is the tool
     assert addon.has_events                               # it has connect(emit)
-    for part in ("play(path, loop)", "stop()", '{"event": "finished"}', "addon_listen"):
+    for part in ("play(path, loop)", "stop()", "check(path, loop)", '{"event": "finished"}',
+                 "addon_listen", "compose(request, folder, edit)"):
         assert part in addon.manual
+    agent = addon.agent                                   # and its agent, the composer
+    assert (agent.name, agent.effort, agent.status) == ("composer", "high", "composing…")
+    assert agent.tools == {"check": addon.functions["check"]}     # and nothing else of its
+    assert agent.prompt.startswith("You compose for a sound card that plays score files")
 
 
 def test_hallux_itself_never_imports_numpy_or_pygame():
@@ -130,15 +136,17 @@ def test_hallux_itself_never_imports_numpy_or_pygame():
     assert (done.stdout, done.stderr) == ("1 {} []\n", "")
 
 
-def test_the_tools_are_play_and_stop_and_the_ai_never_sees_the_disk(play):
-    assert list(play.tools) == ["play", "stop"]
+def test_the_tools_are_play_stop_check_and_compose_and_the_ai_never_sees_the_disk(play):
+    assert list(play.tools) == ["play", "stop", "check", "compose"]
     assert play.tools["play"].input_schema == {
         "type": "object", "properties": {"path": {"type": "string"}, "loop": {"type": "boolean"}},
         "required": ["path"], "additionalProperties": False}
     assert play.tools["stop"].input_schema["properties"] == {}
+    assert play.tools["check"].input_schema == play.tools["play"].input_schema
     assert all(tool.description for tool in play.tools.values())
-    with pytest.raises(jsonschema.ValidationError):
-        play("play", disk="/", path="/home/user/beat.score")
+    for tool in ("play", "check"):
+        with pytest.raises(jsonschema.ValidationError):
+            play(tool, disk="/", path="/home/user/beat.score")
 
 
 def test_without_numpy_the_addon_is_skipped_with_the_reason(monkeypatch, tmp_path):
@@ -301,6 +309,155 @@ def test_a_child_that_never_starts(play, music, monkeypatch):
     assert music._link is None
 
 
+def test_a_crash_is_told_without_colours(play, music, monkeypatch):
+    """With FORCE_COLOR set in the shell, Python colours a child's traceback, and its last line
+    is what the AI is told. Every child is started with colours off."""
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    stand_in(music, HELLO + 'sys.stdin.readline()\nraise RuntimeError("out of notes")')
+    assert play("play", path="/home/user/short.score") == (
+        {"error": "MusicError: the sound card stopped: it crashed (RuntimeError: out of notes)"},
+        True)
+    assert play("check", path="/home/user/short.score") == (
+        {"error": "MusicError: the check stopped: it crashed (RuntimeError: out of notes)"}, True)
+
+
+# ---------------------------------------------------------------- checking
+
+def test_check_returns_what_play_returns_and_makes_no_sound(play, music, sound):
+    assert play("check", path="/home/user/beat.score") == (
+        {"ok": True, "seconds": 8.0, "peak": 98}, False)
+    assert play("check", path="/home/user/short.score") == (
+        {"ok": True, "seconds": 0.2, "peak": 78}, False)
+    assert not sound.exists()                             # the disk driver was never opened
+    assert music._link is None                            # and no child stays behind
+    assert play("play", path="/home/user/short.score") == (
+        {"ok": True, "seconds": 0.2, "peak": 78}, False)   # the same numbers, with the sound
+
+
+def test_check_needs_no_sound_device(play, monkeypatch):
+    monkeypatch.setenv("SDL_AUDIODRIVER", "nosuchdriver")
+    assert play("play", path="/home/user/beat.score")[1] is True      # no sound can get out
+    assert play("check", path="/home/user/beat.score") == (
+        {"ok": True, "seconds": 8.0, "peak": 98}, False)
+
+
+def test_check_follows_the_machines_working_directory(play, world):
+    assert play("check", path="beat.score") == ({"error": "ENOENT"}, True)
+    world.chdir("/home/user")
+    assert play("check", path="beat.score") == ({"ok": True, "seconds": 8.0, "peak": 98}, False)
+
+
+def test_check_refuses_the_files_play_refuses(play, music, world, tmp_path):
+    (tmp_path / "secret.score").write_text(SHORT)
+    (world.root / "out.score").symlink_to(tmp_path / "secret.score")
+    (world.root / "big.score").write_text(SHORT + "#" * (64 * 1024))
+    (world.root / "huge.score").write_text("#" * (1024 * 1024 + 1))
+    (world.root / "fits.score").write_text(SHORT + "#" * (64 * 1024 - len(SHORT)))
+    started = []
+    monkeypatch_run, music.subprocess.run = music.subprocess.run, (
+        lambda *args, **more: started.append(args) or monkeypatch_run(*args, **more))
+    try:
+        for path, error in [("/nowhere.score", "ENOENT"), ("/out.score", "EACCES"),
+                            ("/home", "EISDIR"), ("/.hallux/memory.md", "ENOENT"),
+                            ("/big.score", "MusicError: the score is bigger than 64 KB"),
+                            ("/huge.score", "EFBIG")]:
+            assert play("check", path=path) == ({"error": error}, True), path
+        assert started == []                              # no child was started for those
+        assert play("check", path="/fits.score")[1] is False     # exactly 64 KB is fine
+        assert len(started) == 1
+    finally:
+        music.subprocess.run = monkeypatch_run
+
+
+def test_check_of_a_score_with_mistakes_has_every_line(play, world):
+    (world.root / "bad.score").write_text(
+        "BPM = 120\nINSTRUMENT lead:\n    sin(p) * CUTOF >> 8\nSONG:\n    (0, 8, H4, lead)\n")
+    told = ({"error": "MusicError: line 3: unknown name CUTOF\n"
+                      "line 5: lead is an instrument: its value is a note such as A4, not H4"}, True)
+    assert play("check", path="/bad.score") == told
+    assert play("play", path="/bad.score") == told        # word for word what play says
+
+
+def test_the_loudness_report_of_a_check(play, world):
+    (world.root / "loud.score").write_text(
+        "BPM = 300\nINSTRUMENT loud:\n    sin(p) * 2\nSONG:\n    (0, 4, A4 C5, loud)\n")
+    assert play("check", path="/loud.score") == (
+        {"ok": True, "seconds": 0.1, "peak": 200, "turned_down_to": 49, "clipped": ["loud"]},
+        False)
+
+
+def test_check_of_a_loop_returns_what_play_returns_for_the_loop(play, world):
+    """A loop whose tails ring past its end has them mixed into its later rounds: it is one
+    round long, and louder than the song played once."""
+    (world.root / "rings.score").write_text(
+        "BPM = 300\nINSTRUMENT ring 3000:\n    sin(p) * decay(t - dur, 800) * vel >> 24\n"
+        "SONG:\n    (0, 4, A4, ring, 200)\n")
+    once = ({"ok": True, "seconds": 0.2, "peak": 78}, False)
+    as_a_loop = ({"ok": True, "seconds": 0.1, "peak": 148, "turned_down_to": 67}, False)
+    assert play("check", path="/rings.score") == play("check", path="/rings.score", loop=False) == once
+    assert play("check", path="/rings.score", loop=True) == as_a_loop
+    assert play("play", path="/rings.score") == once
+    assert play("play", path="/rings.score", loop=True) == as_a_loop
+
+
+def test_check_leaves_a_song_that_plays_alone(play, music, sound):
+    play("play", path="/home/user/beat.score", loop=True)
+    child = music._link.process
+    assert play("check", path="/home/user/short.score") == (
+        {"ok": True, "seconds": 0.2, "peak": 78}, False)
+    assert music._link.process is child and child.poll() is None     # the same child, alive
+    time.sleep(0.3)
+    play("stop")
+    assert beginning_of(sound, BEAT) > 5000               # and the beat went on meanwhile
+
+
+def test_check_doesnt_wait_for_a_play_that_is_rendering(music, world):
+    """A play holds the lock of the child that plays for as long as its render takes."""
+    with music._lock:
+        started = time.monotonic()
+        assert music.check(addons.DiskHandle(world), "/home/user/short.score") == {
+            "ok": True, "seconds": 0.2, "peak": 78}
+        assert time.monotonic() - started < 5
+
+
+def test_stop_during_a_check_doesnt_end_it(music, world):
+    stand_in(music, 'sys.stdin.read()\ntime.sleep(0.6)\n'
+                    'print(json.dumps({"ok": True, "seconds": 1.5, "peak": 50}), flush=True)')
+    answers = []
+    checking = threading.Thread(target=lambda: answers.append(
+        music.check(addons.DiskHandle(world), "/home/user/short.score")))
+    checking.start()
+    time.sleep(0.2)                                       # the check's child is running
+    assert music.stop() == {"ok": True}
+    checking.join(5)
+    assert answers == [{"ok": True, "seconds": 1.5, "peak": 50}]
+
+
+def test_a_check_that_takes_too_long(play, music, monkeypatch, tmp_path):
+    monkeypatch.setattr(music, "CHECK_SECONDS", 0.5)
+    monkeypatch.setenv("CHILD_SAYS_WHO", str(tmp_path / "pid"))
+    stand_in(music, 'import os\nopen(os.environ["CHILD_SAYS_WHO"], "w").write(str(os.getpid()))\n'
+                    'time.sleep(30)')
+    started = time.monotonic()
+    assert play("check", path="/home/user/beat.score") == (
+        {"error": "MusicError: the song took too long to render"}, True)     # play's words
+    assert time.monotonic() - started < 4
+    with pytest.raises(ProcessLookupError):               # the child is gone
+        os.kill(int((tmp_path / "pid").read_text()), 0)
+
+
+def test_a_check_child_that_ends_without_an_answer(play, music):
+    stand_in(music, "sys.exit(0)")
+    assert play("check", path="/home/user/short.score") == (
+        {"error": "MusicError: the check stopped"}, True)
+    stand_in(music, 'print("not an answer")\nsys.exit("no numpy for you")')
+    assert play("check", path="/home/user/short.score") == (
+        {"error": "MusicError: the check stopped: it crashed (no numpy for you)"}, True)
+    stand_in(music, 'print(json.dumps([1, 2]))')          # a line of JSON, and no answer
+    assert play("check", path="/home/user/short.score") == (
+        {"error": "MusicError: the check stopped"}, True)
+
+
 # ---------------------------------------------------------------- the event
 
 def test_finished_reaches_emit_and_only_for_a_song_that_ends_by_itself(play, music):
@@ -372,3 +529,121 @@ def test_a_finished_song_wakes_the_machine(sound, tmp_path):
     assert '<event addon="music">{"event": "finished"}</event>' in model.sessions[0][2]
     assert machine.terminal.screen == "boot\nplaying\nthat was the song\n"
     assert "mcp__music__play" in model.options[0].allowed_tools
+
+
+# ---------------------------------------------------------------- compose, and the composer
+
+class Spawn:
+    """What stands in for hallux's spawn: it notes its calls and hands out a pid, or refuses."""
+
+    def __init__(self, refuse=None):
+        self.calls, self.refuse = [], refuse
+
+    def __call__(self, *args):
+        if self.refuse:
+            raise self.refuse
+        self.calls.append(args)
+        return 30000 + len(self.calls)
+
+
+def composing(addon, world, spawn):
+    """The addon's compose as the AI calls it, with this in place of hallux's spawn."""
+    built = {tool.name: tool for tool in tools.build_addon_tools(addon, world, spawn)}
+
+    def call(**args):
+        jsonschema.validate(args, built["compose"].input_schema)
+        result = asyncio.run(built["compose"].handler(args))
+        return json.loads(result["content"][0]["text"]), result["is_error"]
+
+    call.tool = built["compose"]
+    return call
+
+
+def test_the_ai_never_sees_spawn_in_compose(addon, world):
+    compose = composing(addon, world, Spawn())
+    assert compose.tool.input_schema == {
+        "type": "object",
+        "properties": {"request": {"type": "string"}, "folder": {"type": "string"},
+                       "edit": {"type": "array", "items": {"type": "string"}}},
+        "required": ["request", "folder"], "additionalProperties": False}
+    assert compose.tool.description.startswith("Have the composer write a new song into this")
+    with pytest.raises(jsonschema.ValidationError):
+        compose(spawn="mine", request="a song", folder="/home/user")
+
+
+def test_compose_hands_the_request_the_folder_and_the_files_on_as_they_are(addon, world):
+    spawn = Spawn()
+    compose = composing(addon, world, spawn)
+    assert compose(request="dark techno with a cello", folder="/home/user/Music") == (
+        {"pid": 30001}, False)
+    assert compose(request="make the kick softer", folder="Music",
+                   edit=["Music/neon.score", "/home/user/Music/b.score"]) == ({"pid": 30002}, False)
+    assert spawn.calls == [("dark techno with a cello", "/home/user/Music", []),
+                           ("make the kick softer", "Music",
+                            ["Music/neon.score", "/home/user/Music/b.score"])]
+
+
+@pytest.mark.parametrize("refusal, told", [
+    (addons.Refused("EAGAIN"), {"error": "EAGAIN"}),                 # a cap is in the way
+    (addons.Refused("ENOENT", "/home/user/Musik"), {"error": "ENOENT", "path": "/home/user/Musik"}),
+    (addons.Refused("EACCES", "/home/user"), {"error": "EACCES", "path": "/home/user"}),
+])
+def test_a_job_that_cant_start_reaches_the_ai_as_hallux_says_it(addon, world, refusal, told):
+    assert composing(addon, world, Spawn(refusal))(request="a song", folder="/x") == (told, True)
+
+
+def test_a_machine_with_the_music_addon_can_start_a_job(addon, tmp_path):
+    from test_machine import FakeTerminal
+
+    from hallux.machine import JOBS_PROMPT, Machine
+    options = Machine(tmp_path / "m", Hardware(), FakeTerminal(), addons=[addon]).options()
+    assert options.system_prompt.endswith(JOBS_PROMPT)
+    assert "mcp__hallux__list_processes" in options.allowed_tools
+    assert options.allowed_tools[-5:] == ["mcp__hallux__kill_process",
+                                          "mcp__music__play", "mcp__music__stop",
+                                          "mcp__music__check", "mcp__music__compose"]
+
+
+def test_a_composition_from_compose_to_the_landed_file(addon, tmp_path):
+    """With a stand-in for the model that writes the drum beat: compose returns a pid, the
+    composer's check reads the job's own copy and returns the beat's numbers, the file lands,
+    and the event names it."""
+    import functools
+
+    from test_agents import CHECK, ROOMY, STATUS, WRITE, Shop
+
+    root = tmp_path / "studio"
+    (root / "home" / "user" / "Music").mkdir(parents=True)
+
+    async def scenario():
+        shop = Shop(root, ROOMY)                         # real sessions, on a fake Claude
+        shop.jobs.addons = (addon,)
+        shop.scripts[30001] = ((("call", STATUS, {"text": "a drum beat"}),      # first, as its
+                                ("call", WRITE, {"path": "drum-beat.score", "content": BEAT}),
+                                ("call", CHECK, {"path": "drum-beat.score"})), {})   # role says
+        [compose] = [tool for tool in tools.build_addon_tools(
+            addon, shop.disk, functools.partial(shop.jobs.spawn, addon)) if tool.name == "compose"]
+        answer = await compose.handler({"request": "a drum beat", "folder": "/home/user/Music"})
+        pid = json.loads(answer["content"][0]["text"])["pid"]
+        before = (root / "home" / "user" / "Music" / "drum-beat.score").exists()
+        row = await shop.ended(pid)
+        await shop.closed()
+        lines = [(line.kind, line.text) for line in shop.jobs.kept[0].activity]
+        return pid, before, row, shop.events(), shop.claudes[0], lines
+
+    pid, before, row, [(name, event)], claude, lines = asyncio.run(
+        asyncio.wait_for(scenario(), 30))
+    assert pid == 30001 and not before and (row["state"], row["agent"]) == ("done", "composer")
+    assert lines[0] == ("status", "a drum beat") and row["status"] == "a drum beat"
+    read = score.read(BEAT)                              # what play returns for the beat
+    numbers = render.render(read, song.unfold(read)).report()
+    assert claude.answers[2] == ({"ok": True} | numbers, False)      # from the job's own copy
+    assert (root / "home" / "user" / "Music" / "drum-beat.score").read_text() == BEAT
+    assert name == "music" and event["files"] == ["/home/user/Music/drum-beat.score"]
+    assert claude.asked[0].startswith("a drum beat\n\nYour folder is /home/user/Music.")
+    options = claude.options                             # what the composer's session got
+    assert options.system_prompt.startswith(
+        'You are a background worker of a machine called "hallux": the composer of its music '
+        'addon.')
+    assert "A WHOLE SCORE" in options.system_prompt and options.effort == "high"
+    assert options.allowed_tools[-1] == CHECK and len(options.allowed_tools) == 6

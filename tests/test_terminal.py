@@ -466,6 +466,12 @@ def with_panel(script, cuts=None, bar=None):
 
 
 ESC, CTRL_F12 = "\x1b", "\x1b[24;5~"
+# What a terminal of 40 rows writes with its bar: off the shell's screen before the alternate
+# screen is taken (no region, and the bar's row erased), the start of every draw of it, and
+# the start of the draw that puts it back: a line down first, in case the cursor came back
+# on the bottom row (that draw ends a row up again).
+BAR_OFF, PINNED = "\x1b7\x1b[r\x1b[40;1H\x1b[0m\x1b[2K\x1b8", "\x1b7\x1b[1;39r\x1b[40;1H"
+BACK = "\x1bD" + PINNED
 
 
 def test_ctrl_f12_at_the_prompt_and_the_line_is_back():
@@ -580,13 +586,14 @@ def test_a_visit_takes_the_bar_off_the_screen_and_puts_it_back():
             return region_off, during, list(written)
 
     region_off, during, after = with_panel(script, bar=bar)
-    assert region_off == "\x1b7\x1b[r\x1b8"              # the whole screen is the panel's
+    assert region_off == BAR_OFF                         # the whole screen is the panel's
     assert during == []                                  # no text, no bar, nothing for the resize
-    old_row, pinned = "\x1b7\x1b[30;1H\x1b[0m\x1b[2K\x1b8", "\x1b7\x1b[1;39r\x1b[40;1H"
     text = after.index("kept\n")
-    assert after[0] == old_row and text >= 2             # afterwards: the bar's old row is wiped
-    assert "$0.50" in after[1]                           # and it is pinned for the new size,
-    assert all(draw.startswith(pinned) for draw in after[1:text] + after[text + 1:])  # first
+    assert text >= 1 and "$0.50" in after[0]             # afterwards the bar comes first, pinned
+    assert after[0].startswith(BACK) and after[0].endswith("\x1b[1A")      # for the new size.
+    assert all(draw.startswith(PINNED) for draw in after[1:text] + after[text + 1:])
+    assert not any("[30;1H" in draw for draw in after)   # Its old row isn't wiped: no bar
+                                                         # waited on the shell's screen
 
 
 def test_after_a_visit_the_bar_is_pinned_before_the_kept_text_is_printed():
@@ -608,7 +615,7 @@ def test_after_a_visit_the_bar_is_pinned_before_the_kept_text_is_printed():
             return list(written)
 
     after = with_panel(script, bar=bar)
-    assert after[0].startswith(pin)                      # first the region,
+    assert after[0].startswith(BACK)                     # first the region,
     assert after[1] == "one\n" and after[2].startswith(pin)     # then the text, as write() does
     assert after[3] == "two\n" and all(draw.startswith(pin) for draw in after[4:])
 
@@ -769,3 +776,168 @@ def test_in_a_program_the_end_of_an_answer_waits_for_the_panel():
     waiting, closed, ended = with_panel(script)
     assert waiting == (True, True, [])                   # a layer, and busy() hasn't ended
     assert closed == (False, False, None) and ended == ["the answer is over"]
+
+
+# --- the bar while a job of an addon's agent runs ---------------------------------------------
+
+def test_the_bar_is_drawn_again_while_a_job_runs_and_the_prompt_waits(monkeypatch):
+    """A job's time moves while the user sits at the prompt, where nothing else draws. A
+    terminal on a pipe pins no bar and writes none, so the test pins it by hand."""
+    import time
+
+    from hallux import terminal as terminal_module
+    from hallux.statusbar import Running
+    monkeypatch.setattr(terminal_module, "BEAT_SECONDS", 0.1)       # a second, in the real thing
+    bar = StatusBar("claude-opus-5-5", "low")
+
+    async def script(terminal, type_keys, panel, written):
+        terminal.pinned = terminal.output.get_size()     # as on a real terminal: 40 rows
+        reading = asyncio.create_task(terminal.read_line("$ "))
+        type_keys("ls -l")
+        await typed_in(terminal, "ls -l")
+        del written[:]
+        await asyncio.sleep(0.35)
+        without_a_job = list(written)                    # nothing is drawn, as before
+        terminal.set_status(jobs=(Running("music", "composing", time.monotonic() - 47.5, 21340),))
+        del written[:]                                   # the draw of the change itself
+        await asyncio.sleep(0.45)
+        with_one, line = list(written), terminal.session.app.current_buffer.text
+        beating = terminal.beat is not None
+        terminal.set_status(jobs=())                     # it has ended
+        await asyncio.sleep(0.25)
+        del written[:]
+        await asyncio.sleep(0.35)
+        type_keys("a\r")
+        return without_a_job, with_one, line, beating, list(written), terminal.beat, await reading
+
+    without_a_job, with_one, line, beating, after, beat, read = with_panel(script, bar=bar)
+    assert without_a_job == []
+    assert 3 <= len(with_one) <= 5 and beating           # once a beat, and no more often
+    assert all(draw.startswith("\x1b7\x1b[1;39r\x1b[40;1H") and draw.endswith("\x1b8")
+               for draw in with_one)                     # the bar's row, and the cursor back
+    assert all("music: composing · 0:4" in draw and "21k tok" in draw for draw in with_one)
+    assert line == "ls -l" and read == "ls -la"          # what was typed is still the line
+    assert after == [] and beat is None                  # no job: nothing is drawn again
+
+
+def test_the_beat_draws_the_panel_and_a_full_screen_program_too():
+    """Drawing again goes through one function, which draws whatever is hallux's own on the
+    screen now: the panel's tabs (step 16) show the jobs' times."""
+    bar, drawn = StatusBar("claude-opus-5-5", "low"), []
+
+    async def script(terminal, type_keys, panel, written):
+        terminal.pinned = terminal.output.get_size()
+        panel.invalidate = lambda: drawn.append("panel")
+        terminal.block.invalidate = lambda: drawn.append("program")
+        async with terminal.busy(lambda: None):
+            type_keys(CTRL_F12)
+            await asyncio.sleep(0.3)
+            del drawn[:], written[:]
+            terminal.refresh()
+            at_the_panel = list(drawn), list(written)
+            type_keys(ESC)
+            await asyncio.sleep(0.3)
+        del drawn[:], written[:]
+        terminal.refresh()
+        return at_the_panel, (list(drawn), len(written))
+
+    at_the_panel, at_the_shell = with_panel(script, bar=bar)
+    assert at_the_panel == (["panel"], [])               # the bar is the panel's last row then
+    assert at_the_shell == ([], 1)                       # and at the shell it is the bar itself
+
+
+# --- a full-screen program that is put aside and put back -------------------------------------
+
+def test_a_suspended_form_gives_the_screen_back_and_a_resumed_one_takes_it(tmp_path):
+    """The bar is pinned again after suspend_form, as after end_form, and resume_form gives
+    the program the whole screen, as show_form does. A terminal on a pipe pins no bar, so
+    the test pins it by hand."""
+    from hallux.protocol import Form
+    bar = StatusBar("claude-opus-5-5", "low")
+    whole_screen = BAR_OFF
+
+    async def script(terminal, type_keys, panel, written):
+        terminal.pinned = terminal.output.get_size()     # as on a real terminal: 40 rows
+        await terminal.show_form("player\ncomposing…\n", Form((), raw=True))
+        shown = list(written)
+        del written[:]
+        await terminal.suspend_form(1)
+        suspended = list(written), terminal.block.active, terminal.suspended_forms()
+        del written[:]
+        nothing = await terminal.resume_form(9), list(written)       # no such number
+        back = await terminal.resume_form(1)
+        resumed = list(written), terminal.block.active, terminal.suspended_forms()
+        await terminal.suspend_form(2)
+        terminal.forget_form(2)
+        await terminal.end_form()
+        return shown, suspended, nothing, back, resumed, terminal.suspended_forms()
+
+    shown, suspended, nothing, back, resumed, left = with_panel(script, bar=bar)
+    assert shown == [whole_screen]
+    assert len(suspended[0]) == 1 and suspended[0][0].startswith(BACK)
+    assert suspended[1:] == (False, [1])
+    assert nothing == (False, []) and back is True
+    assert resumed == ([whole_screen], True, []) and left == []
+
+
+def test_a_full_screen_program_leaves_no_bar_on_the_shells_screen():
+    """While a program has the alternate screen, the shell's screen waits behind it. When the
+    window's width changes meanwhile, the terminal lays the waiting screen out again, and a
+    bar left on it moves up or down with the lines that wrap differently. The bar that is
+    drawn when the program ends is on the bottom row and doesn't cover it, and the old one
+    scrolls into the text (docs/user-issues has the screenshot). So the bar's row is erased
+    before the program comes, and nothing is wiped afterwards: where the bar was, there may
+    be text by then. And the bar is put back with a line down and a row up around it: with
+    its row empty, a window that got shorter can leave the cursor on the bottom row."""
+    from prompt_toolkit.data_structures import Size
+
+    from hallux.protocol import Form
+    bar = StatusBar("claude-opus-5-5", "low")
+
+    async def script(terminal, type_keys, panel, written):
+        terminal.pinned = Size(rows=30, columns=60)      # the window before: 30 rows of 60
+        await terminal.show_form("htop\n", Form((), raw=True))
+        before = list(written)                           # and 40 rows of 80 from here on
+        del written[:]
+        terminal._check_size()                           # a resize while the program is up
+        await terminal.end_form()
+        after, pinned_for = list(written), terminal.pinned
+        del written[:]
+        terminal._check_size()                           # the next prompt asks again
+        return before, after, pinned_for == terminal.output.get_size(), list(written)
+
+    before, after, pinned_for_now, later = with_panel(script, bar=bar)
+    assert before == [BAR_OFF]                           # no region, and the bar's row erased
+    assert len(after) == 1 and after[0].startswith(BACK)        # the bar, where the bottom is
+    assert after[0].endswith("\x1b8\x1b[1A")             # now, and the cursor above its row
+    assert pinned_for_now and later == []                # no row is wiped, then or later
+
+
+def test_done_when_an_editor_is_suspended_the_shell_is_used_and_the_editor_comes_back():
+    """The step's "Done when": text is typed into an editor field, the form is suspended,
+    something is typed at the shell prompt, the form is resumed, and the field holds exactly
+    the text from before."""
+    from hallux.protocol import Field, Form
+    editor = Form((Field("editor", "text", top=2, height=10, text="line one\nline two\n"),),
+                  keys=("C-o", "C-z"), keymap="nano")
+
+    async def script(terminal, type_keys):
+        await terminal.show_form("  GNU nano 7.2   notes.txt\n", editor)
+        type_keys("unsaved \x1b[B")
+        await asyncio.sleep(0.3)
+        before = terminal.field_text("text"), terminal.block.areas["text"].buffer.cursor_position
+        await terminal.suspend_form(1)
+        type_keys("ls -la\r")
+        line = await terminal.read_line("$ ")
+        resumed = await terminal.resume_form(1)
+        after = terminal.field_text("text"), terminal.block.areas["text"].buffer.cursor_position
+        type_keys("more ")
+        await asyncio.sleep(0.3)
+        typed_on = terminal.field_text("text")
+        await terminal.end_form()
+        return before, line, resumed, after, typed_on
+
+    before, line, resumed, after, typed_on = with_terminal(script)
+    assert before == ("unsaved line one\nline two\n", 25) == after     # one line down
+    assert line == "ls -la" and resumed is True
+    assert typed_on == "unsaved line one\nline twomore \n"         # where the cursor was
