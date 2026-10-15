@@ -19,7 +19,8 @@ seen half-copied (disk.copy_whole), and none is replaced that the user wasn't as
 
 Imports is what the machine has of all this, and all that the panel's Files tab knows: one
 list of what was dropped, one walk or one copy at a time, each in a thread of its own, and
-what there is to show of them.
+what there is to show of them. A copy that wrote something leaves a Note: the machine puts it
+in front of the AI's next message, so that the AI doesn't answer from what it saw before.
 """
 from __future__ import annotations
 
@@ -77,6 +78,8 @@ FAILED_MAX = 50                               # failures a copy names; the rest 
 EMPTY, LOOKING, READY, COPYING, DONE = "empty", "looking", "ready", "copying", "done"
 CHANGED_SECONDS = 0.1                         # how often a thread asks for the panel to be drawn
 CLOSE_SECONDS = 2.0                           # how long Hallux waits at its end for a thread
+NOTES_MAX = 8                                 # notes that wait for the AI; a ninth takes the
+                                              # oldest one's place
 
 Translate = Callable[[str], "str | None"]
 log = logging.getLogger("hallux")
@@ -575,6 +578,17 @@ class Seen:
     result: Result | None = None      # in DONE
 
 
+@dataclass(frozen=True, eq=False)
+class Note:
+    """What the AI is told of a copy that wrote something, in front of its next message. Two
+    copies of the same things are two notes."""
+    into: str                         # the destination, as the machine's path
+    files: int                        # as the copy's Result has them
+    folders: int
+    bytes: int
+    names: tuple[str, ...]            # the dropped names under which something was written
+
+
 class _Run:
     """A walk or a copy that runs in its thread."""
 
@@ -610,6 +624,7 @@ class Imports:
         self._lock = threading.Lock()                 # for what a thread reports:
         self._through = Counts()                      # how far the walk or the copy has come,
         self._asked = 0.0                             # and when it last asked to be drawn
+        self._notes: tuple[Note, ...] = ()            # for the AI, oldest first
 
     # ------------------------------------------------------------------ what the tab is shown
 
@@ -702,6 +717,20 @@ class Imports:
         self._drop_run()
         self._state = EMPTY                           # in which nothing reads what the list held
 
+    # ------------------------------------------------------------------ what the AI is told
+
+    def waiting(self) -> tuple[Note, ...]:
+        """The notes that wait for the AI, oldest first. They stay until they are told."""
+        return self._notes
+
+    def told(self, notes: Sequence[Note]) -> None:
+        """These notes went out with a message, and its answer has come back."""
+        self._notes = tuple(note for note in self._notes if note not in notes)
+
+    def forget(self) -> None:
+        """A boot starts: its session has seen nothing of the disk yet."""
+        self._notes = ()
+
     def close(self) -> None:
         """Hallux ends: stop what runs, and wait until it has stopped. A thread that doesn't
         answer in time is left to itself. It is a daemon thread and ends with Hallux."""
@@ -772,3 +801,6 @@ class Imports:
 
     def _copied(self, result: Result) -> None:
         self._result, self._state = result, DONE
+        if result.names:                              # something was written
+            note = Note(result.into, result.files, result.folders, result.bytes, result.names)
+            self._notes = (*self._notes, note)[-NOTES_MAX:]

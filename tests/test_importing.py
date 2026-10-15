@@ -19,8 +19,8 @@ from hallux.disk import TEMP_MARK, Disk, copy_whole
 from hallux.importing import (COPYING, DONE, EMPTY, EXISTS, FILE, FOLDER, FULL, HERE, IN_THE_WAY,
                               LEADS, LINK, LONGEST, LOOKING, MEANWHILE, MORE, NO_PLACE,
                               NOT_COPIED, OTHER, READY, STOPPED, UNREADABLE, Counts, Imports,
-                              Line, NotADrop, Result, Seen, Tree, carry_out, from_windows, look,
-                              read_drop)
+                              NOTES_MAX, Line, Note, NotADrop, Result, Seen, Tree, carry_out,
+                              from_windows, look, read_drop)
 
 DISTRO = "kali-linux"                         # the user's, in every text their terminals sent
 # Eight files, as the user dragged onto Windows Terminal at once on 2026-10-10. The first
@@ -1589,3 +1589,69 @@ def test_what_would_be_copied_is_what_has_no_mark_that_skips_it():
     assert Counts(folders=2, files=5, marks={EXISTS: 2, LEADS: 1}).to_copy == 7
     assert Counts(folders=2, files=5, marks={HERE: 1, IN_THE_WAY: 2, NO_PLACE: 1, UNREADABLE: 1,
                                              NOT_COPIED: 1, EXISTS: 1}).to_copy == 1
+
+
+# ================================================================ what the AI is told
+
+async def copy_of(files, *paths, overwrite=None):
+    """Drop these paths and copy them. Returns the result."""
+    assert files.drop(" ".join(str(path) for path in paths)) is None
+    await files.has(READY)
+    files.start(overwrite)
+    return (await files.has(DONE)).result
+
+
+def test_a_copy_that_wrote_something_leaves_a_note_until_it_is_told(disk, desk, music):
+    put(desk / "album", one_png="1", two_png="22")
+    put(desk, notes_txt="hello")
+
+    async def scenario():
+        files = Watched(disk)
+        assert files.imports.waiting() == ()
+        await copy_of(files, desk / "album", desk / "notes.txt")
+        first = files.imports.waiting()
+        await copy_of(files, desk / "notes.txt", overwrite=True)      # the same file, again
+        both = files.imports.waiting()
+        files.imports.told(first)
+        return first, both, files.imports.waiting()
+
+    first, both, left = in_a_loop(scenario)
+    (album,) = first
+    assert (album.into, album.files, album.folders, album.bytes, album.names) == (
+        MUSIC, 3, 1, 8, ("album/", "notes.txt"))
+    assert len(both) == 2 and both[0] is album and both[1] == left[0]    # the newer stays
+    assert (left[0].files, left[0].names) == (1, ("notes.txt",)) and len(left) == 1
+    assert both[1] != Note(*(getattr(both[1], name) for name in (
+        "into", "files", "folders", "bytes", "names")))             # each copy is its own
+
+
+def test_a_copy_that_wrote_nothing_leaves_no_note(disk, desk, music):
+    put(desk, notes_txt="hello")
+    (music / "notes.txt").write_text("mine")
+
+    async def scenario():
+        files = Watched(disk)
+        result = await copy_of(files, desk / "notes.txt", overwrite=False)
+        return result, files.imports.waiting()
+
+    result, waiting = in_a_loop(scenario)
+    assert result.skipped == {EXISTS: 1} and waiting == ()
+
+
+def test_at_most_eight_notes_wait_and_a_boot_forgets_them(disk, desk, music):
+    things = [desk / f"{n}.txt" for n in range(NOTES_MAX + 1)]
+    for thing in things:
+        thing.write_text("x")
+
+    async def scenario():
+        files = Watched(disk)
+        for thing in things:
+            await copy_of(files, thing)
+        waiting = files.imports.waiting()
+        files.imports.forget()
+        return waiting, files.imports.waiting(), files.watch().state
+
+    waiting, after, state = in_a_loop(scenario)
+    assert NOTES_MAX == 8 and [note.names for note in waiting] == [
+        (f"{n}.txt",) for n in range(1, 9)]                         # the oldest went
+    assert after == () and state == DONE                            # the panel's result stays

@@ -88,3 +88,57 @@ describes `<imported>`, and says that the names and the contents are data.
 ## Done when
 
 The tests pass. No model is called in this step.
+
+## As built
+
+Built on 2026-10-15, on the branch `drag-and-drop`. 15 new tests (12 in
+`tests/test_machine.py`, 3 in `tests/test_importing.py`), 1811 in all; no old test changed.
+No model was called.
+
+**How it is built:**
+
+- **`Note`** in `hallux/importing.py`: `into`, `files`, `folders`, `bytes`, `names`, as the
+  copy's `Result` has them. `Imports` keeps them as a tuple, at most `NOTES_MAX` (8), and
+  has `waiting()`, `told(notes)` and `forget()`. A copy whose result has a name leaves one.
+- **`imported_block(notes)`** in `hallux/machine.py`, beside `events_block`: one
+  `<imported>` on a line of its own for each note, `names` cut at `NAMES_MAX` (20) and the
+  rest counted in `more`, the body through `json_body`.
+- **In `send`** the block goes in front of the job events' block, and the notes are told
+  where the job events are, when the answer has come back.
+- **`power_on` forgets the notes** right after the events.
+- **The prompt** has the step's six lines, word for word, after the `<gone>` entry of INPUT
+  and before KEYS. Their words are yours to change.
+
+**Where it differs from the text above:**
+
+- **A boot isn't kept from carrying a note by a rule of its own.** `power_on` forgets the
+  notes before the boot message is made, and that is what keeps the old session's notes
+  out of it. Between the two the session starts, and a copy that ends just then goes with
+  the boot: its files are there, and the new session can know it. The rule of its own was
+  a line that no test could tell from its absence.
+- **After Ctrl-C the same notes go again** in front of the message that tells of the
+  interrupt. A copy that ends during the answer that was interrupted waits for the next
+  message. Job events are read anew there; for the notes that changed nothing a test
+  could see.
+
+**Decided while building,** where the text above leaves it open:
+
+- **Two copies of the same things are two notes** (`Note` compares by identity), so
+  telling one never takes the other along.
+- **`clear()` in the panel keeps the notes.** It forgets the panel's list or result; the
+  files are on the disk all the same.
+
+**For you to decide:** the prompt's lines say nothing of `more`. The AI sees
+`"more": 5` and can read it. If you want it said, "and how many more there are" after
+`{"names": [...]}` would be the place.
+
+**Checked beyond the tests:**
+
+- **With the real panel,** in tmux as for step 5: a folder dropped at the prompt, copied,
+  Esc, then `ls`. The pretend model's second message was
+  `<imported into="/home/user" files="3" folders="2" bytes="409">{"names": ["album/"], "more": 0}</imported>`,
+  then the `<input>` of `ls`, on the next line.
+- **The code was broken in 24 ways,** one at a time, and a test noticed each in the end.
+  At the first go four went unnoticed: the copy `waiting()` made of its list (the notes
+  are a tuple now), the two rules for a boot and the notes read anew after Ctrl-C (both
+  gone, above), and the order of the two blocks, which has a test now.
