@@ -3,7 +3,8 @@
 This file is the host. It owns the screen: the tab row, the tab that is shown under it, and
 the foot with that tab's keys. It knows nothing of what a tab shows. A tab is a class in a
 file of its own in hallux/panel_tabs/, and a new one is a new file and one more entry in the
-list the host is given. The AI never learns of the panel. See docs/config-panel.md.
+list the host is given. The AI never learns of the panel; of a copy from the Files tab it
+is told only that files arrived. See docs/config-panel.md.
 """
 from __future__ import annotations
 

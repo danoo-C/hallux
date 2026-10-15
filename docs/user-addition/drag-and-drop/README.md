@@ -1,7 +1,7 @@
 # Plan: drag and drop into the machine
 
-**Status:** written on 2026-10-10, at the user's request. **Steps 1 to 6 are built,** step
-7 is not ([The steps](#the-steps)). There is no
+**Status:** written on 2026-10-10, at the user's request. **Steps 1 to 6 are built,** and step
+7's documentation is written; the user's try is still to come ([The steps](#the-steps)). There is no
 separate design document: this file holds the design and the plan, and every step has a
 file of its own in this folder. The decisions in the table below are my proposals. The user
 set the frame (a tab of the panel, a scrollable tree of what is imported) and hasn't gone
@@ -309,7 +309,7 @@ step: they are the code's after step 4. Each reference also names what stands th
 | 4. The machine's side | [04-imports.md](04-imports.md) | 3 | Built on 2026-10-10 |
 | 5. The Files tab | [05-files-tab.md](05-files-tab.md) | 4 | Built on 2026-10-15 |
 | 6. Telling the AI | [06-telling-the-ai.md](06-telling-the-ai.md) | 4 | Built on 2026-10-15 |
-| 7. The documentation and the user's try | [07-docs-and-try.md](07-docs-and-try.md) | 5, 6 | |
+| 7. The documentation and the user's try | [07-docs-and-try.md](07-docs-and-try.md) | 5, 6 | Documentation written on 2026-10-15; the user's try is to come |
 
 Steps 5 and 6 don't depend on each other. This table is the only place that holds the
 status.

@@ -121,6 +121,20 @@ next, in detail, is in [next-steps.md](next-steps.md).
     screens through `list_processes`.
 
   Tried by hand on 2026-10-10, with the real model.
+- [x] **13. Drag and drop:** files and folders dragged onto the terminal window are copied
+  into the machine, from the panel's Files tab. The design and the seven steps are in
+  [user-addition/drag-and-drop/](user-addition/drag-and-drop/README.md).
+  - the drop as the terminal sends it, a path, read in Windows Terminal's and VS Code's
+    forms and translated from Windows (`hallux/importing.py`);
+  - a tree of what would be copied, with sizes and what is in the way, before anything is
+    written;
+  - a copy in a thread of its own, through the disk's fence, never a file half-written,
+    and a question before a file is overwritten;
+  - the Files tab, which a drop finds from any tab (`hallux/panel_tabs/files.py`);
+  - a note for the AI in front of its next message: where, how many, which names.
+
+  Built on 2026-10-15. The first real drag, in the user's own terminal, is still to come:
+  [step 7](user-addition/drag-and-drop/07-docs-and-try.md).
 - [ ] **Later:**
   - events inside full-screen programs, and a script line that fakes an event. A job's end
     already arrives in a program without fields; an addon's own events still wait until

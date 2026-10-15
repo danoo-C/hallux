@@ -39,6 +39,7 @@ the drop.
 | 11 | Paste a path at the shell prompt, with the panel closed | It lands on the line as text, as before |
 | 12 | After an import, ask the machine "what is new in this folder?" | It knows of the files, and says nothing of a panel |
 | 13 | Hallux in VS Code's terminal: Ctrl+F12, `f`, then drag a folder onto the window, and a file right after it | The path is typed into the row, and the tree appears without Enter. The file is added to it |
+| 14 | In the Files tab, `p`, then type a path by hand, with a pause in the middle | Nothing is taken until Enter (step 5 decided that beyond the plan) |
 
 **Point 1 is the first drop into the panel itself.** The check before the build ran with
 `cat`, with the modes the panel sets, and there Windows Terminal sent the drop as a paste
@@ -51,3 +52,22 @@ A point that fails gets one line under the table: what was seen instead.
 
 The documentation says what the code does, the user has gone through the table, and the
 plan's README has the status of every step and what the try showed.
+
+## As built
+
+**The documentation, written on 2026-10-15.** Where the table above says, with two
+differences:
+
+- **`README.MD` has a section of its own under Usage,** "Dragging files into the machine",
+  beside the keys and the `hallux` command, not in the part on the panel under
+  Configuration: it is about using the machine, not about its settings. The features, the
+  keys and the project layout have their lines.
+- **`docs/config-panel.md`** has the Files tab in section 4 with a picture, its states and
+  its keys, and the host's paste beside the tab system; the bullet "The AI isn't told"
+  in section 9 says now that it is told of a copy, never of the panel.
+
+`docs/roadmap.md` has the feature as item 13, built, with the user's try still to come.
+`hallux/panel.py`'s docstring has its half sentence. One point was added to the try, 14:
+the path typed by hand that step 5 decided waits for Enter.
+
+**The user's try:** still to come.

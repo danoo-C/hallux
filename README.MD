@@ -68,6 +68,9 @@ user@hallux:~$ cowsay moo
 - **A settings panel:** Ctrl+F12 opens Hallux's own panel over whatever is on screen. Budgets
   and the model change while the machine runs, and Save writes them to the machine's
   `config.toml`. Two more tabs show the background jobs, live. The AI never learns of it.
+- **Files from your computer:** drag files and folders onto the terminal window while the
+  panel is open. Its Files tab shows them as a tree, and Enter copies them into the
+  directory the shell is in. The AI is told what arrived, with your next line.
 - **Addons:** real hardware for the machine, one Python file each. The example opens a real
   window on your desktop that the machine can read and paint.
 - **Background jobs:** an addon can bring an agent, a second Claude session that does a long
@@ -153,7 +156,7 @@ same machine back.
 | Typing, arrows, Backspace, Home/End, ↑/↓ | Line editing, handled instantly by the terminal |
 | Ctrl-C, Ctrl-D, Ctrl-Z, Ctrl-L, Ctrl-R, Tab, F1–F12, … | Sent to the machine, which reacts like bash or the running program would |
 | Ctrl-Z in a full-screen program, then `fg` | The program is put aside with its screen and everything typed into it, and the shell is back. `fg` brings it back as it was, `jobs` lists what is suspended, and `kill %1` ends it |
-| **Ctrl+F12** | Opens Hallux's own panel, over the shell or a full-screen program: the settings in its Config tab, and the background jobs in its Agents and Details tabs. Esc or Ctrl+F12 closes it. The key never reaches the machine |
+| **Ctrl+F12** | Opens Hallux's own panel, over the shell or a full-screen program: the settings in its Config tab, the background jobs in its Agents and Details tabs, and the files you drag onto the window in its Files tab. Esc or Ctrl+F12 closes it. The key never reaches the machine |
 | **Ctrl+Shift+Del**, or **Ctrl-C three times within a second** | Hard power-off: Hallux quits immediately, whatever the AI is doing |
 
 ### The `hallux` command
@@ -169,6 +172,29 @@ hallux forget the rhyming thing
 
 Settings that bash can express go into `~/.bashrc`; everything else becomes a rule in the
 machine's memory. Either way, the change survives a reboot.
+
+### Dragging files into the machine
+
+Press Ctrl+F12, then drag files or folders from your computer onto the terminal window. The
+panel's Files tab shows what would be copied, as a tree with sizes, and where to: the
+directory the shell is in. Enter copies it.
+
+- **A terminal sends a drop as its path.** Windows Terminal pastes it, so a drop finds the
+  Files tab from any tab. VS Code's terminal types it: show the Files tab first with `f`,
+  and the typed path is taken by itself. `p` opens the same row for a path you type, and
+  Enter takes it.
+- **Nothing is overwritten unasked.** When a file exists already, Enter asks once: `o`
+  overwrites those files, `s` skips them. A folder that exists already is merged.
+- **What can't be copied is marked in the tree and skipped:** a file that can't be read, a
+  file where a folder is or the other way round, a pipe or a device, and a folder that is
+  its own destination.
+- **The copy runs by itself.** Close the panel and go on; `s` in the Files tab stops it, and
+  what was copied stays. The panel opens on Files until you have seen the result.
+- **The AI is told with your next message:** where the files went, how many, and up to 20
+  of their names. Never their contents, and never that there is a panel.
+- **It works on the computer the window is on.** The terminal sends a path, not the file,
+  so a drop over ssh can't work, and neither can anything that has no path, such as a
+  picture dragged out of a browser. A Windows path (`C:\…`, `\\wsl$\…`) is translated.
 
 ## Addons
 
@@ -520,7 +546,9 @@ hallux/
   blockmode.py       full-screen programs: block mode and raw mode
   statusbar.py       the bottom status row
   panel.py           Hallux's own settings panel (Ctrl+F12): the host with its tab row
-  panel_tabs/        the panel's tabs, one file each: agents.py, details.py, config.py
+  panel_tabs/        the panel's tabs, one file each: agents.py, details.py, files.py,
+                     config.py
+  importing.py       files dragged onto the window: reading the drop, the tree, the copy
   disk.py, tools.py  the path jail and the agent's tools
   addons.py          loading addons, calling their functions, their events
   agents.py          the addons' agents: the background jobs, their caps and their sessions
