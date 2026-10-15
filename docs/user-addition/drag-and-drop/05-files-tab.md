@@ -175,3 +175,96 @@ The drawn screen is checked as the memory of this project says: the real `Machin
 
 The tests pass, the check in tmux shows the tree in all three places, and the files are on
 the temporary machine's disk afterwards.
+
+## As built
+
+Built on 2026-10-15, on the branch `drag-and-drop`. 47 new tests (41 in
+`tests/test_panel_files.py`, 6 in `tests/test_panel.py`), 1796 in all. Two old tests
+changed: the two that look at the panel `app.py` builds (`tests/test_machine.py` and
+`tests/test_panel_config.py`) now expect four tabs, and their stand-in machine has an
+`imports`. The whole suite took between 132 and 151 seconds in four runs, against about
+121 before; the new tests wait for real pauses of the path row. **From this step on the user can import.**
+
+**How it is built:**
+
+- **The host:** `Tab.paste(text)`, `Keys.BracketedPaste` bound by the host with the
+  letters' filter, and `Panel.say`, which was `_say`. What the tab that takes a paste says
+  stays in the foot when the host shows that tab: the host counts the calls of `say`
+  (`Panel.said`) and puts the word back after `_show` has cleared the foot. A word that
+  was there before the paste goes.
+- **The log's line** is `panel: a paste of 16 characters, taken by Files`, or
+  `taken by no tab`.
+- **The tab** is `FilesTab` in `hallux/panel_tabs/files.py`, with `draw(seen, width)` and
+  `tree(lines, width)` beside it, and the row of `app.py` is
+  `Agents  Details  Files  Config`.
+
+**Where it differs from the text above:**
+
+- **A typed drop is taken without Enter only when its characters came together.** The
+  text above takes whatever reads as a drop after 0.3 seconds without a key. Then a path
+  typed by hand is taken in the middle: a pause after `/mnt` would start a walk of all the
+  Windows drives, and a pause after `/` would say "would be copied into itself" and close
+  the row. A terminal that types a drop sends it in one go, and prompt_toolkit hands the
+  keys of one read to the tab in one go. So a character that arrives by itself is a
+  hand's, and so is an editing key: the row then waits for Enter. My first way was a
+  clock, keys more than 50 ms apart; it failed twice in the whole suite, where Python
+  stopped for longer than that between two keys of one drop. A test holds that such a
+  pause changes nothing now.
+- **After the pause the row closes whatever `drop` says,** and a refusal is in the foot.
+  The text above says what happens on a refusal only for Enter, where the row stays.
+- **A long word in the foot keeps its end.** The foot is one line, and its window cut a
+  long word at the window's edge: the name at the end of `no such file or folder on this
+  computer: …` was lost, against the user's "keep the end". `fitted` keeps what comes
+  before the colon and the end of what follows.
+- **The foot says `↑ ↓ scroll` only when the body is longer than the view,** and `p path`
+  wherever the row can open. The README's two pictures of the tab have the foot as built.
+
+**Decided while building,** where the text above leaves it open:
+
+- **The head's first line is bold,** the counts plain, `1 exists already` yellow and
+  `2 can't be copied` grey. Nothing dropped: the second line is grey.
+- **A path in the head is cut at its front,** so the destination's end stays.
+- **After a copy** the second line is `3 skipped · 1 failed`, or `nothing skipped`. The
+  body has a line for each mark that skipped something, `3 skipped: exists`, each failure
+  with its path and its reason in red, and `… 2 more failed`. A copy that ended early
+  says why in front: `stopped: copied 3 files (900 B) into …` in bold, the disk being full
+  or a mistake in red.
+- **The path row** shows the end of a long text, and its cursor as a reverse cell: the
+  focus stays on the body, which scrolls. Its keys are Backspace, Delete, ← →, Home, End,
+  Ctrl-A, Ctrl-E and Ctrl-U. A paste into it has its line breaks made spaces, and a key that
+  is no character, such as F5, types nothing.
+- **Showing the tab again** closes the row, drops the question and puts the view at the top.
+- **A result counts as seen** when the tab has drawn it, not only when the tab was shown:
+  the user who watched the copy end isn't brought back to it at the next Ctrl+F12.
+- **Enter and `x` are bound in every state** and do nothing where they have nothing to
+  do: `start` and `clear` of step 4 refuse there already.
+
+**Checked beyond the tests,** in tmux: the real `Machine`, `Terminal` and `Panel` with a
+pretend model, a window of 86 × 30, and `tmux paste-buffer -p` as the drop. The pretend
+model is `FakeModel` of `tests/test_machine.py`, handed to `app.main()` by a subclass of
+`Machine` patched into `hallux.machine`. The scripts were throwaways in the session's
+temporary folder:
+
+- **At the prompt:** a path pasted at the shell prompt lands on the line as text. Ctrl+F12
+  opens on Config; a folder pasted there shows the Files tab with its tree, Enter copies
+  it, the files are on the machine's disk, and after Esc there is one whole bar on the
+  bottom row.
+- **While the AI works** (an answer that takes eight seconds): the same, with the bar's
+  `thinking…` under the panel, and the answer printed after Esc with one bar below it.
+- **Over a full-screen program** (nano): the same, and after Esc nano is there again.
+- **A typed drop:** `tmux send-keys -l` with a quoted path, in the Files tab. The tree
+  appears without Enter, the row is closed, and no letter of the path chose a tab.
+- **At 60 × 16** the four tabs fit, nothing is wider than the window, and after Esc the bar
+  is on the bottom row.
+- **The code was broken in 92 ways,** one at a time, and a test noticed each. At the first
+  go eleven went unnoticed. Five were lines that did nothing (two filters, an early return,
+  `c-h` beside Backspace, which prompt_toolkit holds for the same key) and are gone. The
+  other six have their tests now; one of them was that a typed drop into a row that `p`
+  opened was taken only with Enter.
+
+**Not checked:**
+
+- **A real drag.** I can't run Windows Terminal or VS Code. That is the user's try, in
+  step 7.
+- **Whether VS Code's terminal sends a typed drop in one read.** If it sends it a character
+  at a time, the row waits for Enter, and the drop still works with Enter.

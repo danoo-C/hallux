@@ -1581,9 +1581,13 @@ def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monk
     class Watching:
         watch = kill = staticmethod(lambda *args: None)
 
+    class Importing:
+        watch, drop, reads, start, stop, clear = (staticmethod(lambda *args: None)
+                                                  for _ in range(6))
+
     class Recorded:
         view = change = save = refill = staticmethod(lambda *args: None)
-        jobs = Watching
+        jobs, imports = Watching, Importing
 
         def __init__(self, root, hardware, terminal, **more):
             given.update(more, hardware=hardware, machine=self)
@@ -1619,11 +1623,13 @@ def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monk
     assert given["from_flags"] == {"model"}                  # the effort is the file's
     assert given["hardware"] == Hardware("claude-sonnet-5-5", "max", addons=())
     panel = given["panel"]                                   # and the terminal gets the panel:
-    agents, details, settings = panel.tabs                   # three tabs, around the machine,
-    assert [tab.title for tab in panel.tabs] == ["Agents", "Details", "Config"]
+    agents, details, files, settings = panel.tabs            # four tabs, around the machine,
+    assert [tab.title for tab in panel.tabs] == ["Agents", "Details", "Files", "Config"]
     assert settings.view is Recorded.view and panel.bar is given["bar"]
     for tab in (agents, details):                            # the two that watch its jobs
         assert tab.watch is Watching.watch and tab.kill is Watching.kill
+    for name in ("watch", "drop", "reads", "start", "stop", "clear"):    # and its imports
+        assert getattr(files, name) is getattr(Importing, name)
     assert panel.power_cut is Keyboard.power_cut and panel.ctrl_c is Keyboard.count_ctrl_c
 
 

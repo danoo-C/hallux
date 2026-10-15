@@ -1,7 +1,7 @@
 # Plan: drag and drop into the machine
 
-**Status:** written on 2026-10-10, at the user's request. **Steps 1 to 4 are built,** steps
-5 to 7 are not ([The steps](#the-steps)). There is no
+**Status:** written on 2026-10-10, at the user's request. **Steps 1 to 5 are built,** steps
+6 and 7 are not ([The steps](#the-steps)). There is no
 separate design document: this file holds the design and the plan, and every step has a
 file of its own in this folder. The decisions in the table below are my proposals. The user
 set the frame (a tab of the panel, a scrollable tree of what is imported) and hasn't gone
@@ -98,7 +98,7 @@ Its key is `f`.
  Drop files or folders onto this window.
  They are copied into /home/danika-hous/Music
 
- a d f c tabs · Esc close
+ p path · a d f c tabs · Esc close
 ```
 
 **After a drop:**
@@ -117,7 +117,7 @@ Its key is `f`.
    cat.png                                                           88 kB   exists
  notes.txt                                                          1.2 kB
 
- ↑ ↓ scroll · Enter copy · x clear · a d f c tabs · Esc close
+ Enter copy · x clear · p path · a d f c tabs · Esc close
 ```
 
 **After Enter, if something exists already,** the foot asks once:
@@ -136,7 +136,7 @@ wasn't copied, each with its reason.
 | Enter | Copies. Asks first if a file exists already |
 | `o`, `s` | The answer to that question: overwrite, or skip those files |
 | `x` | Clears the list, or the result of the last copy |
-| `p`, or a typed `'` `"` `/` `\` | Opens a row for a typed path: for a terminal that types the drop, and for typing one by hand. A drop into it needs no Enter (step 5) |
+| `p`, or a typed `'` `"` `/` `\` | Opens a row for a typed path: for a terminal that types the drop, and for typing one by hand. A drop into it needs no Enter: when its characters came together, as a terminal types them (step 5) |
 | `s` while it copies | Stops after the file in hand. What was copied stays |
 | Esc | Drops the question if one is asked. Otherwise closes the panel; the list stays |
 
@@ -196,7 +196,7 @@ through it.
 | The tab's name | `Files`, key `f`, between Details and Config | A, D and C are taken, so "Drop" is out. Config stays last: the panel opens on the last tab |
 | A drop while another tab is shown | The Files tab takes it and is shown, unless a row is open for typing | Otherwise "Ctrl+F12, drop" loses the drop without a word: the panel opens on Config or Agents |
 | A paste that isn't a path | In the Files tab the foot says why. In another tab nothing happens, as today | |
-| A terminal that types the drop (VS Code's does) | The Files tab has a path row. A quote, a slash or a backslash typed in the tab opens it, and so does `p`. When the keys stop for 0.3 seconds and the text is a path that exists, it is taken | A drop that is typed can't be told from typing. In a row that is open for typing, every key is text, and no letter is a command. Windows Terminal doesn't need the row: it sends a paste. The user's first two checks were drops into VS Code's terminal, so the row is part of the plan |
+| A terminal that types the drop (VS Code's does) | The Files tab has a path row. A quote, a slash or a backslash typed in the tab opens it, and so does `p`. When the keys stop for 0.3 seconds and the text is a path that exists, it is taken, if its characters came together. A character that came by itself was typed by hand, and then the row waits for Enter (step 5, "As built") | A drop that is typed can't be told from typing. In a row that is open for typing, every key is text, and no letter is a command. Windows Terminal doesn't need the row: it sends a paste. The user's first two checks were drops into VS Code's terminal, so the row is part of the plan |
 | A typed drop onto another tab | Not caught: its letters are that tab's keys, as they are today | The host can't know that a drop is coming. The Files tab has to be shown first |
 | Reading the paste | Three readings are tried, and the first in which every path exists wins (step 1) | Terminals quote differently, and a Windows path is full of backslashes that are no escapes. What exists decides |
 | Windows paths | Translated by rule: `\\wsl$\NAME\…` and `\\wsl.localhost\NAME\…` of this distribution, and `C:\…` as `/mnt/c/…`. Where that gives nothing that exists, `wslpath -u` is asked. A path of this distribution is never asked about: `wslpath` could say nothing else (step 1, "As built") | A drop can hold hundreds of paths, and `wslpath` takes one at a call. It knows a changed mount point, which the rule doesn't. Checked on the user's machine |
@@ -307,7 +307,7 @@ step: they are the code's after step 4. Each reference also names what stands th
 | 2. The tree | [02-tree.md](02-tree.md) | 1 | Built on 2026-10-10 |
 | 3. The copy | [03-copy.md](03-copy.md) | 2 | Built on 2026-10-10 |
 | 4. The machine's side | [04-imports.md](04-imports.md) | 3 | Built on 2026-10-10 |
-| 5. The Files tab | [05-files-tab.md](05-files-tab.md) | 4 | |
+| 5. The Files tab | [05-files-tab.md](05-files-tab.md) | 4 | Built on 2026-10-15 |
 | 6. Telling the AI | [06-telling-the-ai.md](06-telling-the-ai.md) | 4 | |
 | 7. The documentation and the user's try | [07-docs-and-try.md](07-docs-and-try.md) | 5, 6 | |
 

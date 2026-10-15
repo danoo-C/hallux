@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from typing import Callable, Sequence
 
 from prompt_toolkit.application import Application, get_app
@@ -16,6 +17,7 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import (
     DynamicKeyBindings, KeyBindings, KeyBindingsBase, merge_key_bindings,
 )
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import (
     AnyContainer, DynamicContainer, HSplit, Layout, VSplit, Window, WindowAlign,
 )
@@ -26,6 +28,8 @@ from hallux.blockmode import ESCAPE_SECONDS, OPEN_KEY, POWER_CUT_KEY
 from hallux.statusbar import DIM, GRAY, YELLOW_NOTE, StatusBar
 
 MESSAGE_SECONDS = 4.0                 # how long the foot says why a tab can't be chosen
+
+log = logging.getLogger("hallux")
 
 
 class Tab:
@@ -41,7 +45,8 @@ class Tab:
 
     def attach(self, host: Panel) -> None:
         """Once, when the panel is built. Through the host a tab can show another tab
-        (host.show), close the panel (host.close), and share which job is picked (host.pick)."""
+        (host.show), close the panel (host.close), put a word into the foot (host.say), and
+        share which job is picked (host.pick)."""
         self.host = host
 
     def hint(self) -> str:
@@ -63,6 +68,10 @@ class Tab:
     def shown(self) -> None:
         """It has become the shown tab: start fresh."""
 
+    def paste(self, text: str) -> bool:
+        """Something was pasted while no row is open for typing. True if the tab takes it."""
+        return False
+
 
 class Panel:
     def __init__(self, tabs: Sequence[Tab], bar: StatusBar | None = None,
@@ -81,6 +90,7 @@ class Panel:
         self.pick: object = None                         # what tabs share: the job that is picked
         self.message = ""                                # in the foot for a moment, not the hint
         self.fading: asyncio.TimerHandle | None = None   # takes the message away again
+        self.said = 0                                    # counts the calls of say()
         self.is_open = False
         self.closed = asyncio.Event()
         self.closed.set()
@@ -110,7 +120,7 @@ class Panel:
         if not self.is_open:
             return
         self.is_open = False
-        self._say("")
+        self.say("")
         self.closed.set()
         if self.app is not None and self.app.is_running and not self.app.is_done:
             self.app.exit()                              # once: a second exit is an error
@@ -153,21 +163,22 @@ class Panel:
 
     def _choose(self, tab: Tab) -> None:
         if reason := tab.disabled():
-            self._say(reason)
+            self.say(reason)
         else:
             self._show(tab)
 
     def _show(self, tab: Tab) -> None:
         self.tab = tab
-        self._say("")
+        self.say("")
         tab.shown()
         with contextlib.suppress(ValueError):            # nobody shows the panel yet
             get_app().layout.focus(tab.container)
         get_app().invalidate()                           # a tab may ask for it between two keys
 
-    def _say(self, message: str) -> None:
+    def say(self, message: str) -> None:
         """Put a message in the foot, in place of the hint, for a moment. "" takes it away."""
         self.message = message
+        self.said += 1
         if self.fading is not None:
             self.fading.cancel()
             self.fading = None
@@ -223,7 +234,24 @@ class Panel:
         kb.add(OPEN_KEY, eager=True)(lambda event: self.close())
         kb.add(POWER_CUT_KEY, eager=True)(lambda event: self.power_cut())
         kb.add("c-c", eager=True)(lambda event: self.ctrl_c())       # and nothing else
+        # A paste is the host's while no row is open for typing: a drop arrives as one, and it
+        # finds the tab that takes it from any tab. Of two bindings for one key the later is
+        # called, and these come after the tab's, so a tab never binds it for itself.
+        kb.add(Keys.BracketedPaste, filter=letters)(lambda event: self._paste(event.data))
         return merge_key_bindings([DynamicKeyBindings(lambda: self.tab.bindings), kb])
+
+    def _paste(self, text: str) -> None:
+        """Offer a paste to the shown tab, then to the others in the order of the row. The
+        first that takes it is shown, with what it said about it. A disabled tab isn't asked."""
+        said = self.said
+        offered = [self.tab, *(tab for tab in self.tabs if tab is not self.tab)]
+        taker = next((tab for tab in offered if not tab.disabled() and tab.paste(text)), None)
+        log.info("panel: a paste of %d characters, %s", len(text),
+                 f"taken by {taker.title}" if taker else "taken by no tab")
+        if taker is not None and taker is not self.tab:
+            message = self.message if self.said != said else ""
+            self._show(taker)
+            self.say(message)
 
     def _escape(self) -> None:
         if not self.tab.leave():                         # the tab had nothing open

@@ -1,6 +1,7 @@
 """Hallux's own panel, the host: a real prompt_toolkit app, keys from a pipe, stand-in tabs."""
 import asyncio
 import contextlib
+import logging
 
 import pytest
 
@@ -21,6 +22,11 @@ from hallux.panel import Panel, Tab  # noqa: E402
 from hallux.statusbar import DIM, StatusBar  # noqa: E402
 
 ESC, CTRL_F12, CTRL_SHIFT_DEL, UP = "\x1b", "\x1b[24;5~", "\x1b[3;6~", "\x1b[A"
+
+
+def paste(text):
+    """A text pasted in paste brackets, as Windows Terminal sends a drop."""
+    return f"\x1b[200~{text}\x1b[201~"
 
 
 class Screen(DummyOutput):
@@ -91,6 +97,7 @@ class StandIn(Tab):
         self.typing = False                  # a row is open for typing
         self.open_rows = 0                   # what Esc has to leave before it closes the panel
         self.shows, self.got = 0, []
+        self.takes, self.says, self.pasted = False, "", []     # what it does with a paste
         self.bindings = KeyBindings()
         self.bindings.add("x")(lambda event: self.got.append("x"))
         self.bindings.add("escape", "u")(lambda event: self.got.append("M-u"))   # as editing keys
@@ -114,6 +121,12 @@ class StandIn(Tab):
 
     def shown(self):
         self.shows += 1
+
+    def paste(self, text):
+        self.pasted.append(text)
+        if self.says:
+            self.host.say(self.says)
+        return self.takes
 
 
 def three(**details):
@@ -414,3 +427,97 @@ def test_run_puts_the_bar_on_the_last_row_and_the_container_has_none():
     assert rows[-2] == " x marks Config · a d c tabs · Esc close"
     assert rows[-1].startswith(" • events paused: budget used") and "opus 5.5" in rows[-1]
     assert len(panel.container.children) == 3               # the tab row, the tab, the foot
+
+
+# ---------------------------------------------------------------- a paste
+
+def test_a_paste_goes_to_the_shown_tab_first_and_then_along_the_row(caplog):
+    panel = Panel(three())
+    agents, details, config = panel.tabs
+    details.takes = config.takes = True
+
+    async def script(press):
+        await press("a")                                    # Agents is shown, and doesn't take it
+        await press(paste("adc /home/user/x"))
+        first = panel.tab, [list(tab.pasted) for tab in panel.tabs], drawn(panel)[1]
+        await press(paste("again"))
+        return first, [tab.pasted for tab in panel.tabs]
+
+    with caplog.at_level(logging.INFO, logger="hallux"):
+        (tab, offered, row), again = session(panel, script)
+    assert tab is details and row == "this is Details"      # the first that took it is shown
+    assert offered == [["adc /home/user/x"], ["adc /home/user/x"], []]     # Config wasn't asked
+    assert again == [["adc /home/user/x"], ["adc /home/user/x", "again"], []]  # shown, so first
+    assert (agents.shows, details.shows, config.shows) == (1, 1, 1)   # the letters chose nothing
+    assert [r.message for r in caplog.records if "paste" in r.message] == [
+        "panel: a paste of 16 characters, taken by Details",
+        "panel: a paste of 5 characters, taken by Details"]  # its length, never its text
+
+
+def test_a_paste_nobody_takes_changes_nothing_and_a_disabled_tab_isnt_asked(caplog):
+    panel = Panel(three(reason="no attached addon has an agent"))
+    agents, details, config = panel.tabs
+    details.takes = True
+
+    async def script(press):
+        await press(paste("a path"))
+        return panel.tab, drawn(panel)
+
+    with caplog.at_level(logging.INFO, logger="hallux"):
+        tab, rows = session(panel, script)
+    assert tab is config and rows[1] == "this is Config"
+    assert rows[-1] == " x marks Config · a d c tabs · Esc close"     # nothing was said
+    assert (config.pasted, agents.pasted, details.pasted) == (["a path"], ["a path"], [])
+    assert "panel: a paste of 6 characters, taken by no tab" in caplog.messages
+
+
+def test_what_the_taker_says_stays_in_the_foot_when_it_is_shown():
+    panel = Panel(three())
+    agents, details, config = panel.tabs
+    agents.takes, agents.says = True, "already in the list: Pictures"
+
+    async def script(press):
+        await press(paste("/home/user/Pictures"))
+        return panel.tab, drawn(panel)[-1]
+
+    assert session(panel, script) == (agents, " already in the list: Pictures")
+
+
+def test_a_paste_that_the_shown_tab_takes_leaves_the_foot_as_the_tab_has_it():
+    panel = Panel(three(reason="not now"))
+    config = panel.tabs[2]
+    config.takes = True
+
+    async def script(press):
+        await press("d")                                    # the foot says why not, for a while
+        await press(paste("a path"))
+        return panel.tab, drawn(panel)[-1]
+
+    assert session(panel, script) == (config, " not now")
+
+
+def test_while_a_tab_is_typing_a_paste_is_its_own():
+    panel = Panel(three())
+    config = panel.tabs[2]
+    config.takes = True
+
+    async def script(press):
+        config.typing = True
+        await press(paste("ad"))
+        return panel.tab
+
+    assert session(panel, script) is config
+    assert config.pasted == [] and config.got == ["ad"]     # its own key, Keys.Any here, got it
+
+
+def test_a_word_from_before_the_paste_goes_when_another_tab_takes_it():
+    panel = Panel(three(reason="not now"))
+    agents = panel.tabs[0]
+    agents.takes = True
+
+    async def script(press):
+        await press("d")                                    # the foot says why not, for a while
+        await press(paste("a path"))
+        return panel.tab, drawn(panel)[-1]
+
+    assert session(panel, script) == (agents, " x marks Agents · a d c tabs · Esc close")
