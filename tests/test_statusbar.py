@@ -4,7 +4,7 @@ import pytest
 
 from hallux import statusbar
 from hallux.protocol import decode
-from hallux.statusbar import Running, StatusBar, describe, fade, fit, short_model
+from hallux.statusbar import Running, StatusBar, describe, fade, fit, short_model, size
 
 
 def text(bar, width, now=1.0):
@@ -209,3 +209,15 @@ def test_a_jobs_line_that_is_too_long_loses_its_status_first():
 def test_the_two_process_tools_have_their_words():
     assert describe("list_processes", {}) == "listing the processes"
     assert describe("kill_process", {"pid": 30001}) == "killing 30001"
+
+
+@pytest.mark.parametrize("count, shown", [
+    (0, "0 B"), (812, "812 B"), (999, "999 B"),
+    (1000, "1.0 kB"), (1200, "1.2 kB"), (9949, "9.9 kB"), (9950, "10 kB"),
+    (88_000, "88 kB"), (340_000, "340 kB"), (999_499, "999 kB"),
+    (999_500, "1.0 MB"),                          # never "1000 kB"
+    (2_300_000, "2.3 MB"), (34_000_000, "34 MB"),
+    (1_100_000_000, "1.1 GB"), (2_100_000_000_000, "2.1 TB"), (5_000_000_000_000_000, "5000 TB"),
+])
+def test_a_size_is_written_in_thousands_as_a_file_manager_does(count, shown):
+    assert size(count) == shown

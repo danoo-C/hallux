@@ -78,13 +78,17 @@ def main() -> None:
     machine = Machine(root, hardware, terminal, addons=attached, events=events,
                       from_flags=from_flags)
     from hallux.panel import Panel              # hallux's own panel, opened with Ctrl+F12:
-    from hallux.panel_tabs.agents import AgentsTab      # three tabs, around the machine
+    from hallux.panel_tabs.agents import AgentsTab      # four tabs, around the machine
     from hallux.panel_tabs.config import ConfigTab
     from hallux.panel_tabs.details import DetailsTab
+    from hallux.panel_tabs.files import FilesTab
     settings = ConfigTab(machine.view, machine.change, machine.save, machine.refill,
                          agents=any(addon.agent for addon in attached))    # their six rows
     watching = [tab(machine.jobs.watch, machine.jobs.kill) for tab in (AgentsTab, DetailsTab)]
-    terminal.set_panel(Panel([*watching, settings], bar=bar, power_cut=terminal.power_cut,
+    imports = machine.imports
+    files = FilesTab(imports.watch, imports.drop, imports.reads, imports.start, imports.stop,
+                     imports.clear)
+    terminal.set_panel(Panel([*watching, files, settings], bar=bar, power_cut=terminal.power_cut,
                              ctrl_c=terminal.count_ctrl_c))
     try:
         asyncio.run(machine.run())

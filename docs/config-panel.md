@@ -18,6 +18,10 @@ show the jobs of addon agents. They are described in
 [addon-agents.md](addon-agents.md), section 17, and are added when that feature is built.
 Until then the panel has one tab. The document kept its name.
 
+**The Files tab, added on 2026-10-15** with drag and drop
+([its plan](user-addition/drag-and-drop/README.md)): files dragged onto the window are copied
+into the machine from a fourth tab, between Details and Config. Section 4 has it.
+
 **What I checked on 2026-10-03,** with two throwaway scripts (prompt_toolkit 3.0.53 on a
 pipe, the way the tests drive it; no model call, nothing written):
 - **Ctrl+F12 arrives as one key,** `c-f12`. prompt_toolkit maps its sequence already.
@@ -144,16 +148,17 @@ world. With the panel it is Ctrl+F12, a new number, Esc, and the player moves ag
 **The tabs.** The top row names them, and the tab that is shown has brackets:
 
 ```text
- Hallux                                         Agents   Details  [ Config ]
+ Hallux                                Agents     Details     Files   [ Config ]
 ```
 
 | Tab | What it shows | Described in |
 |---|---|---|
 | Agents | The jobs of addon agents, and the agents that are idle | [addon-agents.md](addon-agents.md), section 17 |
 | Details | One job, live: what it is doing | The same |
+| Files | Files and folders dragged onto the window, and their copy into the machine | Below, and [the plan](user-addition/drag-and-drop/README.md) |
 | Config | The machine's settings | Below |
 
-- **The first letter of each tab is its key,** and is underlined: `a`, `d`, `c`. Underlined,
+- **The first letter of each tab is its key,** and is underlined: `a`, `d`, `f`, `c`. Underlined,
   not bold: bold looks like plain text in some terminal fonts. A click on a tab's name
   does the same.
 - **The letters don't act while you type.** In the Config tab you type model names, so `a`
@@ -172,6 +177,7 @@ hallux/panel.py               the host: the tab row, switching, opening and clos
 hallux/panel_tabs/config.py   the Config tab
 hallux/panel_tabs/agents.py   the Agents tab    (with addon agents)
 hallux/panel_tabs/details.py  the Details tab   (with addon agents)
+hallux/panel_tabs/files.py    the Files tab     (with drag and drop)
 ```
 
 | A tab has | What it is |
@@ -182,8 +188,9 @@ hallux/panel_tabs/details.py  the Details tab   (with addon agents)
 | A hint line | The keys the foot shows for it |
 | Whether it is typing | While it is, the host leaves the letters to it |
 | Whether it is disabled, and why | For the grey tabs |
-| The functions it is given | Its data and what it can do. Config gets four: what to show, change a value, save, refill the budgets |
-| What the host hands it | Three things: show another tab, close the panel, and the job that is picked |
+| The functions it is given | Its data and what it can do. Config gets four: what to show, change a value, save, refill the budgets. Files gets six, those of the machine's imports |
+| What the host hands it | Four things: show another tab, close the panel, put a word into the foot, and the job that is picked |
+| Whether it takes a paste | Something pasted while no row is open for typing. Only Files takes one |
 
 - **The host knows nothing of what a tab shows.** It gets a list of tabs and draws their
   titles. A new tab is a new file and one more entry in that list.
@@ -191,6 +198,50 @@ hallux/panel_tabs/details.py  the Details tab   (with addon agents)
   picks it, and Details shows it.
 - **What every tab gets from the host:** Esc and Ctrl+F12 close, the hard exit works, the
   bar is on the last row.
+- **A paste is the host's** while no row is open for typing. It offers it to the shown tab
+  first, then to the others in the order of the row, and shows the first that takes it.
+  A terminal sends a drop as a paste, so a drop finds the Files tab from any tab. The log
+  has a line for each paste: how long it was, and which tab took it.
+
+**The Files tab:**
+
+```text
+ Hallux                                Agents     Details   [ Files ]   Config
+
+ into /home/danika-hous/Music
+ 2 folders · 14 files · 2.3 MB · 1 exists already
+
+ Pictures/                                          13 files    2.2 MB
+   holiday/                                          8 files    1.2 MB
+     beach.jpg                                                  340 kB
+     … 6 more
+   cat.png                                                       88 kB   exists
+ notes.txt                                                      1.2 kB
+
+ Enter copy · x clear · p path · a d f c tabs · Esc close
+```
+
+| It shows | When |
+|---|---|
+| `Drop files or folders onto this window.` and where they would go | Nothing was dropped |
+| The names, and the counts growing, `counting…` | The tree is being worked out |
+| The tree, its counts, what exists and what can't be copied | It can be copied |
+| `copying… 120 of 1,400 files · 34 MB of 2.1 GB`, over the tree | It copies |
+| `copied 14 files (2.3 MB) into …`, and what wasn't copied, with the reasons | It is over |
+
+| Key | What it does |
+|---|---|
+| ↑ ↓, PgUp, PgDn, the wheel | Scroll the tree |
+| Enter | Copy. If a file exists already it asks once: `o` overwrite, `s` skip, Esc back |
+| `x` | Clear the list, or the result of the last copy |
+| `s` while it copies | Stop. What was copied stays |
+| `p`, or a typed `'` `"` `/` `\` | Open the path row, for a terminal that types the drop. A drop typed into it is taken by itself; a path typed by hand waits for Enter |
+
+- **The destination is the shell's directory** at the first drop of a list, and stays until
+  the list is copied or cleared.
+- **A copy runs in a thread of its own.** The panel can close, and the AI can answer,
+  meanwhile. The panel opens on Files while a copy runs and until its result was seen;
+  Agents still comes first while a job runs.
 
 **The Config tab,** a sketch. The last row is Hallux's status bar, which stays where it is.
 
@@ -439,8 +490,8 @@ it does isn't known.
 - **Only the real keyboard opens the panel.** Nothing the AI writes is input. Hallux takes
   Ctrl+F12 before the machine sees any key. In a raw-mode program that key goes to the AI
   today, like every key (`hallux/blockmode.py:450`); from now on it never does.
-- **The AI isn't told.** The prompt doesn't change, and no message says that the panel was
-  open or what was changed.
+- **The AI isn't told of the panel.** No message says that it was open or what was
+  changed. Of a copy from the Files tab it is told only that files arrived, and where.
 - **`config.toml` stays out of the machine's reach.** No tool is added, and `/.hallux` is
   still invisible to the machine (`hallux/disk.py:83`). The rule in `hallux/config.py:4`
   holds: the machine can't pick its own hardware.
@@ -451,6 +502,12 @@ it does isn't known.
   what was spent beside each, and only the real keyboard reaches the button.
 - **A value is checked before it is taken, and the file before it is written.**
 - **A scripted run has no panel.**
+- **A copy into the machine is the user's and Hallux's.** The AI can't start one and has no
+  tool for it. Every file it writes goes through the disk's fence, so nothing lands outside
+  the machine's folder or in `/.hallux`, also not through a link. What it reads is the
+  user's choice: anything the user drags in. The note for the AI holds the destination,
+  counts and names, never what the files hold, and the names go in as JSON, so none of them
+  can end the note.
 
 ---
 
@@ -523,6 +580,11 @@ the tick budget raised under a running player.
 - **A click on the bar** to open the panel, in full-screen programs, where the mouse is on
   already.
 - **Back to the file:** a button that drops the changes of this run.
+- **A path pasted at the shell that opens the Files tab.** It brings back the guessing a
+  drop in the panel avoids, but with the tree as a preview a wrong guess costs one Esc.
+- **Copying out of the machine.** The tab's name leaves room for it.
+- **A word on the bar** when a copy ends while the panel is closed.
+- **A drop over ssh.** The path the terminal sends belongs to the computer with the window.
 
 ---
 

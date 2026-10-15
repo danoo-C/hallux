@@ -120,6 +120,7 @@ def test_the_reboot_check_fails_if_the_machine_never_rebooted(tmp_path):
 
 def test_a_script_cant_be_interrupted():
     assert ScriptTerminal(["ls"]).interrupt_prompt() is False                 # a script gets no events
+    assert ScriptTerminal(["ls"]).refresh() is None                           # and has no panel
 
 
 def test_a_status_before_there_is_a_record_is_dropped():

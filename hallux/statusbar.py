@@ -165,6 +165,16 @@ def spent(amount: float) -> str:
     return f"~${amount:.2f}"
 
 
+def size(count: int) -> str:
+    """812 B, 340 kB, 2.3 MB, 1.1 GB: bytes, in thousands and not in 1024s, as a file
+    manager shows them. Below ten of a unit there is one digit after the point."""
+    amount, units = float(count), ["B", "kB", "MB", "GB", "TB"]
+    while amount >= 999.5 and len(units) > 1:
+        amount, units = amount / 1000, units[1:]
+    digits = 1 if units[0] != "B" and amount < 9.95 else 0
+    return f"{amount:.{digits}f} {units[0]}"
+
+
 def job_line(jobs: tuple[Running, ...], now: float, room: int) -> str:
     """What the idle bar says of the jobs that run. One job: its addon, its status line, its
     time and its tokens. When that is too long the status is cut: the time and the tokens are

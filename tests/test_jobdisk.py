@@ -10,6 +10,7 @@ import pytest
 import hallux.jobdisk
 from hallux import addons
 from hallux.disk import Disk
+from hallux.importing import carry_out
 from hallux.jobdisk import BYTES_MAX, FILES_MAX, FolderGone, JobDisk, sweep
 
 BEAT, NEON = "BPM = 120\nSONG:\n", "BPM = 90\n# neon\nSONG:\n"
@@ -471,6 +472,17 @@ def test_a_new_name_that_was_taken_meanwhile(job, music):
                           "conflict": [f"{HERE}/midnight.score"]}
     assert (music / "midnight.score").read_text() == "the user had the same idea\n"
     assert (music / "midnight.score.new").read_text() == "the job's song\n"
+
+
+def test_an_import_that_takes_a_jobs_name_keeps_it_and_the_job_lands_beside(job, disk, music,
+                                                                           tmp_path):
+    """What the user drops into the folder is someone else's change like any other."""
+    job.write_file("a.score", "the job's\n")
+    (tmp_path / "a.score").write_text("dropped by the user\n")
+    assert carry_out(disk, [tmp_path / "a.score"], HERE, None).files == 1
+    assert job.land() == {"files": [f"{HERE}/a.score.new"], "conflict": [f"{HERE}/a.score"]}
+    assert (music / "a.score").read_text() == "dropped by the user\n"
+    assert (music / "a.score.new").read_text() == "the job's\n"
 
 
 def test_one_conflict_and_no_file_takes_its_place(disk, music):

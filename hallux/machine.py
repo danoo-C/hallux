@@ -29,6 +29,7 @@ from hallux.addons import Addon, Events, stop_all
 from hallux.agents import Job, JobEvent, Jobs, Session, Worker, shared_options
 from hallux.config import Hardware
 from hallux.disk import Disk
+from hallux.importing import Imports, Note
 from hallux.passwords import Passwords
 from hallux.protocol import (
     Action, Field, Form, Reply, ScreenStream, Secret, envelope, json_body, parse, resolve,
@@ -100,6 +101,10 @@ class Terminal(Protocol):
 
     def set_status(self, **changes: object) -> None: ...
 
+    def refresh(self) -> None:
+        """Draw hallux's own part of the screen again, wherever it is now. Nothing, for a
+        terminal that has no panel."""
+
     # block mode: full-screen programs with editable fields (hallux.blockmode)
     async def show_form(self, screen: str, form: Form, patch: tuple | None = None) -> None:
         """Show a full-screen program; with a patch, only those rows of its screen change."""
@@ -150,6 +155,20 @@ def events_block(events: Sequence[JobEvent]) -> str:
     return envelope("events", body) + "\n"
 
 
+NAMES_MAX = 20                                # names a note for the AI gives; the rest it counts
+
+
+def imported_block(notes: Sequence[Note]) -> str:
+    """What the user copied into the machine since the AI's last answer, as an <imported> on
+    a line of its own for each copy, in front of a message. Nothing, without notes. The names
+    come from outside the machine: they go in the body, as JSON."""
+    return "".join(
+        envelope("imported", json_body({"names": list(note.names[:NAMES_MAX]),
+                                        "more": max(0, len(note.names) - NAMES_MAX)}),
+                 into=note.into, files=note.files, folders=note.folders, bytes=note.bytes) + "\n"
+        for note in notes)
+
+
 class Machine:
     def __init__(self, root: Path, hardware: Hardware, terminal: Terminal,
                  client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient,
@@ -192,6 +211,11 @@ class Machine:
                          on_report=self.job_reported, on_event=self.job_event_waits,
                          over_budget=self.over_budget, addons=self.addons,
                          running=lambda: self.running.model)
+        # What the user drops onto the window (hallux.importing): the panel's Files tab shows
+        # it and copies it into the disk. The AI takes no part in that, and is told of it in
+        # front of its next message. A walk or a copy that changes what the tab shows has the
+        # terminal draw it again.
+        self.imports = Imports(self.disk, changed=lambda: self.terminal.refresh())
 
     # ---------------------------------------------------------------- for hallux's own panel
 
@@ -293,7 +317,8 @@ class Machine:
             while await self.power_on():
                 log.info("reboot")
         finally:
-            self.terminal.stop()
+            self.imports.close()                 # a copy that runs is stopped: nothing of
+            self.terminal.stop()                 # the user's is written once Hallux is off
 
     async def power_on(self) -> bool:
         """One boot-to-shutdown lifetime. Returns True if the machine wants to reboot."""
@@ -301,6 +326,7 @@ class Machine:
         self.session_spent = self.refilled_at = 0.0
         self.jobs.new_boot()
         self.forget_events()
+        self.imports.forget()                    # the copies before it are the old session's
         for reason in ("event_budget_usd", "max_budget_usd", "model"):
             self.note(reason, None)              # a new boot: nothing spent, heard or waiting
         # What runs, which the bar shows: the settings the session starts with, and of the
@@ -794,6 +820,11 @@ class Machine:
         holds in its own body, which then gets no block. A boot has none: it starts with no
         jobs.
 
+        In front of that block go the notes of the copies the user made from the panel since
+        the last answer, as <imported>, in front of a message of any kind. They are told as
+        the job events are. A boot carries only a copy that ended while its session started:
+        power_on forgets the ones from before.
+
         A message the model fails on ends a full-screen program, so that nobody is stuck in
         it. With `stay` it doesn't, and None comes back: the message was one that nobody at
         the keyboard asked for, and a player isn't taken off the screen for it.
@@ -801,17 +832,19 @@ class Machine:
         The answer's job-control tags are followed here, but for <resume>: an answer with one
         comes back as it is, nothing of it shown, and the caller's loop puts the program
         back."""
+        notes = self.imports.waiting()
         if carried is None:
             carried = [] if tag == "boot" else self.jobs.waiting()
             front = events_block(carried)
         else:
             front = ""
         text, interrupted = await self.exchange(
-            client, front + self.envelope(tag, body, **attrs), activity, fatal)
+            client, imported_block(notes) + front + self.envelope(tag, body, **attrs),
+            activity, fatal)
         if interrupted:                          # Ctrl-C while the AI was working: nothing of
             carried = self.jobs.waiting()        # that answer was shown, so they go again
             text, _ = await self.exchange(
-                client, events_block(carried)
+                client, imported_block(notes) + events_block(carried)
                 + self.envelope("key", "", name="C-c", interrupted="yes"), activity, fatal)
         if text is None:                         # the model failed; the error is reported
             if fatal:
@@ -821,6 +854,7 @@ class Machine:
             await self.leave_block_mode()        # never leave anyone stuck in a form
             return Reply(screen="", prompt=None, halt=halt_on_error)
         self.jobs.told(carried)
+        self.imports.told(notes)
         reply = parse(text)
         shown = self.stream.shown if self.stream else ""
         self.apply_writes(reply, new_machine)
