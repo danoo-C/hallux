@@ -50,3 +50,40 @@ After this step the addon loads and can start and stop its Qt child, but opens n
 
 The addon loads with PySide6 installed and is skipped cleanly without it; `stop()` ends the
 child; nothing reaches the terminal.
+
+## As built (2026-10-21)
+
+Built on branch `gui-addon`, not committed when written.
+
+- **`addons/web.py`:** the addon, with `stop` its one function, and `connect`. Its link to
+  the child, `_child()`, starts the child at the first call that needs it and starts it again
+  if it died; `stop()` ends it. Errors are `WebError`: "the web engine didn't start", "the
+  web engine doesn't answer", "the web engine stopped", the last two with "it crashed (<its
+  last line>)" when the child ended badly.
+- **The child** imports `QtWebEngineWidgets` before its `QApplication`, as Qt requires, keeps
+  running with no window open, and takes Hallux's messages through a Qt signal, so they are
+  answered in Qt's own thread. For now it knows `ping` and `quit`; anything else is an error.
+- **Quiet:** `QT_LOGGING_RULES` turns off Qt's debug, info and warnings,
+  `QTWEBENGINE_CHROMIUM_FLAGS=--log-level=3` keeps Chromium to fatal errors, and
+  `EGL_LOG_LEVEL` and `LIBGL_DEBUG` quiet Mesa. What is left goes to a temporary file.
+- **`pyproject.toml`:** `web = ["PySide6"]`, three lines in the shape of `window` and `music`.
+- **Tests:** `tests/test_addon_web.py`, 13 tests. Eleven need PySide6 and are skipped without it;
+  the two that run either way check that Hallux never imports Qt and that, without PySide6,
+  the addon is skipped with "No module named 'PySide6'". The pipe's failures are tried with a
+  small stand-in script in the child's place: a flood on stderr, a crash at the start and
+  later, a child that never says hello, an event line.
+- **Tried with** PySide6 6.12.0 from the check's throwaway venv, lent through `PYTHONPATH`; the
+  project's venv still has no PySide6. All 14 tests passed (with `test_addons.py`'s list);
+  the full suite: 1872 passed, and the sandbox test failed only because it ran inside my own
+  sandbox, as before.
+
+**Fontconfig, not settled.** The "Cannot load default config file: (null)" of the check
+doesn't appear here: offscreen, inside my sandbox, Qt finds 24 font families, and a page
+finds DejaVu Sans. The check printed it only in its run outside my sandbox, where Chromium's
+own sandbox was on; my run outside to compare was refused. The likely reading: the
+Chromium inside the PySide6 wheel doesn't know where the system keeps fontconfig's file,
+and "a serif font by default" was only a browser's usual default for a page that names no
+font. The child is now started with `FONTCONFIG_FILE=/etc/fonts/fonts.conf` when the user
+hasn't set it and the file exists. Whether the message is gone shows in the live run
+(step 5), or in a run outside my sandbox.
+

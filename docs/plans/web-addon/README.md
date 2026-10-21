@@ -86,7 +86,7 @@ Confirmed by the user on 2026-10-21.
 
 | Step | What | Status |
 |---|---|---|
-| [1](01-addon-and-child.md) | The addon, its child, the `web` extra | Not built |
+| [1](01-addon-and-child.md) | The addon, its child, the `web` extra | **Built** 2026-10-21, not committed |
 | [2](02-walls.md) | The profile, the settings, the interceptor, pages from memory; hostile pages | Not built |
 | [3](03-apps.md) | `app.json`, `open_page`, `reload`, `close_page`, windows, `loaded` / `failed` / `closed` | Not built |
 | [4](04-bridge.md) | `ask`, `reply`, `emit`, `tell`, errors, rate and time limits, `web.toml` | Not built |
