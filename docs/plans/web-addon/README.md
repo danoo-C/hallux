@@ -4,8 +4,9 @@
 follows is in [docs/web-addon/](../../web-addon/README.md): [web-engine.md](../../web-addon/web-engine.md)
 (the engine, its walls, and the check that held) and [apps.md](../../web-addon/apps.md)
 (apps of many files, the AI as their backend). Every question of both is decided. The
-decisions this plan takes on its own are in [a table below](#decisions-of-this-plan): my
-proposals, not confirmed yet. **Decision 1 changes apps.md:** an app lists its files, and
+decisions this plan takes on its own are in [a table below](#decisions-of-this-plan): **the
+user confirmed all of them on 2026-10-21** ("the decisions look good"), and chose to build
+on branch `gui-addon`. **Decision 1 changes apps.md:** an app lists its files, and
 they are read when the app opens, not when the page asks for them.
 
 **How this plan is laid out.** Like the plans of the config panel and addon agents: this
@@ -54,7 +55,7 @@ Until step 3 the AI can't open anything; until step 4 a page can't talk to it.
 
 ## Decisions of this plan
 
-My proposals; the user hasn't confirmed them yet.
+Confirmed by the user on 2026-10-21.
 
 | # | Decision | Why |
 |---|---|---|
