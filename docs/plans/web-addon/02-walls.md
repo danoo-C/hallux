@@ -57,7 +57,7 @@ page's own files are served.
 
 ## As built (2026-10-21)
 
-Built on branch `gui-addon`, not committed when written.
+Built on branch `gui-addon`, committed as 03bd5cc.
 
 - **Everything of "Build" above is in the child,** with one profile **per window**, not one
   for all: a profile in memory lives as long as its child, so `localStorage` would have

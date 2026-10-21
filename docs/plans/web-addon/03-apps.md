@@ -63,3 +63,44 @@ page (Back, Forward, Reload stay; "Open in new window", "Save page", "View sourc
 
 An app of several files and pages opens in a real window, links between its pages work,
 `reload` shows a change, and `loaded` and `closed` reach the AI.
+
+## As built (2026-10-21)
+
+Built on branch `gui-addon`, committed with this text.
+
+- **`open_page(disk, folder)`, `reload(disk, page)`, `close_page(page)`, `stop()`**, as in the
+  table above. `open_page` of an app that is open answers `{"page": name, "open":
+  "already"}`, so the AI knows nothing was read again. `reload` refuses if the folder's
+  `app.json` now names another app. The child gets 5 seconds to take an app's files and make
+  its window (`OPEN_SECONDS`); the page itself loads after the call returns.
+- **`app.json`:** `check_app` finds every problem at once, as `gui`'s layouts do. Beyond the
+  plan: unknown keys, a path listed twice, `app.json` listing itself, and paths that aren't
+  plain (`a/./b`, `a//b`) are problems too. `title` defaults to the name, `size` to
+  800 × 600.
+- **Reading:** `app.json` first, then each listed file through the disk handle. The first one
+  that fails ends the call with one error naming it (`<path>: ENOENT`, `EFBIG`, or `not
+  text`), and nothing is started. Over 10 MB in all is refused.
+- **The pages the addon knows** live on its link to the child (`pages`: name to folder). A
+  `closed` event takes a page off; a crash of the child sends `failed` for each of its pages,
+  with "the web engine stopped: it crashed (...)", and the next call starts a new child.
+- **The window:** the title is `<title> — hallux`, sized from `app.json`. The right-click
+  menu loses "Open link in new window/tab", "Save page", "View source", the downloads and
+  "Inspect"; Back, Forward, Reload, copy and paste stay. Not tried by hand yet (offscreen has
+  no mouse): the live run of step 5.
+- **Found while testing:** Qt calls a load failed when a navigation away is refused, so a
+  hostile `location = ...` would have sent `failed` while the page sat there unharmed. A
+  refused main-frame navigation is now remembered, and the failure it causes isn't reported.
+- **Not in the plan:** a child command `as_user`, which closes a window the way the user's
+  click does, for the tests; `report` also gives the window's title. Neither is exposed to
+  the AI.
+- **The manual** (`prompt()`) now describes the four functions, `app.json` and the events;
+  step 5 finishes it.
+- **Tests:** 14 more, 33 in all: `app.json`'s checks and limits, unreadable files, 10 MB,
+  loaded after return, open twice, the third page, `close_page` and `stop`, reload showing a
+  change, title and size, the user's close, a crash failing both pages and a new child
+  after, links between pages, a refused navigation that isn't a failure, the tools' schemas.
+  Three runs in a row passed. Full suite: 1892 passed, and the sandbox test failed only
+  inside my own sandbox.
+- **Not done here:** "Done when" asks for a real window. Offscreen, everything above holds; a
+  window on the desktop is for the live run of step 5, outside my sandbox.
+
