@@ -66,7 +66,7 @@ An app of several files and pages opens in a real window, links between its page
 
 ## As built (2026-10-21)
 
-Built on branch `gui-addon`, committed with this text.
+Built on branch `gui-addon`, committed as 6406b5b.
 
 - **`open_page(disk, folder)`, `reload(disk, page)`, `close_page(page)`, `stop()`**, as in the
   table above. `open_page` of an app that is open answers `{"page": name, "open":

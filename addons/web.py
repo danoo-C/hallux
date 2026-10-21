@@ -10,7 +10,8 @@ Qt stays in the child, never in Hallux: Hallux only checks that PySide6 is insta
 design is in docs/web-addon/, the plan in docs/plans/web-addon/. Hallux's own code knows
 nothing of this addon: it uses only what every addon has.
 
-Nothing here calls the built-in open().
+It reads the machine's files only through the disk handle. The one file it reads itself is
+its own settings, addons/web.toml, the user's to write, once when it loads.
 """
 import contextlib
 import errno
@@ -25,6 +26,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 
 if importlib.util.find_spec("PySide6") is None:
     raise ModuleNotFoundError("No module named 'PySide6'")
@@ -65,6 +67,34 @@ APP_BYTES_MAX = 10 * 1024 * 1024       # all of an app's files together; one fil
 PAGES_MAX = 2                          # windows open at a time; each takes some 700 MB
 ENTRY = "index.html"
 PROBLEMS_MAX = 1500                    # characters of the error that lists app.json's problems
+DATA_MAX = 3800                        # characters of JSON in an ask, emit, reply or tell
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web.toml")
+ASK_TIMEOUT = (10, 3600, 120)          # seconds a page waits for reply: least, most, default
+
+
+class WebError(Exception):
+    """What the AI is told when the web engine can't do what was asked."""
+
+
+def read_config(path: str = CONFIG_FILE) -> dict:
+    """addons/web.toml, if the user wrote one. A bad one stops the addon from loading: the
+    status bar then says why."""
+    if not os.path.exists(path):
+        return {"ask_timeout_seconds": ASK_TIMEOUT[2]}
+    try:
+        with open(path, "rb") as file:
+            config = tomllib.load(file)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        raise WebError(f"addons/web.toml can't be read: {e}") from None
+    unknown = sorted(set(config) - {"ask_timeout_seconds"})
+    if unknown:
+        raise WebError(f"addons/web.toml: unknown key {unknown[0]}")
+    seconds = config.get("ask_timeout_seconds", ASK_TIMEOUT[2])
+    if (not isinstance(seconds, int) or isinstance(seconds, bool)
+            or not ASK_TIMEOUT[0] <= seconds <= ASK_TIMEOUT[1]):
+        raise WebError(f"addons/web.toml: ask_timeout_seconds must be a whole number from "
+                       f"{ASK_TIMEOUT[0]} to {ASK_TIMEOUT[1]}")
+    return {"ask_timeout_seconds": seconds}
 
 
 def prompt() -> str:
@@ -78,7 +108,17 @@ THE FUNCTIONS
   already, its window comes to the front, unchanged: reload shows changes.
 - reload(page): reads the app's files again and loads the page again.
 - close_page(page): closes one window. stop(): closes them all.
+- reply(page, id, data): answers the page's ask number id; data is JSON, as a string.
+- tell(page, data): sends JSON to the page, unasked.
 At most 2 pages are open at a time.
+
+IN THE PAGE: the hallux object, there before the page's own scripts
+- await hallux.ask(data): asks you; resolves with what your reply sends. Fails after
+  {timeout} seconds without a reply.
+- hallux.emit(data): tells you something, needing no answer.
+- hallux.on("message", fn): fn gets what tell sends.
+data is any JSON value, at most 3800 characters. One ask and one emit a second, at most 10
+asks waiting; more fail in the page at once.
 
 APP.JSON
 {"name": "chat", "title": "Kitty chat", "size": [800, 600],
@@ -88,14 +128,14 @@ APP.JSON
   listed doesn't exist for the page. At most 200 files, 1 MB each, 10 MB in all, text only.
 - The page starts at index.html and reaches its other files by relative paths.
 
-EVENTS (call addon_listen("web") first)
-{"event": "loaded", "page": name}, {"event": "failed", "page": name, "why": ...} and
-{"event": "closed", "page": name} when the user closed the window.
-"""
-
-
-class WebError(Exception):
-    """What the AI is told when the web engine can't do what was asked."""
+EVENTS (call addon_listen("web") first, or no ask is ever heard)
+{"event": "loaded", "page": name}, {"event": "failed", "page": name, "why": ...},
+{"event": "closed", "page": name} when the user closed the window,
+{"event": "ask", "page": name, "id": 7, "data": ...}: answer it with reply,
+{"event": "page", "page": name, "data": ...}: an emit,
+{"event": "error", "page": name, "message": ..., "file": ..., "line": ...}: an uncaught
+error in the page's JavaScript, at most one a second.
+""".replace("{timeout}", str(_config["ask_timeout_seconds"]))
 
 
 # ---------------------------------------------------------------- the addon (inside Hallux)
@@ -116,7 +156,8 @@ def open_page(disk, folder: str) -> dict:
             raise WebError(f"{PAGES_MAX} pages are open already "
                            f"({', '.join(sorted(link.pages))}): close one first")
         answer = link.ask({"cmd": "open", "app": name, "files": files,
-                           "title": f"{app['title']} \u2014 hallux", "size": app["size"]},
+                           "title": f"{app['title']} \u2014 hallux", "size": app["size"],
+                           "ask_timeout": _config["ask_timeout_seconds"]},
                           OPEN_SECONDS)
         if "error" in answer:
             raise WebError(answer["error"])
@@ -155,6 +196,29 @@ def close_page(page: str) -> dict:
     return {"ok": True}
 
 
+def reply(page: str, id: int, data: str) -> dict:
+    """Answer request `id` of a page, the one its "ask" event carried. data is JSON, as a
+    string: what the page's hallux.ask resolves with."""
+    value = _json_data(data)
+    with _lock:
+        _folder_of(page)
+        answer = _link.ask({"cmd": "reply", "app": page, "id": id, "data": value})
+    if "error" in answer:
+        raise WebError(answer["error"])
+    return {"ok": True}
+
+
+def tell(page: str, data: str) -> dict:
+    """Send data, JSON as a string, to the page: its hallux.on("message", fn) gets it."""
+    value = _json_data(data)
+    with _lock:
+        _folder_of(page)
+        answer = _link.ask({"cmd": "tell", "app": page, "data": value})
+    if "error" in answer:
+        raise WebError(answer["error"])
+    return {"ok": True}
+
+
 def stop() -> dict:
     """Close every web window. Nothing happens if none is open."""
     global _link
@@ -165,7 +229,7 @@ def stop() -> dict:
     return {"ok": True}
 
 
-EXPOSED = [open_page, reload, close_page, stop]
+EXPOSED = [open_page, reload, close_page, reply, tell, stop]
 
 
 def connect(emit) -> None:
@@ -177,6 +241,20 @@ def connect(emit) -> None:
 _lock = threading.Lock()               # one question at a time
 _link = None                           # the pipe to the child, once something needed it
 _emit = None                           # where events go, once Hallux has connected
+_config = read_config()                # a bad web.toml: the addon doesn't load
+
+
+def _json_data(data: str) -> object:
+    """What the AI sends a page: JSON, at most DATA_MAX characters of it."""
+    if not isinstance(data, str):
+        raise WebError("data must be JSON, as a string")
+    try:
+        value = json.loads(data)
+    except ValueError as e:
+        raise WebError(f"data isn't JSON: {e}") from None
+    if len(json.dumps(value, ensure_ascii=False)) > DATA_MAX:
+        raise WebError(f"data is more than {DATA_MAX} characters of JSON")
+    return value
 
 
 def _child() -> "_Link":
@@ -405,6 +483,65 @@ BLOCKED_KEPT = 50                      # blocked addresses a window remembers, f
 BLOCKED_LOGGED = 5                     # of them, written to the child's log
 CONSOLE_KEPT = 200                     # lines of a page's console a window remembers
 DEFAULT_SIZE = (900, 650)
+ASKS_WAITING_MAX = 10                  # asks of one window waiting for reply
+CALLS_SECONDS = 1.0                    # one ask, and one emit, a second per window
+ERRORS_SECONDS = 1.0                   # one uncaught error a second goes to the AI
+ERROR_MESSAGE_MAX = 500
+
+# The page's side of the bridge, run before the page's own scripts, after Qt's
+# qwebchannel.js. Calls made before the channel is ready wait for it; the listeners are
+# connected before anything is sent. The limits are the child's, never this script's: a page
+# can change anything here, and gets nothing more by it.
+HALLUX_JS = """
+(() => {
+  let bridge = null;
+  const waiting = [], asks = new Map(), listeners = [];
+  const call = (fn) => bridge ? fn(bridge) : waiting.push(fn);
+  const send = (data) => {
+    const text = JSON.stringify(data === undefined ? null : data);
+    if (text === undefined) throw new TypeError("hallux: data must be JSON");
+    return text;
+  };
+  new QWebChannel(qt.webChannelTransport, (channel) => {
+    bridge = channel.objects.hallux;
+    bridge.replied.connect((text) => {
+      const answer = JSON.parse(text), promise = asks.get(answer.id);
+      if (!promise) return;
+      asks.delete(answer.id);
+      if ("error" in answer) promise.no(new Error(answer.error)); else promise.ok(answer.data);
+    });
+    bridge.message.connect((text) => {
+      const data = JSON.parse(text);
+      for (const fn of listeners) {
+        try { fn(data); } catch (e) { setTimeout(() => { throw e; }); }
+      }
+    });
+    for (const fn of waiting.splice(0)) fn(bridge);
+  });
+  const hallux = Object.freeze({
+    ask: (data) => new Promise((ok, no) => {
+      const text = send(data);
+      call((b) => b.ask(text, (answer) => {
+        const told = JSON.parse(answer);
+        if ("error" in told) no(new Error(told.error)); else asks.set(told.id, {ok, no});
+      }));
+    }),
+    emit: (data) => new Promise((ok, no) => {
+      const text = send(data);
+      call((b) => b.emit(text, (answer) => {
+        const told = JSON.parse(answer);
+        if ("error" in told) no(new Error(told.error)); else ok();
+      }));
+    }),
+    on: (kind, fn) => {
+      if (kind !== "message") throw new Error('hallux.on knows only "message"');
+      if (typeof fn !== "function") throw new TypeError("hallux.on needs a function");
+      listeners.push(fn);
+    },
+  });
+  Object.defineProperty(window, "hallux", {value: hallux, enumerable: true});
+})();
+"""
 
 
 def content_type(path: str) -> str:
@@ -433,8 +570,11 @@ def child_main() -> int:
         os.environ.setdefault(key, value)
 
     from PySide6 import QtWebEngineWidgets  # noqa: F401  (Qt wants it before the application)
-    from PySide6.QtCore import QBuffer, QByteArray, QObject, Qt, Signal, Slot, QUrl
-    from PySide6.QtWebEngineCore import (QWebEnginePage, QWebEngineProfile, QWebEngineSettings,
+    from PySide6.QtCore import (QBuffer, QByteArray, QFile, QIODevice, QObject, Qt, QTimer,
+                                Signal, Slot, QUrl)
+    from PySide6.QtWebChannel import QWebChannel
+    from PySide6.QtWebEngineCore import (QWebEnginePage, QWebEngineProfile, QWebEngineScript,
+                                         QWebEngineSettings,
                                          QWebEngineUrlRequestInterceptor, QWebEngineUrlRequestJob,
                                          QWebEngineUrlScheme, QWebEngineUrlSchemeHandler)
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -449,6 +589,9 @@ def child_main() -> int:
 
     app = QApplication(["hallux-web"])
     app.setQuitOnLastWindowClosed(False)              # windows come and go; Hallux decides
+    channel_js = QFile(":/qtwebchannel/qwebchannel.js")   # Qt's own, never served as a file
+    channel_js.open(QIODevice.OpenModeFlag.ReadOnly)
+    BRIDGE_JS = bytes(channel_js.readAll()).decode("utf-8") + HALLUX_JS
     attribute = QWebEngineSettings.WebAttribute
     OFF = (attribute.LocalContentCanAccessRemoteUrls, attribute.LocalContentCanAccessFileUrls,
            attribute.JavascriptCanOpenWindows, attribute.PluginsEnabled,
@@ -508,6 +651,9 @@ def child_main() -> int:
             return False
 
         def javaScriptConsoleMessage(self, level, message, line, source) -> None:
+            if (level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel
+                    and message.startswith("Uncaught")):
+                self.window.uncaught(message, line, source)
             self.window.console.append({"level": level.name, "message": message[:500],
                                         "line": line, "source": source[:200]})
             del self.window.console[:-CONSOLE_KEPT]
@@ -517,6 +663,85 @@ def child_main() -> int:
                action.OpenLinkInNewBackgroundTab, action.SavePage, action.ViewSource,
                action.DownloadLinkToDisk, action.DownloadImageToDisk,
                action.DownloadMediaToDisk, action.InspectElement)
+
+    def json_or_error(text: str):
+        try:
+            value = json.loads(text)
+        except (TypeError, ValueError):
+            return None, "hallux: data must be JSON"
+        if len(json.dumps(value, ensure_ascii=False)) > DATA_MAX:
+            return None, f"hallux: data is more than {DATA_MAX} characters of JSON"
+        return value, None
+
+    class Bridge(QObject):
+        """The page's one way out, as `hallux` on QWebChannel. Every limit is kept here."""
+        replied = Signal(str)                         # {"id", "data"} or {"id", "error"}
+        message = Signal(str)                         # what tell sends
+
+        def __init__(self, window, ask_timeout: float) -> None:
+            super().__init__()
+            self.window, self.ask_timeout = window, ask_timeout
+            self.asked, self.waiting = 0, {}          # id: its timer
+            self.last = {"ask": float("-inf"), "emit": float("-inf")}
+
+        def too_soon(self, kind: str) -> bool:
+            now = time.monotonic()
+            if now - self.last[kind] < CALLS_SECONDS:
+                return True
+            self.last[kind] = now
+            return False
+
+        @Slot(str, result=str)
+        def ask(self, text: str) -> str:
+            if len(self.waiting) >= ASKS_WAITING_MAX:
+                return json.dumps({"error": f"hallux: {ASKS_WAITING_MAX} asks wait already"})
+            if self.too_soon("ask"):
+                return json.dumps({"error": "hallux: too many requests: one ask a second"})
+            data, error = json_or_error(text)
+            if error:
+                return json.dumps({"error": error})
+            self.asked += 1
+            number = self.asked
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda: self.give_up(number))
+            timer.start(int(self.ask_timeout * 1000))
+            self.waiting[number] = timer
+            say({"event": "ask", "page": self.window.app, "id": number, "data": data})
+            return json.dumps({"id": number})
+
+        @Slot(str, result=str)
+        def emit(self, text: str) -> str:
+            if self.too_soon("emit"):
+                return json.dumps({"error": "hallux: too many events: one emit a second"})
+            data, error = json_or_error(text)
+            if error:
+                return json.dumps({"error": error})
+            say({"event": "page", "page": self.window.app, "data": data})
+            return json.dumps({"ok": True})
+
+        def give_up(self, number: int) -> None:
+            if self.waiting.pop(number, None) is not None:
+                seconds = f"{self.ask_timeout:g}"
+                self.replied.emit(json.dumps({"id": number,
+                                              "error": f"hallux: no answer in {seconds} seconds"}))
+
+        def forget(self) -> None:
+            """The page is gone, or loads again: its asks can never be answered."""
+            for timer in self.waiting.values():
+                timer.stop()
+                timer.deleteLater()
+            self.waiting.clear()
+
+        def reply(self, number: object, data) -> dict:
+            timer = self.waiting.pop(number, None) if isinstance(number, int) else None
+            if timer is None:
+                return {"error": f"no ask {str(number)[:20]} of {self.window.app} waits: it was "
+                                 f"answered, timed out, never made, or the page reloaded"}
+            timer.stop()
+            timer.deleteLater()
+            self.replied.emit(json.dumps({"id": number, "data": data}))
+            return {"ok": True}
 
     class View(QWebEngineView):
         """A window with no address bar and no menu; its right-click menu keeps nothing that
@@ -544,8 +769,10 @@ def child_main() -> int:
         """One app in a window of its own, with a profile of its own: nothing it stores
         outlives it, and no app sees another's."""
 
-        def __init__(self, app_name: str, files: dict, title: str, size) -> None:
+        def __init__(self, app_name: str, files: dict, title: str, size,
+                     ask_timeout: float) -> None:
             self.app, self.files, self.closing, self.refused = app_name, files, False, False
+            self.last_error = float("-inf")
             self.blocked, self.blocked_urls, self.console = 0, [], []
             self.profile = QWebEngineProfile()        # no storage name: off the record
             self.profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
@@ -562,6 +789,17 @@ def child_main() -> int:
             self.page.fullScreenRequested.connect(lambda request: request.reject())
             self.page.renderProcessTerminated.connect(self._crashed)
             self.page.loadFinished.connect(self._loaded)
+            self.bridge = Bridge(self, ask_timeout)
+            self.channel = QWebChannel(self.page)
+            self.channel.registerObject("hallux", self.bridge)
+            self.page.setWebChannel(self.channel)     # the main world: where the page's code is
+            script = QWebEngineScript()
+            script.setName("hallux")
+            script.setSourceCode(BRIDGE_JS)
+            script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+            script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+            script.setRunsOnSubFrames(False)
+            self.page.scripts().insert(script)
             self.view = View(self)
             self.view.setPage(self.page)
             self.view.setWindowTitle(title)
@@ -581,6 +819,15 @@ def child_main() -> int:
                 self.blocked_urls.append(shown)
             if self.blocked <= BLOCKED_LOGGED:
                 print(f"web {self.app}: blocked {shown}", file=sys.stderr, flush=True)
+
+        def uncaught(self, message: str, line: int, source: str) -> None:
+            now = time.monotonic()
+            if now - self.last_error < ERRORS_SECONDS:
+                return                                # a loop of errors: one a second
+            self.last_error = now
+            where = source.removeprefix(f"{SCHEME}://{self.app}/")
+            say({"event": "error", "page": self.app, "message": message[:ERROR_MESSAGE_MAX],
+                 "file": where[:200], "line": line})
 
         def _loaded(self, ok: bool) -> None:
             if not ok and self.refused:               # a navigation away, refused: still here
@@ -607,6 +854,7 @@ def child_main() -> int:
             if self.closing:
                 return
             self.closing = True
+            self.bridge.forget()
             self.page.loadFinished.disconnect(self._loaded)       # closing is no failure
             self.page.renderProcessTerminated.disconnect(self._crashed)
             self.view.close()
@@ -642,9 +890,10 @@ def child_main() -> int:
                 if name in windows:
                     windows.pop(name).close()
                 windows[name] = Window(name, message["files"], message.get("title", name),
-                                       message.get("size", DEFAULT_SIZE))
+                                       message.get("size", DEFAULT_SIZE),
+                                       message.get("ask_timeout", ASK_TIMEOUT[2]))
                 return {"ok": True}
-            if command not in ("close", "report", "raise", "reload", "as_user"):
+            if command not in ("close", "report", "raise", "reload", "as_user", "reply", "tell"):
                 return {"error": f"the web engine doesn't know {str(command)[:40]}"}
             if name not in windows:
                 return {"error": f"no page called {str(name)[:40]} is open"}
@@ -656,7 +905,13 @@ def child_main() -> int:
                 return {"ok": True}
             if command == "reload":
                 window.files = message["files"]
+                window.bridge.forget()
                 window.page.triggerAction(QWebEnginePage.WebAction.ReloadAndBypassCache)
+                return {"ok": True}
+            if command == "reply":
+                return window.bridge.reply(message.get("id"), message.get("data"))
+            if command == "tell":
+                window.bridge.message.emit(json.dumps(message.get("data")))
                 return {"ok": True}
             if command == "as_user":                  # for the tests: what the user's click does
                 window.view.close()

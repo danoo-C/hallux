@@ -70,3 +70,39 @@ as for any addon that fails its checks. An addon has no way of its own to the st
 ## Done when
 
 A page asks, the AI replies, the page shows it; `tell` reaches the page; every limit holds.
+
+## As built (2026-10-21)
+
+Built on branch `gui-addon`, committed with this text.
+
+- **The page's side** (`HALLUX_JS`, after Qt's `qwebchannel.js`, read from Qt's resources)
+  is injected at `DocumentCreation` in the main world, top frame only. `hallux` is frozen
+  and can't be reassigned. `ask` and `emit` both return promises; every refusal (a limit,
+  too big, not JSON) rejects the promise with a message starting `hallux:`. Calls made
+  before the channel is ready wait for it.
+- **Every limit is kept in the child,** in a `Bridge` object per window, never in the page's
+  script: a page can rewrite its own `hallux`, or reach the channel directly, and gets
+  nothing more by it. One ask and one emit a second (a strict second between two), at most
+  10 asks waiting, at most 3800 characters of JSON both ways, one uncaught error a second.
+- **The time limit** runs in the child, one timer per ask. An ask that times out, was
+  answered, never existed, or belonged to a page that has since reloaded or closed, can't be
+  answered: `reply` says which cases those are. Reloading and closing stop the timers.
+- **`reply(page, id, data)` and `tell(page, data)`:** `data` is any JSON value as a string,
+  not only an object (a reply is often one string). The plan said "a JSON object".
+- **Uncaught errors** are console messages of the error level that start with "Uncaught"
+  (promise rejections too). `file` is the path inside the app (`app.js`), not the whole URL.
+  A page can fake one with `console.error("Uncaught ...")`, and gains only an event a second.
+- **`addons/web.toml`:** `read_config` runs when the addon loads. A bad file raises
+  `WebError`, and the loader skips the addon with "WebError: addons/web.toml: ...". The value
+  is passed to the child with each `open`. The docstring's "nothing here calls the built-in
+  open()" became: the machine's files only through the disk handle, and its own `web.toml`
+  once at load. No test enforced it; it is a promise about the machine's files.
+- **The manual** now has `reply`, `tell`, the `hallux` object, its limits, and every event.
+  The time limit in it is the one `web.toml` set.
+- **Tests:** 12 more, 45 in all: ask and reply, a timeout and a late reply, emit and tell
+  with calls made before the channel is ready, each rate limit, the eleventh waiting ask, too
+  big and not JSON both ways, an uncaught error with file and line (one a second), `reply`
+  and `tell` without a page, an ask nobody hears, and `web.toml`: missing, good, five bad
+  ones, and the addon skipped with the reason. Three runs in a row passed. Full suite: 1904
+  passed, and the sandbox test failed only inside my own sandbox.
+

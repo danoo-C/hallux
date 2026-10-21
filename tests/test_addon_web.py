@@ -54,7 +54,7 @@ def fake_child(web, monkeypatch, tmp_path, body: str) -> None:
 def test_the_file_passes_every_check_of_the_loader(addon):
     assert addon.name == "web"
     assert addon.summary.startswith("Web pages in windows of their own")
-    assert list(addon.functions) == ["open_page", "reload", "close_page", "stop"]
+    assert list(addon.functions) == ["open_page", "reload", "close_page", "reply", "tell", "stop"]
     assert addon.stop is addon.functions["stop"] and addon.has_events
 
 
@@ -582,4 +582,179 @@ def test_a_refused_navigation_is_no_failure(web, trap):
     web.open_page(disk, "/home/user/chat")
     results(web, "chat")
     assert [e["event"] for e in heard] == ["loaded"] and hits == []
+
+
+# ---------------------------------------------------------------- the bridge
+
+def bridge_app(web, heard, script: str, seconds_timeout: int = 120):
+    """Open an app whose index.html runs `script`, with R() and done() to report."""
+    web.connect(heard.append)
+    web._config["ask_timeout_seconds"] = seconds_timeout
+    page = ("<script>const R = (k, v) => console.log('RESULT ' + k + ' ' + v);"
+            "const done = () => R('done', 'yes');</script><script>" + script + "</script>")
+    web.open_page(app_disk(**{"index.html": page}), "/home/user/chat")
+
+
+def first(heard, kind, seconds=30):
+    events(heard, kind, seconds)
+    return next(e for e in heard if e.get("event") == kind)
+
+
+@pytest.fixture
+def quick(web, monkeypatch):
+    """The addon, with web.toml's time limit put back after the test."""
+    monkeypatch.setitem(web._config, "ask_timeout_seconds", 120)
+    return web
+
+
+@needs_qt
+def test_a_page_asks_and_the_ai_replies(quick):
+    web, heard = quick, []
+    bridge_app(web, heard, "hallux.ask({q: 'six times seven'})"
+                           ".then(r => { R('answer', JSON.stringify(r)); done(); })")
+    asked = first(heard, "ask")
+    assert asked == {"event": "ask", "page": "chat", "id": 1, "data": {"q": "six times seven"}}
+    assert web.reply("chat", 1, '{"a": 42}') == {"ok": True}
+    assert results(web, "chat")["answer"] == '{"a":42}'
+    with pytest.raises(web.WebError, match="no ask 1 of chat waits"):
+        web.reply("chat", 1, '"again"')
+    with pytest.raises(web.WebError, match="no ask 99 of chat waits"):
+        web.reply("chat", 99, "1")
+
+
+@needs_qt
+def test_an_unanswered_ask_fails_at_its_time_limit(quick):
+    web, heard = quick, []
+    bridge_app(web, heard, "hallux.ask('hello?').catch(e => { R('failed', e.message); done(); })",
+               seconds_timeout=1)
+    asked = first(heard, "ask")
+    assert results(web, "chat")["failed"] == "hallux: no answer in 1 seconds"
+    with pytest.raises(web.WebError, match="timed out"):
+        web.reply("chat", asked["id"], '"too late"')
+
+
+@needs_qt
+def test_emit_and_tell_both_ways_and_early_calls_are_not_lost(quick):
+    web, heard = quick, []
+    # Called at once, before the channel is ready: they wait for it.
+    bridge_app(web, heard, "hallux.on('message', d => { R('told', JSON.stringify(d)); done(); });"
+                           "hallux.emit({clicked: 'send'});")
+    assert first(heard, "page") == {"event": "page", "page": "chat", "data": {"clicked": "send"}}
+    assert web.tell("chat", '{"news": [1, 2]}') == {"ok": True}
+    assert results(web, "chat")["told"] == '{"news":[1,2]}'
+
+
+@needs_qt
+def test_one_ask_a_second(quick):
+    web, heard = quick, []
+    bridge_app(web, heard, """
+        hallux.ask(1);
+        hallux.ask(2).catch(e => { R('second', e.message); });
+        setTimeout(() => hallux.ask(3).then(() => {}, e => R('third', e.message)), 1100);
+        setTimeout(done, 1600);""")
+    found = results(web, "chat")
+    assert found["second"] == "hallux: too many requests: one ask a second"
+    assert "third" not in found                       # a second later, it went through
+    assert [e["data"] for e in heard if e["event"] == "ask"] == [1, 3]
+
+
+@needs_qt
+def test_one_emit_a_second(quick):
+    web, heard = quick, []
+    bridge_app(web, heard, "hallux.emit(1); hallux.emit(2).catch(e => { R('second', e.message);"
+                           "done(); });")
+    assert results(web, "chat")["second"] == "hallux: too many events: one emit a second"
+    assert [e["data"] for e in heard if e["event"] == "page"] == [1]
+
+
+@needs_qt
+def test_the_eleventh_waiting_ask_fails(quick, monkeypatch):
+    web, heard = quick, []
+    bridge_app(web, heard, """
+        let n = 0;
+        const next = () => { n += 1; hallux.ask(n).catch(e => { R('refused', n + ' ' + e.message);
+            done(); }); if (n < 11) setTimeout(next, 1050); };
+        next();""")
+    assert results(web, "chat", seconds=60)["refused"] == "11 hallux: 10 asks wait already"
+    assert len([e for e in heard if e["event"] == "ask"]) == 10
+
+
+@needs_qt
+def test_data_too_big_or_not_json_is_refused(quick):
+    web, heard = quick, []
+    bridge_app(web, heard, """
+        hallux.ask('x'.repeat(4000)).catch(e => R('big', e.message));
+        hallux.emit(() => 1).catch(e => R('function', e.message));
+        setTimeout(done, 300);""")
+    found = results(web, "chat")
+    assert found["big"] == "hallux: data is more than 3800 characters of JSON"
+    assert found["function"] == "hallux: data must be JSON"
+    with pytest.raises(web.WebError, match="data isn't JSON"):
+        web.tell("chat", "{nope")
+    with pytest.raises(web.WebError, match="more than 3800"):
+        web.tell("chat", json.dumps("y" * 4000))
+
+
+@needs_qt
+def test_an_uncaught_error_arrives_with_its_file_and_line(quick):
+    web, heard = quick, []
+    web.connect(heard.append)
+    page = "<script src=app.js></script>"
+    script = "\n\nfunction go() { nothing.here(); }\nsetTimeout(go, 100);\nsetTimeout(go, 200);\n"
+    web.open_page(app_disk(**{"index.html": page, "app.js": script}), "/home/user/chat")
+    error = first(heard, "error")
+    assert error["page"] == "chat" and error["file"] == "app.js" and error["line"] == 3
+    assert "nothing is not defined" in error["message"]
+    time.sleep(0.5)
+    assert len([e for e in heard if e["event"] == "error"]) == 1   # one a second
+
+
+@needs_qt
+def test_reply_and_tell_need_an_open_page(quick):
+    with pytest.raises(quick.WebError, match="no page called ghost is open"):
+        quick.reply("ghost", 1, "1")
+    with pytest.raises(quick.WebError, match="no page called ghost is open"):
+        quick.tell("ghost", "1")
+
+
+@needs_qt
+def test_an_ask_nobody_hears_fails_at_its_time_limit(quick):
+    web, heard = quick, []
+    bridge_app(web, heard, "hallux.ask('anyone?').catch(e => { R('failed', e.message); done(); })",
+               seconds_timeout=1)
+    web.connect(lambda event: None)                   # Hallux drops it: nobody listens
+    assert results(web, "chat")["failed"] == "hallux: no answer in 1 seconds"
+
+
+# ---------------------------------------------------------------- web.toml
+
+@needs_qt
+def test_web_toml(web, tmp_path):
+    missing = tmp_path / "none.toml"
+    assert web.read_config(str(missing)) == {"ask_timeout_seconds": 120}
+    good = tmp_path / "good.toml"
+    good.write_text("ask_timeout_seconds = 300\n")
+    assert web.read_config(str(good)) == {"ask_timeout_seconds": 300}
+    for text, told in (("ask_timeout_seconds = 5", "from 10 to 3600"),
+                       ("ask_timeout_seconds = 3601", "from 10 to 3600"),
+                       ("ask_timeout_seconds = 12.5", "whole number"),
+                       ("ask_timeout_seconds = true", "whole number"),
+                       ("colour = 1", "unknown key colour"),
+                       ("this isn't toml", "can't be read")):
+        bad = tmp_path / "bad.toml"
+        bad.write_text(text)
+        with pytest.raises(web.WebError, match=told):
+            web.read_config(str(bad))
+
+
+@needs_qt
+def test_a_bad_web_toml_stops_the_addon_from_loading(tmp_path):
+    folder = tmp_path / "addons"
+    folder.mkdir()
+    (folder / "web.py").write_text((app.ADDONS_FOLDER / "web.py").read_text())
+    (folder / "web.toml").write_text("ask_timeout_seconds = 1\n")
+    loaded, skipped = addons.load(folder, only=["web"])
+    assert loaded == []
+    assert skipped == {"web": "WebError: addons/web.toml: ask_timeout_seconds must be a whole "
+                              "number from 10 to 3600"}
 
