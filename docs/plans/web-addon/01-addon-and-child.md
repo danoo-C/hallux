@@ -53,7 +53,7 @@ child; nothing reaches the terminal.
 
 ## As built (2026-10-21)
 
-Built on branch `gui-addon`, not committed when written.
+Built on branch `gui-addon`, committed as b1e5b61.
 
 - **`addons/web.py`:** the addon, with `stop` its one function, and `connect`. Its link to
   the child, `_child()`, starts the child at the first call that needs it and starts it again

@@ -3,10 +3,12 @@
 Skipped without PySide6 (pip install -e '.[web]'), except the test that the addon is then
 skipped cleanly."""
 import importlib.util
+import http.server
 import json
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 
 import pytest
@@ -111,7 +113,9 @@ def test_stop_with_nothing_running_is_fine(web):
 def test_the_environment_is_quiet_and_has_the_systems_fonts(web, monkeypatch):
     monkeypatch.delenv("FONTCONFIG_FILE", raising=False)
     env = web.child_env()
-    assert env["QTWEBENGINE_CHROMIUM_FLAGS"] == "--log-level=3"
+    assert env["QTWEBENGINE_CHROMIUM_FLAGS"].startswith("--log-level=3 --proxy-server=")
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox")
+    assert "--no-sandbox" not in web.child_env()["QTWEBENGINE_CHROMIUM_FLAGS"]
     assert "*.warning=false" in env["QT_LOGGING_RULES"]
     assert env.get("FONTCONFIG_FILE") == (web.SYSTEM_FONTS if web.os.path.exists(web.SYSTEM_FONTS)
                                           else None)
@@ -186,3 +190,198 @@ def test_a_line_that_answers_nothing_is_an_event(web, monkeypatch, tmp_path):
     """)
     assert ask(web, {"cmd": "ping"}) == {"ok": True}
     assert heard == [{"event": "loaded", "page": "chat"}]
+
+
+# ---------------------------------------------------------------- the walls
+
+@pytest.fixture
+def trap():
+    """A server on 127.0.0.1 that records every request that gets out of a page."""
+    hits = []
+
+    class Trap(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(("GET", self.path))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"leak")
+
+        def do_POST(self):
+            hits.append(("POST", self.path))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    class Server(http.server.ThreadingHTTPServer):
+        def verify_request(self, request, address):
+            hits.append(("CONNECT", address[1]))  # a socket opened, with or without a request
+            return True
+
+    server = Server(("127.0.0.1", 0), Trap)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}", hits
+    server.shutdown()
+
+
+def open_app(web, name: str, files: dict) -> None:
+    assert ask(web, {"cmd": "open", "app": name, "files": files}) == {"ok": True}
+
+
+def results(web, name: str, seconds: float = 40) -> dict:
+    """What the page logged as "RESULT <key> <value>", once it logged "RESULT done"."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        report = ask(web, {"cmd": "report", "app": name})
+        found = dict(line["message"].removeprefix("RESULT ").split(" ", 1)
+                     for line in report["console"] if line["message"].startswith("RESULT "))
+        if "done" in found:
+            return found | {"report": report}
+        time.sleep(0.2)
+    raise AssertionError(f"the page never finished: {report}")
+
+
+HOSTILE = """
+const R = (k, v) => console.log("RESULT " + k + " " + v);
+const tryit = async (k, f) => { try { await f(); R(k, "ALLOWED"); } catch (e) { R(k, "blocked"); } };
+const T = "TRAP";
+(async () => {
+  await tryit("fetch-local", () => fetch(T + "/fetch"));
+  await tryit("fetch-https", () => fetch("https://example.com/"));
+  await tryit("fetch-file", () => fetch("file:///etc/passwd"));
+  await tryit("fetch-other-app", () => fetch("hallux://other/x.js"));
+  await tryit("xhr", () => new Promise((ok, no) => { const x = new XMLHttpRequest();
+    x.open("GET", T + "/xhr"); x.onload = ok; x.onerror = no; x.send(); }));
+  await tryit("websocket", () => new Promise((ok, no) => { const w = new WebSocket(
+    T.replace("http", "ws") + "/ws"); w.onopen = ok; w.onerror = no; }));
+  await tryit("beacon", async () => { if (!navigator.sendBeacon(T + "/beacon", "x")) throw 0; });
+  await tryit("eventsource", () => new Promise((ok, no) => { const e = new EventSource(T + "/es");
+    e.onopen = ok; e.onerror = () => { e.close(); no(); }; }));
+  await tryit("worker", () => new Promise((ok, no) => { const w = new Worker(T + "/worker.js");
+    w.onerror = no; setTimeout(ok, 500); }));
+  R("window-open", String(window.open(T + "/popup")));
+  const a = document.createElement("a"); a.href = T + "/blank"; a.target = "_blank";
+  document.body.append(a); a.click();
+  await new Promise(ok => setTimeout(ok, 500));
+  location = T + "/location";
+  await new Promise(ok => setTimeout(ok, 500));
+  document.getElementById("form").submit();
+  await new Promise(ok => setTimeout(ok, 500));
+  const meta = document.createElement("meta"); meta.httpEquiv = "refresh";
+  meta.content = "0; url=" + T + "/refresh"; document.head.append(meta);
+  await new Promise(ok => setTimeout(ok, 1500));
+  R("still-here", location.href);
+  R("done", "yes");
+})();
+"""
+
+
+@needs_qt
+def test_a_hostile_page_gets_nothing_out(web, trap):
+    address, hits = trap
+    page = f"""<!doctype html><html><head><meta charset=utf-8>
+<link rel=prefetch href="{address}/prefetch"><link rel=preconnect href="{address}/preconnect">
+<link rel=dns-prefetch href="//leak.example.com">
+<style>body {{ background: url({address}/css) }}</style></head>
+<body><img src="{address}/img"><iframe src="{address}/iframe"></iframe>
+<form id=form action="{address}/form" method=post><input name=a value=1></form>
+<script src="hostile.js"></script></body></html>"""
+    open_app(web, "evil", {"index.html": page, "hostile.js": HOSTILE.replace("TRAP", address)})
+    found = results(web, "evil")
+    tried = ["fetch-local", "fetch-https", "fetch-file", "fetch-other-app", "xhr", "websocket",
+             "eventsource", "worker"]            # a beacon only queues: the wall stops it later
+    assert {key: found[key] for key in tried} == dict.fromkeys(tried, "blocked")
+    assert found["window-open"] == "null"
+    assert found["still-here"] == "hallux://evil/"
+    time.sleep(0.5)
+    assert hits == []
+    blocked = " ".join(found["report"]["blocked_urls"])
+    for path in ("/img", "/css", "/iframe", "/fetch", "/xhr", "/beacon", "/es", "/location",
+                 "/form", "/refresh"):
+        assert address + path in blocked, path
+    assert found["report"]["blocked"] >= 10
+
+
+@needs_qt
+def test_a_pages_own_files_are_served_and_nothing_else(web):
+    files = {
+        "index.html": "<!doctype html><link rel=stylesheet href='css/style.css'>"
+                      "<h1>hi</h1><img id=icon src='/icons/cat.svg'><script src='app.js'></script>",
+        "css/style.css": "h1 { color: rgb(255, 99, 71) }",
+        "icons/cat.svg": "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'/>",
+        "data/msg.json": '{"hi": "there"}',
+        "sub/index.html": "sub",
+        "app.js": """
+const R = (k, v) => console.log("RESULT " + k + " " + v);
+const status = async (path) => { try { return (await fetch(path)).status; } catch (e) { return "error"; } };
+window.onload = async () => {
+  R("color", getComputedStyle(document.querySelector("h1")).color.replaceAll(" ", ""));
+  R("svg", document.getElementById("icon").naturalWidth);
+  R("json", (await (await fetch("data/msg.json")).json()).hi);
+  R("absolute", await status("/data/msg.json"));
+  R("dotdot", await status("../../data/msg.json"));
+  R("dotdot-encoded", await status("/%2e%2e/%2e%2e/data/msg.json"));
+  R("escape", await status("../../../etc/passwd"));
+  R("missing", await status("nothing.js"));
+  R("folder", await (await fetch("sub/")).text());
+  R("type", (await fetch("data/msg.json")).headers.get("content-type").replaceAll(" ", ""));
+  R("data-url", await status("data:text/plain,hi"));
+  R("done", "yes");
+};"""}
+    open_app(web, "own", files)
+    found = results(web, "own")
+    assert found["color"] == "rgb(255,99,71)" and found["svg"] == "10" and found["json"] == "there"
+    assert (found["absolute"], found["dotdot"], found["dotdot-encoded"]) == ("200", "200", "200")
+    assert (found["escape"], found["missing"]) == ("404", "404")
+    assert found["folder"] == "sub" and found["type"] == "application/json;charset=utf-8"
+    assert found["data-url"] == "200"
+    assert found["report"]["blocked"] == 0 and found["report"]["off_the_record"] is True
+
+
+@needs_qt
+def test_one_app_never_sees_anothers_files(web):
+    open_app(web, "other", {"index.html": "other", "secret.js": "var secret = 1"})
+    open_app(web, "mine", {"index.html": "<script src='hallux://other/secret.js'></script>"
+                                         "<script>console.log('RESULT secret ' + typeof secret);"
+                                         "console.log('RESULT done yes')</script>"})
+    found = results(web, "mine")
+    assert found["secret"] == "undefined"
+    assert "hallux://other/secret.js" in found["report"]["blocked_urls"]
+
+
+@needs_qt
+def test_storage_is_gone_when_the_window_closes(web):
+    page = {"index.html": "<script>console.log('RESULT before ' + localStorage.getItem('x'));"
+                          "localStorage.setItem('x', 'kept'); document.cookie = 'c=1';"
+                          "console.log('RESULT done yes')</script>"}
+    open_app(web, "store", page)
+    assert results(web, "store")["before"] == "null"
+    assert ask(web, {"cmd": "close", "app": "store"}) == {"ok": True}
+    open_app(web, "store", page)
+    assert results(web, "store")["before"] == "null"
+
+
+@needs_qt
+def test_a_preconnect_opens_no_socket(web, trap):
+    """A preconnect never passes the interceptor: the proxy that isn't there stops it."""
+    address, hits = trap
+    open_app(web, "pre", {"index.html": f"<link rel=preconnect href='{address}/'>"
+                                        f"<link rel=dns-prefetch href='{address}/'>"
+                                        "<script>setTimeout(() => console.log('RESULT done yes'), 2000)"
+                                        "</script>"})
+    results(web, "pre")
+    assert hits == []
+
+
+@needs_qt
+def test_closing_a_window_is_no_failure(web):
+    heard = []
+    web.connect(heard.append)
+    open_app(web, "bye", {"index.html": "<script>console.log('RESULT done yes')</script>"})
+    results(web, "bye")
+    assert ask(web, {"cmd": "close", "app": "bye"}) == {"ok": True}
+    assert ask(web, {"cmd": "ping"}) == {"ok": True}
+    time.sleep(1)
+    assert heard == [{"event": "loaded", "page": "bye"}]
+
