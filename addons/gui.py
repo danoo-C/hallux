@@ -32,7 +32,6 @@ CHILD = [sys.executable, os.path.abspath(__file__), "--child"]
 START_SECONDS = 8.0                    # for a window to appear
 ANSWER_SECONDS = 1.5                   # for a window to answer one message
 WINDOWS_MAX = 4                        # open at a time; each is a process of its own
-WIDGETS_MAX = 100
 WINDOW_MIN, WINDOW_MAX = (100, 100), (1600, 1000)
 NAME = re.compile(r"[A-Za-z0-9_-]{1,30}")
 TITLE_MAX = 100
@@ -46,14 +45,34 @@ EVENT_MAX = 3800                       # characters of JSON an event may have; H
 PROBLEMS_MAX = 1500                    # characters of the error that lists a layout's problems
 NO_SCREEN = ("offscreen", "dummy")     # the drivers SDL quietly falls back to without a display
 
-TYPES = ("label", "text", "canvas", "button", "input", "textarea", "checkbox", "list", "slider")
-COMMON = {"id", "type", "pos", "size", "color", "background", "font_size", "enabled"}
-EXTRA = {"label": {"text", "align"}, "text": {"text"}, "canvas": {"text"},
-         "button": {"text"}, "input": {"text"}, "textarea": {"text"},
+WIDGETS_MAX = 200                      # in a window, counted at every depth
+DEPTH_MAX = 3                          # groups and tabs inside each other
+PAGES_MAX, PAGE_TITLE_MAX = 20, 40
+TAB_BAR = 32                           # pixels the bar of tabs takes at their top
+STEPS_MAX = 10                         # local actions on one button
+
+TYPES = ("label", "text", "canvas", "button", "input", "textarea", "checkbox", "list", "slider",
+         "group", "tabs")
+CONTAINERS = ("group", "tabs")
+TEXTS = ("label", "text", "canvas", "button", "input", "textarea", "checkbox")
+COMMON = {"id", "type", "pos", "size", "color", "background", "font_size", "enabled", "visible"}
+EXTRA = {"label": {"text", "align"}, "text": {"text"}, "canvas": {"text", "clickable"},
+         "button": {"text", "do", "silent"}, "input": {"text"}, "textarea": {"text"},
          "checkbox": {"text", "value"}, "list": {"items", "value"},
-         "slider": {"min", "max", "step", "value"}}
-FIXED = {"id", "type", "pos", "size"}  # what update can't change
-WINDOW_KEYS = {"name", "title", "size", "background", "widgets"}
+         "slider": {"min", "max", "step", "value"},
+         "group": {"widgets", "scroll", "follow", "border"},
+         "tabs": {"pages", "value", "bar", "events"}}
+FLAGS = {"enabled", "visible", "silent", "clickable", "scroll", "follow", "border", "bar",
+         "events"}
+STRUCTURE = {"widgets", "pages"}       # changed by add and remove, not by a widget's keys
+FIXED = {"id", "type"} | STRUCTURE     # what a change of a widget can't touch
+NOT_DEFAULTS = {"id", "type", "pos", "size", "do", "value", "items"} | STRUCTURE
+RESERVED = ("window", "add", "remove")  # ids an update uses for itself
+STEPS = {"set": ("a widget", "a text"), "append": ("a widget", "a text"), "chop": ("a widget",),
+         "clear": ("a widget",), "show": ("a widget",), "hide": ("a widget",),
+         "switch": ("tabs", "a page")}
+TEXT_STEPS = ("set", "append", "chop", "clear")
+WINDOW_KEYS = {"name", "title", "size", "background", "defaults", "widgets"}
 WINDOW_UPDATES = {"title", "background"}
 
 
@@ -66,10 +85,15 @@ THE FUNCTIONS
 - show(path): opens the window the layout file at path describes. If a window of that name
   is open, it is redrawn from the file, and what the user typed, ticked, picked or slid
   stays. Write the file with your disk tools first. Returns {"window": name}.
-- update(window, changes): changes widgets of an open window without touching the file.
-  changes is a JSON object: {"<id>": {"<key>": value, ...}, ...}. Any key of a widget but
-  id, type, pos and size can change. The id "window" changes "title" and "background".
-  Setting "text" of an input or textarea replaces what the user typed.
+- update(window, changes): changes an open window without touching the file. changes is a
+  JSON object: {"<id>": {"<key>": value, ...}, ...}, for widgets at any depth. Any key
+  but id, type, widgets and pages can change, pos, size and visible included. The id
+  "window" changes "title" and "background". Setting "text" of an input or textarea
+  replaces what the user typed. Two more ids add and remove widgets:
+  "add": {"into": "<group id>" or "<tabs id>/<page name>" (left out: the window itself),
+          "widgets": [...]} puts them at its end; "remove": ["<id>", ...] takes them out,
+  with all that is inside them. Removing comes first, then adding, then the rest.
+  What add and remove do is gone when show opens the window from its file again.
 - read(window): {"window": name, "values": {...}}, the value of every input, textarea,
   checkbox, list and slider.
 - close(window): closes one window. stop(): closes them all.
@@ -86,6 +110,7 @@ THE LAYOUT FILE (JSON)
   {"id": "result", "type": "label", "pos": [20, 130], "size": [220, 40], "text": "0",
    "align": "center", "font_size": 32}]}
 - name: letters, digits, _ and -, at most 30. It is how the functions name the window.
+- Default colors suit a dark window: light text. On a light background, give color.
 - size: [width, height] in pixels, from 100 x 100 to 1600 x 1000. title is optional.
 - pos and size of a widget are pixels from the window's top left; the widget must fit
   inside the window. Widgets drawn later are on top.
@@ -105,8 +130,30 @@ THE LAYOUT FILE (JSON)
   list: items, a list of lines, and value, the picked line or null. A pick is an event.
   slider: min, max, step (default 1) and value (default min). Dragging is no event;
     letting go of it is.
+  group: holds widgets of its own, in "widgets", placed from the group's top left and cut
+    off at its edge. Hiding or moving it hides or moves them all. scroll: true lets them
+    reach below its bottom, and the wheel scrolls them; follow: true keeps it scrolled to
+    the bottom when something is added (a chat). border: true draws a frame.
+  tabs: pages, a list of {"name", "title", "widgets"}; value is the open page (default the
+    first). A click on a tab opens it at once, with no event unless "events": true, which
+    sends {"event": "tab", "value": "<page>"}. bar: false hides the tabs themselves: pages
+    only you switch, with update {"<id>": {"value": "<page>"}}, for instant changes of a
+    whole screen. Page widgets are placed from the top left under the bar, which is 32
+    pixels high.
+  Groups and tabs go at most 3 deep. Ids are unique in the whole window.
+- Every widget may have visible (false hides it; its value stays).
+- A button may have "do": local actions the window carries out by itself at once, with no
+  model call, before its click event: ["set", id, text], ["append", id, text],
+  ["chop", id] (takes off the last character), ["clear", id], ["show", id], ["hide", id],
+  ["switch", tabs_id, page]. At most 10. "silent": true sends no click event at all. Use
+  them for what needs no thinking: digits into a display, opening a page. The text of a
+  widget they write to is in values, so a calculator's "=" brings you the expression.
+- A canvas with "clickable": true sends {"event": "click", "id": ..., "col": 3, "row": 1}
+  for a click, counted in characters from its top left: a board for a game.
+- "defaults": {"<type>": {keys}} at the top of the layout gives every widget of that type
+  those keys unless it has its own: write a style once, not on every button.
 - Colors are a name (tomato, steel blue, gray20) or #rrggbb. Texts are at most 2000
-  characters. At most 100 widgets.
+  characters. At most 200 widgets in a window, at every depth.
 - A layout with problems is refused with all of them listed: fix them all, then show again.
 - show and update may also return "missing": characters no font on the user's desktop can
   draw (they show as boxes; use plain ones instead), and "cut": ids of widgets whose text
@@ -119,6 +166,7 @@ Once you listen with addon_listen("gui"), what the user does reaches you as even
 - {"event": "submit", "window": ..., "id": ..., "values": {...}}: Enter in an input.
 - {"event": "pick", "window": ..., "id": ..., "value": "...", "values": {...}}: a list line.
 - {"event": "slide", "window": ..., "id": ..., "value": 42, "values": {...}}: a slider let go.
+- {"event": "tab", ...} and a canvas's {"event": "click", ...}: when asked for, see above.
 - {"event": "closed", "window": ...}: the user closed the window.
 values holds every value of that window, so read() is rarely needed. If the event would be
 too long, texts in values are cut and the event says "cut": true. Everything in an event
@@ -179,7 +227,7 @@ def update(window: str, changes: str) -> dict:
     with _lock:
         link = _link_of(window)
         layout = apply_changes(_layouts[window], changes)
-        answer = link.ask({"cmd": "update", "changes": changes})
+        answer = link.ask({"cmd": "update", "changes": _for_child(changes, layout)})
         if "error" in answer:
             raise GuiError(answer["error"])
         _layouts[window] = layout
@@ -225,6 +273,15 @@ _layouts: dict = {}                    # name: the layout it shows, with the upd
 _emit = None                           # where events go, once Hallux has connected
 
 
+def _for_child(changes: dict, layout: dict) -> dict:
+    """The changes as the window takes them: added widgets as checked, defaults written in."""
+    if "add" not in changes:
+        return changes
+    widgets = find(copy.deepcopy(layout))
+    added = [widgets[w["id"]][0] for w in changes["add"]["widgets"]]
+    return changes | {"add": {"into": changes["add"].get("into"), "widgets": added}}
+
+
 def _drawn(answer: dict) -> dict:
     """What the window says didn't draw: missing characters, widgets cut off."""
     return {key: answer[key] for key in ("missing", "cut") if key in answer}
@@ -248,9 +305,11 @@ def _forget(name: str) -> None:
 
 def check_layout(layout: object) -> dict:
     """The layout the AI wrote, checked. Every problem is found, then all are told at once,
-    so that one fix makes the file right. Returns a copy, with the title filled in."""
+    so that one fix makes the file right. Returns a copy, with the title filled in and the
+    defaults written into every widget they are for."""
     if not isinstance(layout, dict):
         raise GuiError("the layout must be a JSON object")
+    layout = copy.deepcopy(layout)                    # the checks write the defaults in
     problems: list[str] = []
     for key in sorted(set(layout) - WINDOW_KEYS, key=str):
         problems.append(f"unknown key {str(key)[:30]!r}")
@@ -268,39 +327,98 @@ def check_layout(layout: object) -> dict:
         size = None
     if "background" in layout:
         _check_color(layout["background"], "background", problems)
-    widgets = layout.get("widgets", [])
-    if not isinstance(widgets, list):
-        problems.append("widgets must be a list")
-        widgets = []
-    if len(widgets) > WIDGETS_MAX:
-        problems.append(f"{len(widgets)} widgets, more than {WIDGETS_MAX}")
-    seen: set = set()
-    for number, widget in enumerate(widgets[:WIDGETS_MAX], 1):
-        check_widget(widget, size, problems, number)
-        if isinstance(widget, dict) and isinstance(widget.get("id"), str):
-            if widget["id"] in seen:
-                problems.append(f"widget {widget['id']!r}: the id is used twice")
-            seen.add(widget["id"])
+    defaults = _check_defaults(layout.get("defaults", {}), problems)
+    found: dict = {}                                  # id: the widget, at any depth
+    widgets = _check_children(layout.get("widgets", []), size, "the window", False, defaults,
+                              problems, found, 0)
+    if len(found) > WIDGETS_MAX:
+        problems.append(f"{len(found)} widgets, more than {WIDGETS_MAX}")
+    for widget in found.values():
+        if widget.get("type") == "button" and "do" in widget:
+            _check_steps(widget, found, problems)
     if problems:
         raise GuiError(_told(problems))
-    checked = copy.deepcopy(layout)
-    checked.setdefault("title", name)
-    checked.setdefault("widgets", [])
-    return checked
+    layout.setdefault("title", name)
+    layout["widgets"] = widgets
+    return layout
 
 
-def check_widget(widget: object, size, problems: list[str], number: int = 0) -> None:
-    """Add what is wrong with one widget to problems. size is the window's, or None when
-    that is wrong itself."""
+def _check_defaults(defaults: object, problems: list[str]) -> dict:
+    """The defaults of a layout: per type, keys every widget of that type gets unless it
+    has its own."""
+    if not isinstance(defaults, dict):
+        problems.append("defaults must be a JSON object of types")
+        return {}
+    good = {}
+    for kind, keys in defaults.items():
+        if kind not in TYPES or not isinstance(keys, dict):
+            problems.append(f"defaults: {str(kind)[:30]!r} must be a type, with an object of keys")
+            continue
+        allowed = COMMON | EXTRA[kind]
+        for key in sorted(set(keys) - allowed | set(keys) & NOT_DEFAULTS, key=str):
+            problems.append(f"defaults: a {kind} can't have {str(key)[:30]!r} by default")
+        good[kind] = {k: v for k, v in keys.items() if k in allowed and k not in NOT_DEFAULTS}
+    return good
+
+
+def _check_children(children: object, room, where: str, tall: bool, defaults: dict,
+                    problems: list[str], found: dict, depth: int) -> list:
+    """Check the widgets of the window, a group or a tab page. room is the size they must
+    fit in (None when that is wrong itself); a tall room lets them reach below it. Returns
+    them with the defaults written in."""
+    if not isinstance(children, list):
+        problems.append(f"the widgets of {where} must be a list")
+        return []
+    expanded = []
+    for number, widget in enumerate(children[:WIDGETS_MAX + 1], 1):
+        if isinstance(widget, dict) and widget.get("type") in defaults:
+            widget = defaults[widget["type"]] | widget
+        expanded.append(widget)
+        check_widget(widget, room, problems, number, where, tall)
+        if not isinstance(widget, dict):
+            continue
+        id_ = widget.get("id")
+        if isinstance(id_, str):
+            if id_ in found:
+                problems.append(f"widget {id_!r}: the id is used twice")
+            found.setdefault(id_, widget)
+        kind = widget.get("type")
+        if kind not in CONTAINERS:
+            continue
+        label = f"{kind} {str(id_)[:30]!r}"
+        if depth + 1 > DEPTH_MAX:
+            problems.append(f"{label}: containers go at most {DEPTH_MAX} deep")
+            continue
+        inside = tuple(widget["size"]) if _pair(widget.get("size")) else None
+        if kind == "group":
+            widget["widgets"] = _check_children(widget.get("widgets", []), inside, label,
+                                                widget.get("scroll") is True, defaults,
+                                                problems, found, depth + 1)
+        else:
+            if inside is not None and widget.get("bar", True):
+                inside = (inside[0], inside[1] - TAB_BAR)
+            for page in widget.get("pages", []) if isinstance(widget.get("pages"), list) else []:
+                if isinstance(page, dict):
+                    page["widgets"] = _check_children(
+                        page.get("widgets", []), inside, f"page {str(page.get('name'))[:30]!r}",
+                        False, defaults, problems, found, depth + 1)
+    return expanded
+
+
+def check_widget(widget: object, room, problems: list[str], number: int = 0,
+                 where_room: str = "the window", tall: bool = False) -> None:
+    """Add what is wrong with one widget to problems. room is the size it must fit in, or
+    None when that is wrong itself."""
     where = f"widget {number}"
     if not isinstance(widget, dict):
         problems.append(f"{where} must be a JSON object")
         return
     id_ = widget.get("id")
-    if isinstance(id_, str) and NAME.fullmatch(id_) and id_ != "window":
+    if isinstance(id_, str) and NAME.fullmatch(id_) and id_ not in RESERVED:
         where = f"widget {id_!r}"
     else:
-        problems.append(f"{where}: id must be 1 to 30 letters, digits, _ or -, and not window")
+        problems.append(f"{where}: id must be 1 to 30 letters, digits, _ or -, and not "
+                        f"{', '.join(RESERVED)}")
     kind = widget.get("type")
     if kind not in TYPES:
         problems.append(f"{where}: type must be one of {', '.join(TYPES)}")
@@ -312,9 +430,11 @@ def check_widget(widget: object, size, problems: list[str], number: int = 0) -> 
         problems.append(f"{where}: pos must be [x, y], 0 or more")
     elif not (_pair(extent) and min(extent) >= 1):
         problems.append(f"{where}: size must be [width, height], 1 or more")
-    elif size is not None and (pos[0] + extent[0] > size[0] or pos[1] + extent[1] > size[1]):
-        problems.append(f"{where}: it reaches {pos[0] + extent[0]} x {pos[1] + extent[1]}, "
-                        f"outside the {size[0]} x {size[1]} window")
+    elif room is not None and (pos[0] + extent[0] > room[0]
+                               or (pos[1] + extent[1] > room[1] and not tall)):
+        reach = f"{where}: it reaches {pos[0] + extent[0]} x {pos[1] + extent[1]}, outside "
+        problems.append(reach + (f"the {room[0]} x {room[1]} window" if where_room == "the window"
+                                 else f"{where_room}, which is {room[0]} x {room[1]}"))
     if "text" in widget:
         longest = CANVAS_MAX if kind == "canvas" else TEXT_MAX
         text = widget["text"]
@@ -329,8 +449,9 @@ def check_widget(widget: object, size, problems: list[str], number: int = 0) -> 
                                       and FONT_SIZES[0] <= widget["font_size"] <= FONT_SIZES[1]):
         problems.append(f"{where}: font_size must be a whole number from {FONT_SIZES[0]} "
                         f"to {FONT_SIZES[1]}")
-    if "enabled" in widget and not isinstance(widget["enabled"], bool):
-        problems.append(f"{where}: enabled must be true or false")
+    for key in sorted(FLAGS & set(widget)):
+        if not isinstance(widget[key], bool):
+            problems.append(f"{where}: {key} must be true or false")
     if "align" in widget and widget["align"] not in ("left", "center", "right"):
         problems.append(f"{where}: align must be left, center or right")
     if kind == "checkbox" and "value" in widget and not isinstance(widget["value"], bool):
@@ -339,6 +460,8 @@ def check_widget(widget: object, size, problems: list[str], number: int = 0) -> 
         _check_list(widget, where, problems)
     if kind == "slider":
         _check_slider(widget, where, problems)
+    if kind == "tabs":
+        _check_pages(widget, where, problems)
 
 
 def _check_list(widget: dict, where: str, problems: list[str]) -> None:
@@ -365,15 +488,102 @@ def _check_slider(widget: dict, where: str, problems: list[str]) -> None:
         problems.append(f"{where}: value must be a number from min to max")
 
 
+def _check_pages(widget: dict, where: str, problems: list[str]) -> None:
+    pages = widget.get("pages")
+    if not (isinstance(pages, list) and 1 <= len(pages) <= PAGES_MAX
+            and all(isinstance(p, dict) for p in pages)):
+        problems.append(f"{where}: pages must be a list of 1 to {PAGES_MAX} pages, each a "
+                        f"JSON object")
+        return
+    names = []
+    for page in pages:
+        for key in sorted(set(page) - {"name", "title", "widgets"}, key=str):
+            problems.append(f"{where}: a page has no key {str(key)[:30]!r}")
+        if not (isinstance(page.get("name"), str) and NAME.fullmatch(page["name"])):
+            problems.append(f"{where}: a page's name must be 1 to 30 letters, digits, _ or -")
+        elif page["name"] in names:
+            problems.append(f"{where}: the page {page['name']!r} is there twice")
+        else:
+            names.append(page["name"])
+        if "title" in page and not (isinstance(page["title"], str)
+                                    and len(page["title"]) <= PAGE_TITLE_MAX):
+            problems.append(f"{where}: a page's title must be text of at most "
+                            f"{PAGE_TITLE_MAX} characters")
+    if "value" in widget and widget["value"] not in names:
+        problems.append(f"{where}: value must be the name of one of its pages")
+
+
+def _check_steps(button: dict, found: dict, problems: list[str]) -> None:
+    """A button's local actions: each a short list, on a widget that exists."""
+    where = f"widget {button['id']!r}"
+    steps = button["do"]
+    if not (isinstance(steps, list) and 1 <= len(steps) <= STEPS_MAX):
+        problems.append(f"{where}: do must be a list of 1 to {STEPS_MAX} steps")
+        return
+    for step in steps:
+        shown = json.dumps(step, ensure_ascii=False)[:60]
+        if not (isinstance(step, list) and step and step[0] in STEPS):
+            problems.append(f"{where}: {shown} isn't a step; a step starts with one of "
+                            f"{', '.join(STEPS)}")
+            continue
+        wanted = STEPS[step[0]]
+        if len(step) != len(wanted) + 1 or not all(isinstance(a, str) for a in step[1:]):
+            problems.append(f"{where}: {shown}: {step[0]} takes {' and '.join(wanted)}")
+            continue
+        target = found.get(step[1])
+        if target is None:
+            problems.append(f"{where}: {shown}: there is no widget {step[1][:30]!r}")
+        elif step[0] in TEXT_STEPS and target.get("type") not in TEXTS:
+            problems.append(f"{where}: {shown}: a {target.get('type')} has no text")
+        elif step[0] == "switch" and (target.get("type") != "tabs" or step[2] not in [
+                p.get("name") for p in target.get("pages", []) if isinstance(p, dict)]):
+            problems.append(f"{where}: {shown}: switch takes tabs and one of its pages")
+        elif step[0] in ("set", "append") and len(step[2]) > TEXT_MAX:
+            problems.append(f"{where}: {shown}: the text is longer than {TEXT_MAX}")
+
+
+def find(layout: dict) -> dict:
+    """Every widget of a layout by its id, at any depth, with the list it is in."""
+    found: dict = {}
+
+    def walk(children: list) -> None:
+        for widget in children:
+            found[widget["id"]] = (widget, children)
+            if widget["type"] == "group":
+                walk(widget.setdefault("widgets", []))
+            elif widget["type"] == "tabs":
+                for page in widget["pages"]:
+                    walk(page.setdefault("widgets", []))
+
+    walk(layout["widgets"])
+    return found
+
+
 def apply_changes(layout: dict, changes: object) -> dict:
     """The layout with the changes of an update in it, checked like a layout. The layout
-    itself is left as it was."""
+    itself is left as it was. Removing comes first, then adding, then the changes of
+    widgets, so that a change can reach a widget just added."""
     if not isinstance(changes, dict) or not changes:
         raise GuiError("changes must be a JSON object of widget ids, each with its changes")
     changed = copy.deepcopy(layout)
-    widgets = {w["id"]: w for w in changed["widgets"]}
     problems: list[str] = []
+    if "remove" in changes:
+        gone = changes["remove"]
+        if not (isinstance(gone, list) and all(isinstance(i, str) for i in gone)):
+            problems.append("remove must be a list of widget ids")
+            gone = []
+        widgets = find(changed)
+        for id_ in gone:
+            if id_ not in widgets:
+                problems.append(f"remove: no widget {id_[:30]!r} in the window")
+            elif widgets[id_][0] in widgets[id_][1]:   # not inside one removed already
+                widgets[id_][1].remove(widgets[id_][0])
+    if "add" in changes:
+        _add(changed, changes["add"], problems)
+    widgets = find(changed)
     for id_, keys in changes.items():
+        if id_ in ("add", "remove"):
+            continue
         if not isinstance(keys, dict) or not keys:
             problems.append(f"{str(id_)[:30]!r}: its changes must be a JSON object")
             continue
@@ -383,12 +593,13 @@ def apply_changes(layout: dict, changes: object) -> dict:
                                 f"not {str(key)[:30]!r}")
             changed.update({k: v for k, v in keys.items() if k in WINDOW_UPDATES})
             continue
-        widget = widgets.get(id_)
-        if widget is None:
+        if id_ not in widgets:
             problems.append(f"no widget {str(id_)[:30]!r} in the window")
             continue
+        widget = widgets[id_][0]
         for key in sorted(set(keys) & FIXED, key=str):
-            problems.append(f"widget {id_!r}: {key} can't change")
+            problems.append(f"widget {id_!r}: {key} can't change"
+                            + (": add and remove widgets instead" if key in STRUCTURE else ""))
         if "value" not in keys:              # what the user picked or slid may be out of range
             if widget["type"] == "list" and "items" in keys:
                 widget.pop("value", None)
@@ -401,6 +612,32 @@ def apply_changes(layout: dict, changes: object) -> dict:
         return check_layout(changed)
     except GuiError as e:
         raise GuiError(str(e).replace("the layout has", "the changes leave")) from None
+
+
+def _add(layout: dict, add: object, problems: list[str]) -> None:
+    """Put the widgets of an update's add at the end of the window, a group or a page."""
+    if not (isinstance(add, dict) and isinstance(add.get("widgets"), list) and add["widgets"]
+            and set(add) <= {"into", "widgets"}):
+        problems.append('add must be {"into": ..., "widgets": [...]}, with into left out for '
+                        'the window itself')
+        return
+    into = add.get("into")
+    if into is None:
+        layout["widgets"].extend(copy.deepcopy(add["widgets"]))
+        return
+    widgets = find(layout)
+    name, _, page = str(into).partition("/")
+    target = widgets.get(name, (None,))[0]
+    if target is not None and target["type"] == "group" and not page:
+        target["widgets"].extend(copy.deepcopy(add["widgets"]))
+    elif target is not None and target["type"] == "tabs" and page:
+        for each in target["pages"]:
+            if each["name"] == page:
+                each["widgets"].extend(copy.deepcopy(add["widgets"]))
+                return
+        problems.append(f"add: the tabs {name[:30]!r} have no page {page[:30]!r}")
+    else:
+        problems.append(f"add: into must be a group, or tabs/page; {str(into)[:40]!r} is neither")
 
 
 def _check_color(color: object, where: str, problems: list[str]) -> None:
@@ -551,11 +788,33 @@ NO_SUCH_CHARACTER = "\U0010fffd"          # private use: no font has it, so it d
 MISSING_MAX, CUT_MAX = 40, 30          # characters and widgets told after a layout or an update
 DEFAULT_COLOR = {"button": "black", "input": "black", "textarea": "black", "list": "black"}
 DEFAULT_BACKGROUND = {"button": "#d9d9d9", "input": "white", "textarea": "white",
-                      "list": "white", "canvas": "black"}
+                      "list": "white", "canvas": "black"}         # the rest: none, see-through
 EDITABLE = ("input", "textarea")
+VALUED = ("checkbox", "list", "slider", "tabs")
 KEPT = {"input": ("text", "cursor", "scroll"), "textarea": ("text", "cursor", "scroll"),
         "checkbox": ("value",), "list": ("value", "scroll"), "slider": ("value",),
-        "text": ("scroll",)}
+        "text": ("scroll",), "tabs": ("value",), "group": ("scroll",)}
+FLAG_DEFAULTS = {"enabled": True, "visible": True, "silent": False, "clickable": False,
+                 "scroll": False, "follow": False, "border": False, "bar": True, "events": False}
+WHEEL_PIXELS = 20                      # a group scrolls this far for each line of the wheel
+
+
+def _every(widgets: list):
+    """Every widget, and every widget inside one, at any depth."""
+    for widget in widgets:
+        yield widget
+        yield from _every(widget.children)
+        for _, _, page in widget.pages:
+            yield from _every(page)
+
+
+def _specs(widgets: list):
+    """Every widget of a layout, at any depth, as the layout has it."""
+    for spec in widgets:
+        yield spec
+        yield from _specs(spec.get("widgets", []))
+        for page in spec.get("pages", []):
+            yield from _specs(page.get("widgets", []))
 
 
 def wrap(measure, text: str, width: int) -> list[tuple[int, int]]:
@@ -714,34 +973,49 @@ class Fonts:
 
 
 class Widget:
-    """One widget of the window: what the layout said, and what the user did to it."""
+    """One widget of the window: what the layout said, and what the user did to it. A group
+    has its widgets, tabs have their pages; rect and clip are worked out by Gui.place."""
 
     def __init__(self, spec: dict) -> None:
         self.id, self.type = spec["id"], spec["type"]
-        self.rect = (*spec["pos"], *spec["size"])
+        self.pos, self.size = tuple(spec["pos"]), tuple(spec["size"])
+        self.rect = (*self.pos, *self.size)           # on the screen, once placed
+        self.clip = None                              # what of the screen it may draw on
         self.text = spec.get("text", "")
         self.cursor = len(self.text)
-        self.scroll = 0                               # lines scrolled, or pixels for an input
+        self.scroll = 0                               # lines scrolled, pixels for an input
+                                                      # or a group
         self.items = list(spec.get("items", []))
         self.min, self.max, self.step = spec.get("min", 0), spec.get("max", 100), spec.get("step", 1)
-        default = {"checkbox": False, "list": None, "slider": self.min}.get(self.type)
+        self.children = [Widget(w) for w in spec.get("widgets", [])]
+        self.pages = [(p["name"], p.get("title", p["name"]), [Widget(w) for w in p.get("widgets", [])])
+                      for p in spec.get("pages", [])]
+        default = {"checkbox": False, "list": None, "slider": self.min,
+                   "tabs": self.pages[0][0] if self.pages else None}.get(self.type)
         self.value = spec.get("value", default)
         self.set(spec)
 
     def set(self, spec: dict) -> None:
-        """Take the keys that look, from a layout or an update."""
+        """Take the keys that look and behave, from a layout or an update."""
         self.color = spec.get("color", getattr(self, "color", None)
                               or DEFAULT_COLOR.get(self.type, "#eeeeee"))
         background = DEFAULT_BACKGROUND.get(self.type)
         self.background = spec.get("background", getattr(self, "background", background))
         size = CANVAS_FONT_SIZE if self.type == "canvas" else FONT_SIZE
         self.font_size = spec.get("font_size", getattr(self, "font_size", size))
-        self.enabled = spec.get("enabled", getattr(self, "enabled", True))
         self.align = spec.get("align", getattr(self, "align", "left"))
+        self.steps = spec.get("do", getattr(self, "steps", []))
+        for flag, default in FLAG_DEFAULTS.items():
+            name = "scrolls" if flag == "scroll" else flag    # scroll is where it scrolled to
+            setattr(self, name, spec.get(flag, getattr(self, name, default)))
 
     def change(self, keys: dict) -> None:
         """An update from the AI."""
         self.set(keys)
+        if "pos" in keys:
+            self.pos = tuple(keys["pos"])
+        if "size" in keys:
+            self.size = tuple(keys["size"])
         if "text" in keys:
             self.text = keys["text"]
             self.cursor = len(self.text)
@@ -765,11 +1039,20 @@ class Widget:
             return int(value)
         return round(value, 10)
 
+    def inside(self) -> list:
+        """The widgets in it that are shown: a group's, or the open page's."""
+        if self.type == "group":
+            return self.children
+        for name, _, widgets in self.pages:
+            if name == self.value:
+                return widgets
+        return []
+
     def wanted(self):
         """Its value in read() and in events; None for a widget that has none."""
         if self.type in EDITABLE:
             return self.text
-        if self.type in ("checkbox", "list", "slider"):
+        if self.type in VALUED:
             return self.value
         return None
 
@@ -790,7 +1073,8 @@ class Gui:
         pygame.key.start_text_input()
         self.name = ""
         self.background = "#2b2b2b"
-        self.widgets: list[Widget] = []
+        self.widgets: list[Widget] = []               # the window's own; groups hold more
+        self.by_id: dict[str, Widget] = {}            # every widget, at any depth
         self.focus: Widget | None = None              # where typing goes
         self.pressed: Widget | None = None            # a button the mouse is down on
         self.dragging: Widget | None = None           # a slider the mouse is down on
@@ -816,23 +1100,21 @@ class Gui:
 
     def layout(self, layout: dict) -> dict:
         """Show a layout. A widget of the same id and type keeps what the user did to it."""
-        if unknown := self.unknown_colors([layout] + layout.get("widgets", [])):
+        if unknown := self.unknown_colors([layout] + list(_specs(layout["widgets"]))):
             return {"error": unknown}
-        old = {(w.id, w.type): w for w in self.widgets}
-        widgets = []
-        for spec in layout["widgets"]:
-            widget = Widget(spec)
+        old = {(w.id, w.type): w for w in self.by_id.values()}
+        self.widgets = [Widget(spec) for spec in layout["widgets"]]
+        for widget in _every(self.widgets):
             if before := old.get((widget.id, widget.type)):
                 for key in KEPT.get(widget.type, ()):
                     setattr(widget, key, getattr(before, key))
                 if widget.type == "list" and widget.value not in widget.items:
                     widget.value = None
+                if widget.type == "tabs" and widget.value not in [p[0] for p in widget.pages]:
+                    widget.value = widget.pages[0][0]
                 if widget.type == "slider":
                     widget.value = widget.snap(widget.value)
-            widgets.append(widget)
         focused = self.focus and (self.focus.id, self.focus.type)
-        self.widgets = widgets
-        self.focus = next((w for w in widgets if (w.id, w.type) == focused), None)
         self.pressed = self.dragging = None
         self.name = layout["name"]
         self.background = layout.get("background", "#2b2b2b")
@@ -840,22 +1122,96 @@ class Gui:
         if tuple(layout["size"]) != self.size:
             self.size = tuple(layout["size"])
             self.screen = self.pg.display.set_mode(self.size)
+        self.place()
+        self.focus = next((w for w in self.by_id.values() if (w.id, w.type) == focused), None)
         self.dirty = True
         return {"ok": True} | self.drawn()
 
     def update(self, changes: dict) -> dict:
-        by_id = {w.id: w for w in self.widgets}
-        if unknown := self.unknown_colors(list(changes.values())):
+        added = changes.get("add", {}).get("widgets", [])
+        specs = [k for i, k in changes.items() if i not in ("add", "remove")]
+        if unknown := self.unknown_colors(specs + list(_specs(added))):
             return {"error": unknown}
+        for id_ in changes.get("remove", []):
+            self.remove(id_)
+        if added:
+            into = changes["add"].get("into")
+            name, _, page = (into or "").partition("/")
+            if into is None:
+                where = self.widgets
+            elif page:
+                where = next(w for n, _, w in self.by_id[name].pages if n == page)
+            else:
+                where = self.by_id[name].children
+            where.extend(Widget(spec) for spec in added)
+            self.place()
         for id_, keys in changes.items():
             if id_ == "window":
                 self.background = keys.get("background", self.background)
                 if "title" in keys:
                     self.pg.display.set_caption(keys["title"])
-            elif id_ in by_id:
-                by_id[id_].change(keys)
+            elif id_ in self.by_id:
+                self.by_id[id_].change(keys)
+        self.place()
+        if self.focus is not None and self.focus not in set(self.shown()):
+            self.focus = None                         # hidden, or taken out
+        if added and into is not None and "/" not in into and self.by_id[into].follow:
+            group = self.by_id[into]                  # a chat: the newest at the bottom
+            group.scroll = self.scroll_room(group)
+            self.place()
         self.dirty = True
         return {"ok": True} | self.drawn()
+
+    def remove(self, id_: str) -> None:
+        """Take a widget out of the window, with whatever is inside it."""
+        widget = self.by_id.get(id_)
+        if widget is None:
+            return
+        for widgets in [self.widgets] + [w.children for w in self.by_id.values()] + [
+                p[2] for w in self.by_id.values() for p in w.pages]:
+            if widget in widgets:
+                widgets.remove(widget)
+        gone = set(_every([widget]))
+        if self.focus in gone:
+            self.focus = None
+        if self.pressed in gone:
+            self.pressed = None
+        if self.dragging in gone:
+            self.dragging = None
+        self.place()
+
+    def place(self) -> None:
+        """Work out where every widget is on the screen, and what of it may be drawn on:
+        a widget inside a group is placed from the group's corner, scrolled with it, and
+        cut off at its edge."""
+        self.by_id = {}
+        screen = self.pg.Rect(0, 0, *self.size)
+
+        def walk(widgets: list, x0: int, y0: int, clip) -> None:
+            for widget in widgets:
+                self.by_id[widget.id] = widget
+                widget.rect = (x0 + widget.pos[0], y0 + widget.pos[1], *widget.size)
+                widget.clip = clip
+                inner = self.pg.Rect(widget.rect).clip(clip)
+                if widget.type == "group":
+                    walk(widget.children, widget.rect[0], widget.rect[1] - widget.scroll, inner)
+                elif widget.type == "tabs":
+                    bar = TAB_BAR if widget.bar else 0
+                    area = self.pg.Rect(widget.rect[0], widget.rect[1] + bar,
+                                        widget.size[0], widget.size[1] - bar).clip(clip)
+                    for _, _, page in widget.pages:
+                        walk(page, widget.rect[0], widget.rect[1] + bar, area)
+
+        walk(self.widgets, 0, 0, screen)
+
+    def shown(self, widgets: list | None = None):
+        """The widgets that are shown, in the order they are drawn: a group before what is
+        in it. A hidden one hides what is inside it; tabs show their open page only."""
+        for widget in self.widgets if widgets is None else widgets:
+            if widget.visible:
+                yield widget
+                if widget.type in CONTAINERS:
+                    yield from self.shown(widget.inside())
 
     def unknown_colors(self, specs: list[dict]) -> str | None:
         """The colors pygame doesn't know, as the error the AI is told, or None."""
@@ -872,8 +1228,12 @@ class Gui:
         return None
 
     def values(self) -> dict:
-        return {w.id: w.wanted() for w in self.widgets
-                if w.type in EDITABLE + ("checkbox", "list", "slider")}
+        """What the user typed, ticked, picked, slid and opened, and the text of every
+        widget a button's local actions write to: what a calculator's display shows."""
+        written = {step[1] for w in self.by_id.values() for step in w.steps
+                   if step[0] in TEXT_STEPS}
+        return {w.id: w.text if w.id in written and w.type not in EDITABLE else w.wanted()
+                for w in self.by_id.values() if w.type in EDITABLE + VALUED or w.id in written}
 
     def report(self, event: str, widget: Widget | None = None, **more) -> None:
         if widget is None:
@@ -881,6 +1241,26 @@ class Gui:
         else:
             self.reports.append({"event": event, "window": self.name, "id": widget.id}
                                 | more | {"values": self.values()})
+
+    def run(self, steps: list) -> None:
+        """A button's local actions, carried out here at once, with no model call."""
+        for op, id_, *rest in steps:
+            widget = self.by_id.get(id_)
+            if widget is None:                        # removed since: nothing to do
+                continue
+            if op in TEXT_STEPS:
+                longest = CANVAS_MAX if widget.type == "canvas" else TEXT_MAX
+                text = {"set": lambda: rest[0], "append": lambda: widget.text + rest[0],
+                        "chop": lambda: widget.text[:-1], "clear": lambda: ""}[op]()
+                widget.change({"text": text[:longest]})
+            elif op in ("show", "hide"):
+                widget.visible = op == "show"
+            elif op == "switch" and rest[0] in [p[0] for p in widget.pages]:
+                widget.value = rest[0]
+        if self.focus is not None and self.focus not in set(self.shown()):
+            self.focus = None
+        self.place()
+        self.dirty = True
 
     # -- what the user does
 
@@ -911,9 +1291,9 @@ class Gui:
         return True
 
     def at(self, pos) -> Widget | None:
-        """The widget the mouse is on; the one drawn last is on top."""
-        for widget in reversed(self.widgets):
-            if self.pg.Rect(widget.rect).collidepoint(pos):
+        """The widget the mouse is on: the one drawn last, where it isn't cut off."""
+        for widget in reversed(list(self.shown())):
+            if self.pg.Rect(widget.rect).clip(widget.clip).collidepoint(pos):
                 return widget
         return None
 
@@ -938,12 +1318,28 @@ class Gui:
         elif widget.type == "slider":
             self.dragging = widget
             self.slide_to(widget, pos[0])
+        elif widget.type == "tabs" and widget.bar and pos[1] < widget.rect[1] + TAB_BAR:
+            page = (pos[0] - widget.rect[0]) * len(widget.pages) // widget.size[0]
+            name = widget.pages[min(page, len(widget.pages) - 1)][0]
+            if name != widget.value:
+                widget.value = name
+                self.place()
+                if widget.events:
+                    self.report("tab", widget, value=name)
+        elif widget.type == "canvas" and widget.clickable:
+            font = self.font(widget.font_size, mono=True)
+            column = (pos[0] - widget.rect[0] - 2) // font.size("M")[0]
+            row = (pos[1] - widget.rect[1] - 2) // font.get_linesize()
+            self.report("click", widget, col=max(0, column), row=max(0, row))
 
     def mouse_up(self, pos) -> None:
         if self.pressed is not None:
-            if self.pg.Rect(self.pressed.rect).collidepoint(pos):
-                self.report("click", self.pressed)    # a click is let go on the button
-            self.pressed, self.dirty = None, True
+            button, self.pressed, self.dirty = self.pressed, None, True
+            if self.pg.Rect(button.rect).clip(button.clip).collidepoint(pos):
+                if button.steps:                      # a click is let go on the button
+                    self.run(button.steps)
+                if not button.silent:
+                    self.report("click", button)
         if self.dragging is not None:
             slider, self.dragging = self.dragging, None
             self.slide_to(slider, pos[0])
@@ -956,10 +1352,21 @@ class Gui:
         self.dirty = True
 
     def wheel(self, pos, lines: int) -> None:
+        """Scroll what the mouse is on, or the nearest group around it that scrolls."""
         widget = self.at(pos)
-        if widget is not None and widget.type in ("text", "textarea", "list"):
+        if (widget is not None and widget.type in ("text", "textarea", "list")
+                and self.scroll_room(widget) > 0):
             widget.scroll = max(0, min(widget.scroll + lines, self.scroll_room(widget)))
             self.dirty = True
+            return
+        for group in reversed(list(self.shown())):
+            if (group.type == "group" and group.scrolls
+                    and self.pg.Rect(group.rect).clip(group.clip).collidepoint(pos)):
+                group.scroll = max(0, min(group.scroll + lines * WHEEL_PIXELS,
+                                          self.scroll_room(group)))
+                self.place()
+                self.dirty = True
+                return
 
     def type_in(self, typed: str) -> None:
         widget = self.focus
@@ -1004,7 +1411,7 @@ class Gui:
         self.dirty = True
 
     def next_focus(self) -> None:
-        typing = [w for w in self.widgets if w.type in EDITABLE and w.enabled]
+        typing = [w for w in self.shown() if w.type in EDITABLE and w.enabled]
         if typing:
             at = typing.index(self.focus) + 1 if self.focus in typing else 0
             self.focus = typing[at % len(typing)]
@@ -1039,11 +1446,13 @@ class Gui:
         """What the AI is told after a layout or an update: the characters no font has, and
         the widgets whose text doesn't fit. Nothing when all is well."""
         told = {}
-        texts = [w.text for w in self.widgets] + [i for w in self.widgets for i in w.items]
+        every = list(self.by_id.values())
+        texts = ([w.text for w in every] + [i for w in every for i in w.items]
+                 + [title for w in every for _, title, _ in w.pages])
         missing = "".join(dict.fromkeys(c for text in texts for c in self.fonts.missing(text)))
         if missing:
             told["missing"] = missing[:MISSING_MAX]
-        if cut := [w.id for w in self.widgets if self.is_cut(w)]:
+        if cut := [w.id for w in every if self.is_cut(w)]:
             told["cut"] = cut[:CUT_MAX]
         return told
 
@@ -1088,6 +1497,9 @@ class Gui:
         return self.font(widget.font_size).get_linesize() + 4
 
     def scroll_room(self, widget: Widget) -> int:
+        if widget.type == "group":                    # in pixels
+            bottom = max((w.pos[1] + w.size[1] for w in widget.children), default=0)
+            return max(0, bottom - widget.size[1])
         if widget.type == "list":
             shown = max(1, (widget.rect[3] - 4) // self.row_height(widget))
             return max(0, len(widget.items) - shown)
@@ -1101,8 +1513,8 @@ class Gui:
         pg, screen = self.pg, self.screen
         screen.set_clip(None)
         screen.fill(self.background)
-        for widget in self.widgets:
-            screen.set_clip(pg.Rect(widget.rect))
+        for widget in self.shown():
+            screen.set_clip(pg.Rect(widget.rect).clip(widget.clip))
             getattr(self, f"draw_{widget.type}")(widget, pg.Rect(widget.rect))
         screen.set_clip(None)
         pg.display.flip()
@@ -1200,7 +1612,7 @@ class Gui:
         widget.scroll = min(max(widget.scroll, before - room + 2), before)   # the cursor shows
         height = self.font(widget.font_size).get_height()
         top = rect.centery - height // 2
-        self.screen.set_clip(self.pg.Rect(self.inner(widget)).clip(rect))
+        self.screen.set_clip(self.pg.Rect(self.inner(widget)).clip(self.screen.get_clip()))
         self.write(widget, widget.text, x - widget.scroll, top)
         if self.focus is widget:
             left = x - widget.scroll + before
@@ -1208,7 +1620,7 @@ class Gui:
 
     def draw_textarea(self, widget: Widget, rect) -> None:
         self.draw_box(widget, rect)
-        self.screen.set_clip(self.pg.Rect(self.inner(widget)).clip(rect))
+        self.screen.set_clip(self.pg.Rect(self.inner(widget)).clip(self.screen.get_clip()))
         background, widget.background = widget.background, None      # the box is filled already
         try:
             self.draw_text(widget, rect, cursor=self.focus is widget)
@@ -1239,6 +1651,40 @@ class Gui:
             if item == widget.value:
                 self.screen.fill("#bcd4f6", (rect.x + 2, top, rect.width - 4, step))
             self.write(widget, item, rect.x + PAD, top + 2)
+
+    def draw_group(self, widget: Widget, rect) -> None:
+        self.fill(widget, rect)
+        if widget.border:
+            self.pg.draw.rect(self.screen, self.ink(widget), rect, 1)
+
+    def draw_tabs(self, widget: Widget, rect) -> None:
+        """The bar, one tab per page, the open one joined to the page under it."""
+        pg = self.pg
+        self.fill(widget, rect)
+        if not widget.bar:
+            return
+        ink = self.ink(widget)
+        page = pg.Rect(rect.x, rect.y + TAB_BAR, rect.width, rect.height - TAB_BAR)
+        pg.draw.rect(self.screen, ink, page, 1)
+        height = self.font(widget.font_size).get_height()
+        for number, (name, title, _) in enumerate(widget.pages):
+            left = rect.x + number * rect.width // len(widget.pages)
+            right = rect.x + (number + 1) * rect.width // len(widget.pages)
+            tab = pg.Rect(left, rect.y, right - left, TAB_BAR)
+            if name == widget.value:
+                pg.draw.rect(self.screen, ink, tab, 1, border_top_left_radius=4,
+                             border_top_right_radius=4)
+                self.screen.fill(widget.background or self.background,
+                                 (tab.x + 1, tab.bottom - 1, tab.width - 2, 2))
+            else:
+                self.screen.fill(ink.lerp(pg.Color(widget.background or self.background), 0.85),
+                                 tab.inflate(-4, -6).move(0, 2))
+            clip = self.screen.get_clip()
+            self.screen.set_clip(tab.inflate(-6, 0).clip(clip))
+            width = self.width(widget, title)
+            self.write(widget, title, tab.centerx - min(width, tab.width - 8) // 2,
+                       tab.centery - height // 2)
+            self.screen.set_clip(clip)
 
     def draw_slider(self, widget: Widget, rect) -> None:
         pg = self.pg

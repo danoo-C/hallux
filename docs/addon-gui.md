@@ -1,5 +1,9 @@
 # GUI addon
 
+**Later:** the fixes of [gui-fix.md](gui-fix.md) and the features of
+[gui-features.md](gui-features.md) (groups, tabs, local actions, adding and removing widgets,
+defaults, canvas clicks) are built on top of what this document describes.
+
 **Status:** built 2026-10-20 on branch `gui-addon` (from origin/main), not committed:
 `addons/gui.py` and `tests/test_addon_gui.py` (28 tests, no display needed). The user
 answered the open questions the same day (see the end) and asked for a slider and an ascii

@@ -1,7 +1,10 @@
 # GUI addon: new features
 
-**Status:** a proposal for the user to review, 2026-10-21. Nothing here is built. The
-fixes in [gui-fix.md](gui-fix.md) come first. As before, everything stays inside
+**Status:** all seven features are built, 2026-10-21, not committed, at the user's "lets do
+gui-features.md before i do a pr. so please build it". The five open questions were settled
+by my recommendations. The user's live try is still to come. [As built](#as-built) has
+where the code differs from the text below. The fixes in [gui-fix.md](gui-fix.md) came
+first. As before, everything stays inside
 `addons/gui.py` and its tests: Hallux's own code is not changed. The addon as built is
 [addon-gui.md](addon-gui.md).
 
@@ -202,3 +205,33 @@ steps that the window carries out by itself:
 5. The manual (`prompt()`) for all of it, kept short: every line of it is read once a boot.
 6. A live try by the user: kittycalc with local digits, and the chat app with tabs and a
    growing history.
+
+---
+
+## As built
+
+Built 2026-10-21 in `addons/gui.py`, with 13 new tests in `tests/test_addon_gui.py` (49 in
+all). The open questions went as recommended: pages inside the tabs; 200 widgets, groups 3
+deep; a button with steps still sends its click unless `silent`; what `add` and `remove`
+do is gone when `show` reads the file again; `append` and `chop` work on every widget with a
+text, inputs included.
+
+- **The window keeps a tree.** Every widget has its own `pos` and `size`; one step,
+  `Gui.place`, works out where each is on the screen and what of the screen it may draw on,
+  after every layout, update, scroll and local action. Drawing, clicking and typing work
+  on what it gives, as before.
+- **`values` also has the text of every widget a local action writes to.** Found in a
+  first try: kittycalc's display is a label, which has no value, so the click on `=`
+  brought the AI no expression.
+- **The checks write the defaults into the layout** the addon keeps, so the window and every
+  later `update` see the widgets as they are. Widgets that `add` brings get them too.
+- **A widget a local action needs can't be removed** while the step is still there: the
+  update is refused and says which step. Change the button's `do` in the same update.
+- **The wheel** scrolls a text, textarea or list under the mouse when it has something to
+  scroll, and otherwise the scrolling group around it, 20 pixels a line.
+- **A tab bar** gives each page the same width. Defaults suit a dark window, as for the
+  other widgets: on a light background, the AI gives `color`.
+- **The manual** grew to about 6,900 characters (the music addon's is 8,500). It is read once
+  a boot.
+- **`check_layout` no longer changes the layout it is given:** found by a test, since the
+  defaults were being written into the caller's own lists.

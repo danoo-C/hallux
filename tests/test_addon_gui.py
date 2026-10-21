@@ -130,9 +130,9 @@ def test_changes_are_checked_like_a_layout(gui):
     assert changed["title"] == "Sum" and changed["widgets"][-1]["text"] == "42"
     assert layout["widgets"][-1]["text"] == "0"                     # the old one is untouched
     with pytest.raises(gui.GuiError) as told:
-        gui.apply_changes(layout, {"nope": {"text": "x"}, "go": {"pos": [0, 0]},
+        gui.apply_changes(layout, {"nope": {"text": "x"}, "go": {"type": "label"},
                                    "window": {"size": [9, 9]}, "result": {"items": []}})
-    for problem in ["no widget 'nope'", "widget 'go': pos can't change",
+    for problem in ["no widget 'nope'", "widget 'go': type can't change",
                     "only title and background can change"]:
         assert problem in str(told.value)
     with pytest.raises(gui.GuiError, match="a label has no key 'items'"):
@@ -544,3 +544,233 @@ def test_the_canvas_draws_what_its_font_lacks_with_the_others(screen, gui):
     screen.answer({"cmd": "update", "changes": {"art": {"text": "a➤🐾"}}})
     screen.draw()                                     # nothing raises; the glyphs are cached
     assert any(key[0] == "➤" for key in screen.glyphs)
+
+
+# ---------------------------------------------------------------- groups, tabs, actions
+
+APP = {"name": "app", "size": [600, 400],
+       "defaults": {"button": {"background": "#e07a5f", "color": "white"}},
+       "widgets": [
+    {"id": "side", "type": "group", "pos": [0, 0], "size": [160, 400], "widgets": [
+        {"id": "new", "type": "button", "pos": [10, 10], "size": [140, 36], "text": "New"}]},
+    {"id": "views", "type": "tabs", "pos": [170, 10], "size": [420, 380], "pages": [
+        {"name": "chat", "title": "Chat", "widgets": [
+            {"id": "history", "type": "group", "pos": [5, 5], "size": [410, 250],
+             "scroll": True, "follow": True, "widgets": []},
+            {"id": "msg", "type": "input", "pos": [5, 265], "size": [300, 36]}]},
+        {"name": "calc", "title": "Calc", "widgets": [
+            {"id": "display", "type": "label", "pos": [10, 10], "size": [200, 40], "text": ""},
+            {"id": "d7", "type": "button", "pos": [10, 60], "size": [50, 50], "text": "7",
+             "do": [["append", "display", "7"]], "silent": True},
+            {"id": "back", "type": "button", "pos": [70, 60], "size": [50, 50], "text": "<",
+             "do": [["chop", "display"]], "silent": True},
+            {"id": "eq", "type": "button", "pos": [130, 60], "size": [50, 50], "text": "="},
+            {"id": "open", "type": "button", "pos": [190, 60], "size": [50, 50], "text": "c",
+             "do": [["switch", "views", "chat"], ["hide", "side"]]}]},
+        {"name": "game", "title": "Game", "widgets": [
+            {"id": "board", "type": "canvas", "pos": [10, 10], "size": [200, 120],
+             "clickable": True, "text": "X|O\nO|X"}]}]}]}
+
+# Where a page's widgets start: the tabs' corner, under the bar.
+PAGE = (170, 10 + 32)
+
+
+def test_defaults_are_written_into_the_widgets(gui):
+    checked = gui.check_layout(APP)
+    new = gui.find(checked)["new"][0]
+    assert new["background"] == "#e07a5f" and new["color"] == "white"
+    mine = gui.check_layout(APP | {"defaults": {"button": {"color": "red"}}})
+    assert gui.find(mine)["d7"][0]["color"] == "red"
+    with pytest.raises(gui.GuiError) as told:
+        gui.check_layout(APP | {"defaults": {"button": {"pos": [0, 0], "items": []},
+                                             "dial": {}}})
+    for problem in ["a button can't have 'items' by default", "can't have 'pos'", "'dial'"]:
+        assert problem in str(told.value)
+
+
+def test_the_tree_is_checked_at_every_depth(gui):
+    def widgets(*inside):
+        return {"name": "t", "size": [300, 300], "widgets": list(inside)}
+    group = {"id": "g", "type": "group", "pos": [0, 0], "size": [100, 100]}
+    tall = {"id": "x", "type": "label", "pos": [0, 80], "size": [50, 50]}
+    with pytest.raises(gui.GuiError, match=r"widget 'x': it reaches 50 x 130, outside group 'g', "
+                                           r"which is 100 x 100"):
+        gui.check_layout(widgets(group | {"widgets": [tall]}))
+    gui.check_layout(widgets(group | {"scroll": True, "widgets": [tall]}))   # it may scroll
+    nested = {"id": "g4", "type": "group", "pos": [0, 0], "size": [10, 10]}
+    for depth in (3, 2, 1):
+        nested = {"id": f"g{depth}", "type": "group", "pos": [0, 0], "size": [10, 10],
+                  "widgets": [nested]}
+    with pytest.raises(gui.GuiError, match="group 'g4': containers go at most 3 deep"):
+        gui.check_layout(widgets(nested))
+    twice = group | {"widgets": [{"id": "g", "type": "label", "pos": [0, 0], "size": [5, 5]}]}
+    with pytest.raises(gui.GuiError, match="widget 'g': the id is used twice"):
+        gui.check_layout(widgets(twice))
+    with pytest.raises(gui.GuiError, match="id must be .* and not window, add, remove"):
+        gui.check_layout(widgets({"id": "add", "type": "label", "pos": [0, 0], "size": [5, 5]}))
+    many = [{"id": f"w{n}", "type": "label", "pos": [0, 0], "size": [5, 5]} for n in range(150)]
+    with pytest.raises(gui.GuiError, match="201 widgets, more than 200"):
+        gui.check_layout(widgets(group | {"widgets": many}, *[
+            w | {"id": f"v{n}"} for n, w in enumerate(many[:50])]))
+
+
+def test_tabs_are_checked(gui):
+    tabs = {"id": "t", "type": "tabs", "pos": [0, 0], "size": [200, 100]}
+    def check(**keys):
+        gui.check_layout({"name": "x", "size": [300, 300], "widgets": [tabs | keys]})
+    for pages, problem in [([], "pages must be a list of 1 to 20"),
+                           ([{"name": "a"}, {"name": "a"}], "the page 'a' is there twice"),
+                           ([{"name": "a", "colour": 1}], "a page has no key 'colour'"),
+                           ([{"name": "a b"}], "a page's name must be")]:
+        with pytest.raises(gui.GuiError, match=problem):
+            check(pages=pages)
+    with pytest.raises(gui.GuiError, match="value must be the name of one of its pages"):
+        check(pages=[{"name": "a"}], value="b")
+    low = {"id": "y", "type": "label", "pos": [0, 60], "size": [10, 20]}   # 60 + 20 > 100 - 32
+    with pytest.raises(gui.GuiError, match="outside page 'a', which is 200 x 68"):
+        check(pages=[{"name": "a", "widgets": [low]}])
+    check(pages=[{"name": "a", "widgets": [low]}], bar=False)           # no bar: room for it
+
+
+def test_local_actions_are_checked(gui):
+    def check(steps):
+        button = {"id": "b", "type": "button", "pos": [0, 0], "size": [10, 10], "do": steps}
+        gui.check_layout(APP | {"widgets": APP["widgets"] + [button]})
+    check([["set", "display", "0"], ["show", "side"], ["switch", "views", "game"]])
+    for steps, problem in [([["jump", "x"]], "isn't a step"),
+                           ([["set", "display"]], "set takes a widget and a text"),
+                           ([["clear", "nope"]], "there is no widget 'nope'"),
+                           ([["append", "history", "x"]], "a group has no text"),
+                           ([["switch", "views", "music"]], "switch takes tabs and one of its"),
+                           ([["switch", "side", "chat"]], "switch takes tabs"),
+                           ([["clear", "display"]] * 11, "do must be a list of 1 to 10 steps")]:
+        with pytest.raises(gui.GuiError, match=problem):
+            check(steps)
+
+
+def test_updates_move_add_and_remove(gui):
+    layout = gui.check_layout(APP)
+    moved = gui.apply_changes(layout, {"new": {"pos": [5, 300], "size": [150, 40]}})
+    assert gui.find(moved)["new"][0]["pos"] == [5, 300]
+    with pytest.raises(gui.GuiError, match="the changes leave 1 problem: widget 'new': it reaches"):
+        gui.apply_changes(layout, {"new": {"size": [400, 40]}})
+    with pytest.raises(gui.GuiError, match="widgets can't change: add and remove widgets instead"):
+        gui.apply_changes(layout, {"side": {"widgets": []}})
+    message = {"id": "m1", "type": "text", "pos": [0, 0], "size": [100, 40], "text": "hi"}
+    added = gui.apply_changes(layout, {"add": {"into": "history", "widgets": [message]},
+                                       "m1": {"text": "hello"}})       # a change after the add
+    assert gui.find(added)["m1"][0]["text"] == "hello"
+    paged = gui.apply_changes(layout, {"add": {"into": "views/game", "widgets": [
+        {"id": "b2", "type": "button", "pos": [0, 200], "size": [40, 40]}]}})
+    assert gui.find(paged)["b2"][0]["color"] == "white"                 # defaults hold for adds
+    for into, problem in [("views/music", "have no page 'music'"), ("msg", "into must be a group"),
+                          ("views", "into must be a group")]:
+        with pytest.raises(gui.GuiError, match=problem):
+            gui.apply_changes(layout, {"add": {"into": into, "widgets": [message]}})
+    with pytest.raises(gui.GuiError, match=r'\["hide", "side"\]: there is no widget'):
+        gui.apply_changes(layout, {"remove": ["side"]})                 # a step still needs it
+    gone = gui.apply_changes(layout, {"remove": ["side", "new", "msg"],  # new went with side
+                                      "open": {"do": [["switch", "views", "chat"]]}})
+    assert {"side", "new", "msg"}.isdisjoint(gui.find(gone))
+    with pytest.raises(gui.GuiError, match="remove: no widget 'nope'"):
+        gui.apply_changes(layout, {"remove": ["nope"]})
+    again = gui.apply_changes(layout, {"remove": ["msg"], "add": {"into": "history", "widgets": [
+        message | {"id": "msg"}]}})                                     # an id freed is free
+    assert gui.find(again)["msg"][0]["type"] == "text"
+    sent = gui._for_child({"add": {"into": "views/game", "widgets": [{"id": "b2"}]}}, paged)
+    assert sent["add"]["widgets"][0]["background"] == "#e07a5f"
+
+
+@pytest.fixture
+def win(gui, monkeypatch):
+    """APP, shown in memory."""
+    monkeypatch.setenv("SDL_NO_SIGNAL_HANDLERS", "1")
+    made = gui.Gui()
+    assert made.answer({"cmd": "layout", "layout": gui.check_layout(APP)})["ok"] is True
+    yield made
+    made.pg.quit()
+
+
+def at(page_x, page_y):
+    return PAGE[0] + page_x, PAGE[1] + page_y
+
+
+def test_widgets_are_placed_inside_their_containers(win):
+    assert win.by_id["new"].rect == (10, 10, 140, 36)
+    assert win.by_id["msg"].rect == (*at(5, 265), 300, 36)
+    shown = [w.id for w in win.shown()]
+    assert "msg" in shown and "display" not in shown and "board" not in shown   # other pages
+    assert win.values()["views"] == "chat" and "display" in win.values()        # written to
+
+
+def test_a_click_on_a_tab_opens_it_and_tells_only_when_asked(win):
+    win.handle(win.pg.event.Event(win.pg.MOUSEBUTTONDOWN, button=1, pos=(170 + 210, 20)))
+    assert win.by_id["views"].value == "calc" and win.reports == []
+    win.by_id["views"].events = True
+    win.handle(win.pg.event.Event(win.pg.MOUSEBUTTONDOWN, button=1, pos=(170 + 400, 20)))
+    assert win.reports[-1]["event"] == "tab" and win.reports[-1]["value"] == "game"
+    win.draw()
+
+
+def test_local_actions_need_no_ai(win):
+    win.answer({"cmd": "update", "changes": {"views": {"value": "calc"}}})
+    for button in (at(35, 85), at(35, 85), at(95, 85)):               # 7 7 <
+        click(win, button)
+    assert win.by_id["display"].text == "7" and win.reports == []     # silent
+    click(win, at(155, 85))                                           # =
+    assert win.reports[-1]["id"] == "eq" and win.reports[-1]["values"]["display"] == "7"
+    click(win, at(215, 85))                                           # switch and hide
+    assert win.by_id["views"].value == "chat" and not win.by_id["side"].visible
+    assert win.reports[-1]["id"] == "open"                            # not silent
+    assert win.at((20, 20)) is None                                   # the hidden one takes none
+    win.draw()
+
+
+def test_a_canvas_tells_the_cell_clicked(win):
+    win.answer({"cmd": "update", "changes": {"views": {"value": "game"}}})
+    font = win.font(win.by_id["board"].font_size, mono=True)
+    cell, line = font.size("M")[0], font.get_linesize()
+    click(win, at(10 + 2 + 2 * cell + 1, 10 + 2 + line + 1))
+    assert win.reports[-1] | {"values": None} == {
+        "event": "click", "window": "app", "id": "board", "col": 2, "row": 1, "values": None}
+
+
+def test_a_group_that_follows_scrolls_to_what_is_added(win, gui):
+    for n in range(10):
+        message = {"id": f"m{n}", "type": "text", "pos": [0, n * 50], "size": [400, 40],
+                   "text": f"message {n}"}
+        win.answer({"cmd": "update", "changes": {"add": {"into": "history", "widgets": [message]}}})
+    history = win.by_id["history"]
+    assert history.scroll == win.scroll_room(history) == 10 * 50 - 10 - 250
+    assert win.by_id["m9"].rect[1] + 40 <= history.rect[1] + 250       # the newest shows
+    win.handle(win.pg.event.Event(win.pg.MOUSEMOTION, pos=at(50, 50), rel=(0, 0), buttons=(0, 0, 0)))
+    win.handle(win.pg.event.Event(win.pg.MOUSEWHEEL, x=0, y=2))         # scrolls up
+    assert history.scroll == win.scroll_room(history) - 6 * gui.WHEEL_PIXELS
+    win.draw()
+
+
+def test_removing_and_hiding_let_go_of_the_focus(win):
+    click(win, at(20, 280))
+    assert win.focus.id == "msg"
+    win.answer({"cmd": "update", "changes": {"views": {"value": "game"}}})
+    assert win.focus is None                                          # its page closed
+    click(win, (170 + 20, 20))                                        # the chat tab
+    click(win, at(20, 280))
+    win.answer({"cmd": "update", "changes": {"remove": ["msg"]}})
+    assert win.focus is None and "msg" not in win.by_id
+
+
+def test_showing_again_keeps_the_open_page(win, gui):
+    win.answer({"cmd": "update", "changes": {"views": {"value": "game"}}})
+    win.answer({"cmd": "layout", "layout": gui.check_layout(APP)})
+    assert win.by_id["views"].value == "game"
+
+
+def test_an_add_goes_through_a_real_child(gui):
+    disk = Disk(**{"/win.json": APP})
+    gui.show(disk, "/win.json")
+    told = gui.update("app", json.dumps({"add": {"into": "views/game", "widgets": [
+        {"id": "b2", "type": "button", "pos": [0, 150], "size": [60, 40], "text": "go"}]}}))
+    assert told == {"ok": True}
+    assert gui.find(gui._layouts["app"])["b2"][0]["background"] == "#e07a5f"
+    assert gui.read("app")["values"]["views"] == "chat"
