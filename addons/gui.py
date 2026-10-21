@@ -108,6 +108,10 @@ THE LAYOUT FILE (JSON)
 - Colors are a name (tomato, steel blue, gray20) or #rrggbb. Texts are at most 2000
   characters. At most 100 widgets.
 - A layout with problems is refused with all of them listed: fix them all, then show again.
+- show and update may also return "missing": characters no font on the user's desktop can
+  draw (they show as boxes; use plain ones instead), and "cut": ids of widgets whose text
+  doesn't fit (make them bigger, give them a smaller font_size, or use a text widget, which
+  scrolls). Fix those with update or in the file before you call the window done.
 
 EVENTS
 Once you listen with addon_listen("gui"), what the user does reaches you as events:
@@ -162,7 +166,7 @@ def show(disk, path: str) -> dict:
                 link.close()
             raise GuiError(answer["error"])
         _windows[name], _layouts[name] = link, layout
-    return {"window": name}
+    return {"window": name} | _drawn(answer)
 
 
 def update(window: str, changes: str) -> dict:
@@ -179,7 +183,7 @@ def update(window: str, changes: str) -> dict:
         if "error" in answer:
             raise GuiError(answer["error"])
         _layouts[window] = layout
-    return {"ok": True}
+    return {"ok": True} | _drawn(answer)
 
 
 def read(window: str) -> dict:
@@ -219,6 +223,11 @@ _lock = threading.Lock()               # one question at a time
 _windows: dict = {}                    # name: the pipe to that window's child
 _layouts: dict = {}                    # name: the layout it shows, with the updates since
 _emit = None                           # where events go, once Hallux has connected
+
+
+def _drawn(answer: dict) -> dict:
+    """What the window says didn't draw: missing characters, widgets cut off."""
+    return {key: answer[key] for key in ("missing", "cut") if key in answer}
 
 
 def _link_of(name: str):
@@ -532,7 +541,14 @@ FONT_SIZE, CANVAS_FONT_SIZE = 22, 18
 PAD = 6                                # pixels between a box's edge and its text
 BOX = 18                               # the side of a checkbox's box
 VALUE_WIDTH = 56                       # pixels a slider keeps for its value, on the right
+SANS = "dejavusans,notosans,liberationsans,arial"
 MONOSPACE = "dejavusansmono,liberationmono,ubuntumono,couriernew,consolas,monospace"
+EMOJI = "notocoloremoji,notoemoji,twemoji,emojione,symbola"
+EMOJI_PLANES = 0x1F000                 # from here on, a character is drawn as an emoji if it can be
+EMOJI_SIZE = 109                       # the one size Noto Color Emoji has; drawn, then scaled
+INVISIBLE = {"\u200d"} | {chr(c) for c in range(0xFE00, 0xFE10)}   # joiners, variation selectors
+NO_SUCH_CHARACTER = "\U0010fffd"          # private use: no font has it, so it draws the box
+MISSING_MAX, CUT_MAX = 40, 30          # characters and widgets told after a layout or an update
 DEFAULT_COLOR = {"button": "black", "input": "black", "textarea": "black", "list": "black"}
 DEFAULT_BACKGROUND = {"button": "#d9d9d9", "input": "white", "textarea": "white",
                       "list": "white", "canvas": "black"}
@@ -576,6 +592,125 @@ def line_of(lines: list[tuple[int, int]], index: int) -> int:
                                       or lines[number + 1][0] > index):
             return number
     return len(lines) - 1
+
+
+class Fonts:
+    """The fonts of a window, found once when it starts. A line of text is drawn in runs:
+    each character in the first font that has it, the main font first, then the emoji
+    font. Measuring adds up the same runs, so wrapping and the cursor agree with drawing."""
+
+    def __init__(self, pg, sans: str | None, mono: str | None, emoji: str | None) -> None:
+        self.pg = pg
+        self.paths = {"sans": sans, "mono": mono}     # None: pygame's own font
+        self.emoji_path = emoji
+        self.loaded: dict = {}
+        self.known: dict = {}                         # (font, character): whether it has it
+
+    @classmethod
+    def find(cls, pg) -> "Fonts":
+        match = pg.font.match_font
+        return cls(pg, match(SANS), match(MONOSPACE), match(EMOJI))
+
+    def font(self, size: int, mono: bool = False):
+        key = ("mono" if mono else "sans", size)
+        if key not in self.loaded:
+            self.loaded[key] = self.pg.font.Font(self.paths[key[0]], size)
+        return self.loaded[key]
+
+    def emoji(self):
+        """The emoji font, at the one size a color emoji font has; None without one."""
+        if self.emoji_path is None:
+            return None
+        if "emoji" not in self.loaded:
+            try:
+                self.loaded["emoji"] = self.pg.font.Font(self.emoji_path, EMOJI_SIZE)
+            except (OSError, ValueError, self.pg.error):
+                self.emoji_path = None                # a font SDL can't read: as if none
+                return None
+        return self.loaded["emoji"]
+
+    def covers(self, kind: str, char: str, size: int = FONT_SIZE) -> bool:
+        """Whether the font has the character. pygame's metrics say None for a glyph that is
+        missing, but always None above U+FFFF; there, and for the emoji font, the
+        character is drawn once and looked at."""
+        key = (kind, char)
+        if key not in self.known:
+            if kind == "emoji":
+                font = self.emoji()
+                self.known[key] = font is not None and self._draws(font, char)
+            else:
+                font = self.font(size, kind == "mono")
+                if ord(char) > 0xFFFF or self.paths[kind] is None:   # pygame's own font
+                    self.known[key] = self._draws(font, char)         # has metrics for all
+                else:
+                    self.known[key] = font.metrics(char)[0] is not None
+        return self.known[key]
+
+    def _draws(self, font, char: str) -> bool:
+        """The character comes out as something, and not as the box a font draws for a
+        character it doesn't have."""
+        with contextlib.suppress(self.pg.error, ValueError):
+            drawn = font.render(char, True, "white")
+            if drawn.get_bounding_rect().width == 0:
+                return False
+            box = font.render(NO_SUCH_CHARACTER, True, "white")
+            return (drawn.get_size() != box.get_size()
+                    or self.pg.image.tobytes(drawn, "RGBA") != self.pg.image.tobytes(box, "RGBA"))
+        return False
+
+    def runs(self, text: str, size: int) -> list[tuple[bool, str]]:
+        """The text in runs: (in the emoji font, characters). Joiners and variation selectors
+        are left out: drawn one by one, they would only be boxes."""
+        runs: list[tuple[bool, str]] = []
+        for char in text:
+            if char in INVISIBLE:
+                continue
+            # The emoji planes go to the emoji font first: DejaVu has a few, in black.
+            emoji = (not char.isspace() and self.covers("emoji", char)
+                     and (ord(char) >= EMOJI_PLANES or not self.covers("sans", char, size)))
+            if runs and runs[-1][0] == emoji:
+                runs[-1] = (emoji, runs[-1][1] + char)
+            else:
+                runs.append((emoji, char))
+        return runs
+
+    def missing(self, text: str) -> list[str]:
+        """The characters no font of the window can draw."""
+        return [c for c in dict.fromkeys(text)
+                if c.isprintable() and not c.isspace() and c not in INVISIBLE
+                and not self.covers("sans", c) and not self.covers("mono", c)
+                and not self.covers("emoji", c)]
+
+    def width(self, text: str, size: int) -> int:
+        if text.isascii():
+            return self.font(size).size(text)[0]
+        return sum(self._run_width(emoji, run, size) for emoji, run in self.runs(text, size))
+
+    def _run_width(self, emoji: bool, run: str, size: int) -> int:
+        if not emoji:
+            return self.font(size).size(run)[0]
+        font, height = self.emoji(), self.font(size).get_height()
+        return round(font.size(run)[0] * height / font.get_height())
+
+    def render(self, text: str, size: int, color):
+        """One line of text as a surface, as high as the main font's line."""
+        main = self.font(size)
+        if text.isascii():
+            return main.render(text, True, color)
+        runs = self.runs(text, size)
+        widths = [self._run_width(emoji, run, size) for emoji, run in runs]
+        height = main.get_height()
+        surface = self.pg.Surface((max(1, sum(widths)), height), self.pg.SRCALPHA)
+        x = 0
+        for (emoji, run), width in zip(runs, widths):
+            if emoji:
+                drawn = self.pg.transform.smoothscale(self.emoji().render(run, True, color),
+                                                      (max(1, width), height))
+            else:
+                drawn = main.render(run, True, color)
+            surface.blit(drawn, (x, 0))
+            x += width
+        return surface
 
 
 class Widget:
@@ -642,7 +777,7 @@ class Widget:
 class Gui:
     """The pygame window: the widgets of one layout, drawn, and what the user does to them."""
 
-    def __init__(self) -> None:
+    def __init__(self, fonts: "Fonts | None" = None) -> None:
         os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
         import pygame
         self.pg = pygame
@@ -662,7 +797,7 @@ class Gui:
         self.enter_down = False                       # Enter is held: it submits once
         self.mouse = (0, 0)                           # where it last moved: the wheel scrolls there
         self.reports: list[dict] = []                 # events for Hallux, not yet sent
-        self.fonts: dict = {}
+        self.fonts = fonts or Fonts.find(pygame)      # before the window answers: fc-list is slow
         self.glyphs: dict = {}
         self.dirty = True                             # the screen needs drawing
 
@@ -706,7 +841,7 @@ class Gui:
             self.size = tuple(layout["size"])
             self.screen = self.pg.display.set_mode(self.size)
         self.dirty = True
-        return {"ok": True}
+        return {"ok": True} | self.drawn()
 
     def update(self, changes: dict) -> dict:
         by_id = {w.id: w for w in self.widgets}
@@ -720,7 +855,7 @@ class Gui:
             elif id_ in by_id:
                 by_id[id_].change(keys)
         self.dirty = True
-        return {"ok": True}
+        return {"ok": True} | self.drawn()
 
     def unknown_colors(self, specs: list[dict]) -> str | None:
         """The colors pygame doesn't know, as the error the AI is told, or None."""
@@ -876,12 +1011,11 @@ class Gui:
             self.dirty = True
 
     def up_or_down(self, widget: Widget, by: int) -> None:
-        font = self.font(widget.font_size)
         lines = self.lines(widget)
         number = line_of(lines, widget.cursor)
         if 0 <= number + by < len(lines):
             start = lines[number][0]
-            x = font.size(widget.text[start:widget.cursor])[0]
+            x = self.width(widget, widget.text[start:widget.cursor])
             widget.cursor = self.nearest(widget, lines[number + by], x)
 
     def index_at(self, widget: Widget, pos) -> int:
@@ -895,28 +1029,57 @@ class Gui:
 
     def nearest(self, widget: Widget, line: tuple[int, int], x: int) -> int:
         """The offset in a line whose left edge is nearest to x pixels from its start."""
-        font = self.font(widget.font_size)
         start, end = line
-        best = min(range(start, end + 1),
-                   key=lambda i: abs(font.size(widget.text[start:i])[0] - x))
-        return best
+        return min(range(start, end + 1),
+                   key=lambda i: abs(self.width(widget, widget.text[start:i]) - x))
+
+    # -- what didn't draw
+
+    def drawn(self) -> dict:
+        """What the AI is told after a layout or an update: the characters no font has, and
+        the widgets whose text doesn't fit. Nothing when all is well."""
+        told = {}
+        texts = [w.text for w in self.widgets] + [i for w in self.widgets for i in w.items]
+        missing = "".join(dict.fromkeys(c for text in texts for c in self.fonts.missing(text)))
+        if missing:
+            told["missing"] = missing[:MISSING_MAX]
+        if cut := [w.id for w in self.widgets if self.is_cut(w)]:
+            told["cut"] = cut[:CUT_MAX]
+        return told
+
+    def is_cut(self, widget: Widget) -> bool:
+        """The text of a widget doesn't fit it. What a user types never counts: an input
+        scrolls, and a textarea is there to be written in."""
+        _, _, w, h = widget.rect
+        if widget.type in ("label", "button", "checkbox"):
+            room = {"label": w - 4, "button": w - 8, "checkbox": w - BOX - 12}[widget.type]
+            return (self.width(widget, widget.text) > room
+                    or self.font(widget.font_size).get_height() > h)
+        if widget.type == "text":
+            return len(self.lines(widget)) > self.visible_lines(widget)
+        if widget.type == "list":
+            return any(self.width(widget, item) > w - 2 * PAD for item in widget.items)
+        if widget.type == "canvas":
+            font = self.font(widget.font_size, mono=True)
+            rows = widget.text.split("\n")
+            return (len(rows) * font.get_linesize() > h - 4
+                    or max(len(row) for row in rows) * font.size("M")[0] > w - 4)
+        return False
 
     # -- drawing
 
     def font(self, size: int, mono: bool = False):
-        key = (size, mono)
-        if key not in self.fonts:
-            path = self.pg.font.match_font(MONOSPACE) if mono else None
-            self.fonts[key] = self.pg.font.Font(path, size)
-        return self.fonts[key]
+        return self.fonts.font(size, mono)
+
+    def width(self, widget: Widget, text: str) -> int:
+        return self.fonts.width(text, widget.font_size)
 
     def inner(self, widget: Widget):
         x, y, w, h = widget.rect
         return x + PAD, y + PAD, max(1, w - 2 * PAD), max(1, h - 2 * PAD)
 
     def lines(self, widget: Widget) -> list[tuple[int, int]]:
-        font = self.font(widget.font_size)
-        return wrap(lambda s: font.size(s)[0], widget.text, self.inner(widget)[2] - 2)
+        return wrap(lambda s: self.width(widget, s), widget.text, self.inner(widget)[2] - 2)
 
     def visible_lines(self, widget: Widget) -> int:
         return max(1, self.inner(widget)[3] // self.font(widget.font_size).get_linesize())
@@ -956,14 +1119,14 @@ class Gui:
 
     def write(self, widget: Widget, text: str, x: int, y: int) -> int:
         """One line of text at x, y; returns its width."""
-        surface = self.font(widget.font_size).render(text, True, self.ink(widget))
+        surface = self.fonts.render(text, widget.font_size, self.ink(widget))
         self.screen.blit(surface, (x, y))
         return surface.get_width()
 
     def draw_label(self, widget: Widget, rect) -> None:
         self.fill(widget, rect)
-        font = self.font(widget.font_size)
-        width, height = font.size(widget.text)
+        width = self.width(widget, widget.text)
+        height = self.font(widget.font_size).get_height()
         x = {"left": rect.x + 2, "center": rect.centerx - width // 2,
              "right": rect.right - 2 - width}[widget.align]
         self.write(widget, widget.text, x, rect.centery - height // 2)
@@ -984,11 +1147,12 @@ class Gui:
                 break
             self.write(widget, widget.text[start:end], x, top)
             if cursor and number == line_of(lines, widget.cursor):
-                left = x + self.font(widget.font_size).size(widget.text[start:widget.cursor])[0]
+                left = x + self.width(widget, widget.text[start:widget.cursor])
                 self.pg.draw.line(self.screen, self.ink(widget), (left, top), (left, top + step - 2))
 
     def draw_canvas(self, widget: Widget, rect) -> None:
-        """Ascii art: every character in a cell of the same width, whatever the font."""
+        """Ascii art: every character in a cell of the same width, whatever the font. One the
+        monospace font lacks is drawn by the others, centered on its cell."""
         self.fill(widget, rect)
         font = self.font(widget.font_size, mono=True)
         cell, step = font.size("M")[0], font.get_linesize()
@@ -998,11 +1162,14 @@ class Gui:
             if top > rect.bottom:
                 break
             for column, char in enumerate(line[:max(0, (rect.width - 4) // cell + 1)]):
-                if char == " ":
+                if char == " " or char in INVISIBLE:
                     continue
                 key = (char, widget.font_size, tuple(color))
                 if key not in self.glyphs:
-                    self.glyphs[key] = font.render(char, True, color)
+                    if self.fonts.covers("mono", char, widget.font_size):
+                        self.glyphs[key] = font.render(char, True, color)
+                    else:
+                        self.glyphs[key] = self.fonts.render(char, widget.font_size, color)
                 glyph = self.glyphs[key]
                 left = rect.x + 2 + column * cell + (cell - glyph.get_width()) // 2
                 self.screen.blit(glyph, (left, top))
@@ -1016,8 +1183,8 @@ class Gui:
             background = background.lerp(pg.Color(self.background), 0.5)
         pg.draw.rect(self.screen, background, rect, border_radius=4)
         pg.draw.rect(self.screen, "black", rect, 2, border_radius=4)
-        font = self.font(widget.font_size)
-        width, height = font.size(widget.text)
+        width = self.width(widget, widget.text)
+        height = self.font(widget.font_size).get_height()
         self.write(widget, widget.text, rect.centerx - width // 2, rect.centery - height // 2)
 
     def draw_box(self, widget: Widget, rect) -> None:
@@ -1029,10 +1196,9 @@ class Gui:
     def draw_input(self, widget: Widget, rect) -> None:
         self.draw_box(widget, rect)
         x, _, room, _ = self.inner(widget)
-        font = self.font(widget.font_size)
-        before = font.size(widget.text[:widget.cursor])[0]
+        before = self.width(widget, widget.text[:widget.cursor])
         widget.scroll = min(max(widget.scroll, before - room + 2), before)   # the cursor shows
-        height = font.get_height()
+        height = self.font(widget.font_size).get_height()
         top = rect.centery - height // 2
         self.screen.set_clip(self.pg.Rect(self.inner(widget)).clip(rect))
         self.write(widget, widget.text, x - widget.scroll, top)

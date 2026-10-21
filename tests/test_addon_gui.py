@@ -291,7 +291,9 @@ def test_a_disabled_widget_takes_nothing(screen):
 def test_the_wheel_scrolls_a_list(screen):
     event(screen, "MOUSEMOTION", pos=(20, 200), rel=(0, 0), buttons=(0, 0, 0))
     event(screen, "MOUSEWHEEL", x=0, y=-1)
-    assert screen.widgets[4].scroll == screen.scroll_room(screen.widgets[4]) > 0
+    assert screen.widgets[4].scroll == 3
+    event(screen, "MOUSEWHEEL", x=0, y=-5)                          # no further than the end
+    assert screen.widgets[4].scroll == screen.scroll_room(screen.widgets[4]) > 3
 
 
 def test_updates_change_what_is_shown(screen, gui):
@@ -459,3 +461,86 @@ sys.exit(gui.child_main())"""]
     assert reported == [{"event": "click", "window": "calc", "id": "go", "values": {
         "a": "", "notes": "", "tick": False, "pick": None, "level": 0}}]
     assert gui.read("calc")["values"]["a"] == ""      # and questions are still answered
+
+
+# ---------------------------------------------------------------- fonts, and what didn't draw
+
+@pytest.fixture
+def pg(gui, monkeypatch):
+    monkeypatch.setenv("SDL_NO_SIGNAL_HANDLERS", "1")
+    import pygame
+    pygame.font.init()
+    yield pygame
+    pygame.quit()
+
+
+def dejavu(pg, gui):
+    path = pg.font.match_font(gui.SANS)
+    if path is None or "dejavu" not in path.lower():
+        pytest.skip("DejaVu Sans isn't installed")
+    return path
+
+
+def test_pygames_own_font_says_what_it_lacks(pg, gui):
+    fonts = gui.Fonts(pg, None, None, None)
+    assert fonts.missing("aé÷ ➤🐾‍️") == ["➤", "🐾"]   # joiners never count
+
+
+def test_dejavu_draws_the_symbols_and_lacks_emoji(pg, gui):
+    fonts = gui.Fonts(pg, dejavu(pg, gui), None, None)
+    assert fonts.missing("➤ ⌫ ÷ × − ♥ é") == []
+    assert fonts.missing("🐾 ok") == ["🐾"]
+
+
+def test_a_line_is_drawn_in_runs_and_measured_the_same(pg, gui):
+    """With pygame's font first and DejaVu standing in for the emoji font, whatever
+    pygame's font lacks goes to the second one, scaled to the line."""
+    fonts = gui.Fonts(pg, None, None, dejavu(pg, gui))
+    assert fonts.runs("a ➤ b️", 22) == [(False, "a "), (True, "➤"), (False, " b")]
+    for text in ["a ➤ b", "➤➤", "plain", "é ⌫"]:
+        drawn = fonts.render(text, 22, pg.Color("white"))
+        assert drawn.get_width() == fonts.width(text, 22)
+        assert drawn.get_height() == fonts.font(22).get_height()
+    assert fonts.missing("➤") == []
+
+
+def test_an_unreadable_emoji_font_is_as_if_none(pg, gui, tmp_path):
+    broken = tmp_path / "broken.ttf"
+    broken.write_bytes(b"not a font")
+    fonts = gui.Fonts(pg, None, None, str(broken))
+    assert fonts.runs("a🐾", 22) == [(False, "a🐾")] and fonts.missing("🐾") == ["🐾"]
+
+
+def test_the_window_tells_what_is_cut_and_missing(screen, gui):
+    layout = gui.check_layout({"name": "x", "size": [400, 300], "widgets": [
+        {"id": "fits", "type": "label", "pos": [0, 0], "size": [200, 40], "text": "ok"},
+        {"id": "long", "type": "button", "pos": [0, 50], "size": [40, 40], "text": "far too long"},
+        {"id": "short", "type": "label", "pos": [0, 100], "size": [200, 8], "text": "low"},
+        {"id": "lines", "type": "text", "pos": [0, 120], "size": [200, 30], "text": "a\nb\nc\nd"},
+        {"id": "art", "type": "canvas", "pos": [210, 0], "size": [60, 30], "text": "#" * 40},
+        {"id": "typed", "type": "input", "pos": [210, 50], "size": [40, 30], "text": "x" * 50},
+        {"id": "wide", "type": "list", "pos": [210, 100], "size": [60, 60], "items": ["y" * 30]}]})
+    screen.fonts = gui.Fonts(screen.pg, None, None, None)
+    told = screen.answer({"cmd": "layout", "layout": layout})
+    assert told == {"ok": True, "cut": ["long", "short", "lines", "art", "wide"]}
+    assert screen.answer({"cmd": "update", "changes": {"fits": {"text": "➤ 🐾"}}}) == {
+        "ok": True, "missing": "➤🐾", "cut": ["long", "short", "lines", "art", "wide"]}
+    screen.draw()
+
+
+def test_show_and_update_pass_on_what_did_not_draw(gui):
+    layout = {"name": "w", "size": [200, 100], "widgets": [
+        {"id": "a", "type": "label", "pos": [0, 0], "size": [40, 30], "text": "a long label"}]}
+    assert gui.show(Disk(**{"/w.json": layout}), "/w.json") == {"window": "w", "cut": ["a"]}
+    assert gui.update("w", '{"a": {"text": "ok"}}') == {"ok": True}
+    told = gui.update("w", '{"a": {"text": "\\ud83d\\udc3e"}}')     # 🐾, as JSON escapes it
+    assert told["ok"] is True and set(told) <= {"ok", "missing"}    # missing unless an emoji
+                                                                    # font is installed
+
+
+def test_the_canvas_draws_what_its_font_lacks_with_the_others(screen, gui):
+    fonts = gui.Fonts(screen.pg, None, None, None)
+    screen.fonts = fonts
+    screen.answer({"cmd": "update", "changes": {"art": {"text": "a➤🐾"}}})
+    screen.draw()                                     # nothing raises; the glyphs are cached
+    assert any(key[0] == "➤" for key in screen.glyphs)

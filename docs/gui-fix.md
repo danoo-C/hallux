@@ -1,7 +1,9 @@
 # GUI addon: fixes
 
-**Status:** a list for the user to review, 2026-10-20. Nothing here is built yet, except
-fix 0, which is built and tested. Every fix stays inside `addons/gui.py` and its tests:
+**Status:** fixes 0 to 4 are built and tested, 2026-10-21, not committed (fix 0 was
+committed with the addon as 76045d0). Fix 5 is left for later. The open questions were
+settled by my recommendations when the user said "build the gui-fix.md". The user's live
+try is still to come. [As built](#as-built) has where the code differs from the text below. Every fix stays inside `addons/gui.py` and its tests:
 Hallux's own code is not changed. The design is [addon-gui.md](addon-gui.md).
 
 **Where these came from:** the user's live tries in `test-hallux` on 2026-10-20: a
@@ -9,11 +11,11 @@ calculator (kittycalc), a bare test window, and a chat app the AI built ("Hallux
 
 | # | Problem | Status |
 |---|---|---|
-| 0 | Clicks and Enter never reached the AI | Fixed and tested, not committed |
-| 1 | Arrows, math signs and other symbols draw as empty boxes | To build |
-| 2 | Emoji draw as empty boxes | To build; needs a font installed |
-| 3 | The AI never learns what didn't draw | To build |
-| 4 | Text that doesn't fit its widget is cut off silently | To build, with 3 |
+| 0 | Clicks and Enter never reached the AI | Fixed (76045d0) |
+| 1 | Arrows, math signs and other symbols draw as empty boxes | Fixed |
+| 2 | Emoji draw as empty boxes | Fixed; the user installs an emoji font |
+| 3 | The AI never learns what didn't draw | Fixed |
+| 4 | Text that doesn't fit its widget is cut off silently | Fixed, with 3 |
 | 5 | No copy and paste in inputs | Later |
 
 ---
@@ -112,3 +114,38 @@ so far.
    return (fix 3), with the manual's lines.
 3. A live try by the user: kittycalc and the chat app again, once with an emoji font
    installed.
+
+---
+
+## As built
+
+Built 2026-10-21 in `addons/gui.py` (a `Fonts` class in the child, `Gui.drawn` and
+`Gui.is_cut`, and two lines in `show` and `update`), with 7 new tests in
+`tests/test_addon_gui.py` (36 in all).
+
+- **The fonts are found once, when a window starts,** before it says it is ready: finding a
+  font asks `fc-list`, which can be slow, and the first answer has a deadline. The main
+  font is the first of DejaVu Sans, Noto Sans, Liberation Sans, Arial that is installed (on
+  this machine `match_font` picks DejaVu Sans Condensed); the emoji font the first of Noto
+  Color Emoji, Noto Emoji, Twemoji, EmojiOne, Symbola.
+- **Whether a font has a character** comes from pygame's metrics, except where they can't
+  tell: above U+FFFF they are always empty, and pygame's own font has metrics for
+  everything. There the character is drawn once and compared with the box the font draws
+  for a character nobody has (U+10FFFD). The answer is cached per font and character.
+- **Color emoji work** with pygame 2.6.1 (SDL_ttf 2.20.1): checked with a copy of Noto
+  Color Emoji in the session's scratch folder, never installed. 🐾 and 😀 come out in
+  color, and so does 👍🏽 with its skin tone.
+- **Characters from U+1F000 on go to the emoji font first,** when it has them. DejaVu has a
+  few emoji of its own, in black; the color ones look right next to the rest.
+- **Joiners and variation selectors (U+200D, U+FE00 to U+FE0F) are left out** when drawing:
+  one by one they would only be boxes. They never count as missing.
+- **The canvas** draws a character its monospace font lacks with the other fonts, centered
+  on its cell. An emoji is wider than a cell, as in a terminal.
+- **`cut` leaves out inputs, textareas and sliders.** That includes an input's first text,
+  which the list above counted: an input scrolls, whoever wrote its text. A `list` counts
+  when a line is wider than the list; more lines than fit is just scrolling.
+- **At most 40 characters in `missing` and 30 ids in `cut`.**
+- **One existing test changed:** the wheel test assumed how many lines a list scrolls,
+  which depends on the font's height.
+- **The manual** has four new lines: what `missing` and `cut` mean, and to fix them before
+  calling the window done.
