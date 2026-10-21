@@ -1,8 +1,11 @@
 # A web addon: HTML apps in a real window, with Qt WebEngine
 
-**Status:** a proposal for the user to review, 2026-10-21. Nothing is built or installed.
+**Status:** a proposal, 2026-10-21. Nothing is built or installed. The user decided
+all five questions the same day, all as recommended: no page ever opens in the user's own
+browser. Apps of many
+files and pages, with the AI as their backend, are in [apps.md](apps.md).
 The first step is a throwaway check (section 8). It grew out of
-[gui-scripts.md](gui-scripts.md): the user asked whether HTML wouldn't be better than
+[gui-scripts.md](../gui-addon/gui-scripts.md): the user asked whether HTML wouldn't be better than
 scripts in pygame, and whether a browser engine can be put into a window of its own,
 without the browser.
 
@@ -19,7 +22,7 @@ without the browser.
    and only the page's own `hallux://` address is let through.
 5. **It is a second addon, `web`,** beside `gui`. `gui` stays: it works, it's tested, it
    needs no browser, and it suits small native windows.
-6. **It replaces step 2 of [gui-scripts.md](gui-scripts.md)** (QuickJS) for anything it
+6. **It replaces step 2 of [gui-scripts.md](../gui-addon/gui-scripts.md)** (QuickJS) for anything it
    covers.
 
 ---
@@ -32,7 +35,7 @@ without the browser.
 | Fonts, emoji in runs, `missing` | The engine's fonts, color emoji included |
 | Groups, tabs, hidden pages | `<div>`s and a few lines of JS |
 | Local actions (`do`) | Plain JavaScript |
-| Scripts in QuickJS ([gui-scripts.md](gui-scripts.md), step 2) | JavaScript, with `requestAnimationFrame` and `<canvas>`: snake is easy |
+| Scripts in QuickJS ([gui-scripts.md](../gui-addon/gui-scripts.md), step 2) | JavaScript, with `requestAnimationFrame` and `<canvas>`: snake is easy |
 | SVG through SDL_image's old reader (no gradients, no text) | All of SVG, and CSS animations |
 | Typing without copy and paste | Real inputs: clipboard, selection, input methods |
 
@@ -43,8 +46,9 @@ without the browser.
 | **The user's own browser,** a tab opened from WSL, served by a small local server | Nothing to install: Python's own HTTP server, server-sent events one way, POST the other | A tab, not a window. The page has the browser's network, so it needs a sandboxed frame and a strict CSP to keep it in, and a few small leaks (DNS prefetch) remain. A server on 127.0.0.1 can be reached by other programs and by websites open in the same browser, so it needs a secret token and a check of `Origin` |
 | **An engine embedded in a window of its own** | A real window. Python sees every request and can refuse it. No server, no port. | A dependency, and a large one |
 
-The embedded engine wins on safety and on looks; the browser tab is the fallback if no
-engine runs (section 8).
+The embedded engine wins on safety and on looks. **The browser tab is turned down** (the
+user, 2026-10-21: it needs a lot of work and is less secure): `web` never opens a page in
+the user's own browser.
 
 ## 3. The engines that exist
 
@@ -85,7 +89,7 @@ Python real control over what a page may do:
 
   | Function | What it does |
   |---|---|
-  | `open_page(path)` | Opens the page in a window of its own. Its files are read through the disk handle, so through the path jail |
+  | `open_page(path)` | Opens the page in a window of its own. Its files are read through the disk handle, so through the path jail. An app's folder, with many files and pages: [apps.md](apps.md) |
   | `tell(page, data)` | Hands a JSON object to the page's `hallux.on("message")` |
   | `close_page(page)` / `stop()` | Closes one window, or all |
 
@@ -145,12 +149,12 @@ In a throwaway venv in the session's scratch folder, never in the project:
 5. Time to open a window, and memory per window.
 
 **If it holds:** the design of section 5 and 6 goes on. **If Qt WebEngine doesn't run in
-WSLg:** the browser tab of section 2, with its sandboxed frame, CSP, token and `Origin`
-check.
+WSLg:** not the browser tab, which is turned down. Then pywebview with WebKitGTK (section
+3) gets the same check, and if that fails too, `web` waits and the user decides again.
 
 ## 9. What it means for the other GUI docs
 
-- [gui-scripts.md](gui-scripts.md): step 2 (QuickJS) is replaced by this for everything it
+- [gui-scripts.md](../gui-addon/gui-scripts.md): step 2 (QuickJS) is replaced by this for everything it
   covers. Step 1 (timers, keys) still makes sense for `gui`.
 - SVG in `gui` (discussed, not written down): much less needed, since HTML has all of it. A
   plain `image` widget would still be nice, but it isn't urgent.
@@ -161,16 +165,29 @@ check.
 ## Open questions
 
 1. **A real program in a window, written by the AI: acceptable for Hallux?** The same
-   choice as in [gui-scripts.md](gui-scripts.md), section 7. My recommendation: yes,
+   choice as in [gui-scripts.md](../gui-addon/gui-scripts.md), section 7. My recommendation: yes,
    confined to the window, and written down as such.
+   **Decided 2026-10-21 by the user: yes.**
 2. **Qt WebEngine, at a few hundred MB?** My recommendation: yes, as an optional extra
    (`pip install -e '.[web]'`), if the check of section 8 holds.
+   **Decided 2026-10-21 by the user: yes.**
 3. **The browser tab as well, for machines without PySide6?** My recommendation: not at
    first. One way, done well; the tab only if the engine fails here.
+   **The user asked: "what tab?"** It is the first way of section 2: instead of a window of
+   its own, the page opens in the user's ordinary browser (Edge or Chrome on Windows), as one
+   more tab beside their websites, served by a small server inside Hallux. It needs nothing
+   installed, but it is a tab, not a window, and it needs more walls (a sandboxed frame, a
+   strict CSP, a secret token). The question: should `web` also be able to do that, for a
+   machine where PySide6 isn't installed? **Decided 2026-10-21 by the user: no.** "No
+   real browser, it needs a lot of work and it's less secure." `web` never opens a page in
+   the user's browser: without PySide6 the addon doesn't load, and `gui` stays the way to
+   make windows.
 4. **Can a page load more than one file** (its CSS, JS, SVG beside it)? My recommendation:
-   yes, from its own folder only.
+   yes, from its own folder only. **Decided 2026-10-21 by the user: yes.** How it works:
+   [apps.md](apps.md).
 5. **`gui-scripts.md` step 1 (timers and keys for `gui`): still wanted?** My
    recommendation: yes, it is small and helps `gui` without any dependency.
+   **Decided 2026-10-21 by the user: yes.**
 
 ## Order of work
 

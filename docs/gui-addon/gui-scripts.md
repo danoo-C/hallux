@@ -6,8 +6,9 @@ on the GUI addon as committed on branch `gui-addon` (c0b4f2d): [addon-gui.md](ad
 inside `addons/gui.py` and its tests: Hallux's own code is not changed.
 
 **Replaced in part, 2026-10-21:** step 2 (QuickJS in a `screen` widget) is replaced by
-[web-engine.md](web-engine.md), HTML apps in a window of their own, for everything that
-covers. Step 1 (timers and keys for `gui`) still stands.
+[web-engine.md](../web-addon/web-engine.md), HTML apps in a window of their own, for everything that
+covers. Step 1 (timers and keys for `gui`) still stands: the user confirmed it is wanted
+(2026-10-21).
 
 **Where it came from:** the user asked what could move from the AI into Python, so that the
 window can run more complex games such as snake, and how to keep that safe.
