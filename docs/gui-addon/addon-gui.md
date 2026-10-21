@@ -13,7 +13,7 @@ went further than the sections below.
 **The one rule, from the user:** Hallux's own code is not changed. Everything here is one
 new addon file, `addons/gui.py`, plus its tests. It uses only what addons already have:
 `EXPOSED`, the `disk` handle, `connect(emit)`, `stop()` and, if wanted, `agent()`
-([addons.md](addons.md), [addon-events.md](addon-events.md), [addon-agents.md](addon-agents.md)).
+([addons.md](../addons.md), [addon-events.md](../addon-events.md), [addon-agents.md](../addon-agents.md)).
 
 ## In short
 
@@ -33,7 +33,7 @@ new addon file, `addons/gui.py`, plus its tests. It uses only what addons alread
 
 The user's sketch was one function per widget: `create_button()`, `multitext(text, position,
 text, position, ...)`. That works, but every call is a model round trip
-([addons.md](addons.md) section 6): a window with ten widgets would make the user wait ten
+([addons.md](../addons.md) section 6): a window with ten widgets would make the user wait ten
 times. So the widgets go into one file, and the functions are few and coarse:
 
 | Function | What it does |
@@ -163,7 +163,7 @@ AI isn't called on every key.
         - file
 2. **"An addon with an agent": which agent?** I read it two ways:
    - **the main AI uses the addon** (what everything above describes); or
-   - **the addon brings a worker agent** ([addon-agents.md](addon-agents.md)), a "designer"
+   - **the addon brings a worker agent** ([addon-agents.md](../addon-agents.md)), a "designer"
      that writes big layouts as a background job, the way the composer writes songs.
    My recommendation: the first, without a worker, at first. A layout is small enough for
    the main AI to write, and a worker adds a job's cost and wait for nothing. A `design()`
