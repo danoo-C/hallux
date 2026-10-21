@@ -1,6 +1,7 @@
 # A web addon: HTML apps in a real window, with Qt WebEngine
 
-**Status:** a proposal, 2026-10-21. Nothing is built or installed. The user decided
+**Status:** a proposal, 2026-10-21. Nothing is built or installed in the project. The check
+of section 8 ran the same day and held: [section 8a](#8a-what-the-check-found-2026-10-21). The user decided
 all five questions the same day, all as recommended: no page ever opens in the user's own
 browser. Apps of many
 files and pages, with the AI as their backend, are in [apps.md](apps.md).
@@ -151,6 +152,46 @@ In a throwaway venv in the session's scratch folder, never in the project:
 **If it holds:** the design of section 5 and 6 goes on. **If Qt WebEngine doesn't run in
 WSLg:** not the browser tab, which is turned down. Then pywebview with WebKitGTK (section
 3) gets the same check, and if that fails too, `web` waits and the user decides again.
+
+## 8a. What the check found (2026-10-21)
+
+Run at the user's "go ahead with the check", in a throwaway venv in the session's scratch
+folder; the project was not touched. The harness served a hostile page from memory as
+`hallux://chat/`, with the interceptor letting only `hallux://` through, an in-memory
+profile, the settings of section 4, and a trap server on 127.0.0.1 that recorded any
+request that got out.
+
+| Point | Result |
+|---|---|
+| Install | `pip install PySide6` 6.12.0, from wheels, no compiler: **686 MB**. The engine alone can't be had smaller: PySide6-WebEngine (265 MB) needs PySide6-Addons (153 MB), which needs PySide6-Essentials (237 MB) |
+| A real window under WSLg | **Works,** through Wayland. The three missing X libraries of section 7 weren't needed. No GPU in WSLg, so Chromium draws in software; Mesa prints warnings that the child must keep off the terminal |
+| Time to load a page | The very first start: **9.1 s** (once, while Chromium builds its caches). Then 0.14 to 0.39 s; 1.2 s for the first real window |
+| Memory per window | About **490 MB** in the Python process and **215 MB** in Chromium's three processes: some 700 MB |
+| Leaks | **None.** The trap server got no request. The interceptor saw and blocked: `fetch` (to 127.0.0.1, https and `file:`), XHR, WebSocket, `sendBeacon`, EventSource, an `<img>`, a CSS `url()`, `<link rel=prefetch>`, an `<iframe>`, a form, and navigation away. A Worker from outside was refused by the engine itself, `window.open` gave `null` |
+| The page's own files | HTML, CSS, JS, SVG and JSON loaded, also by `fetch`, by relative and absolute paths. `../../etc/passwd` stayed inside the app: `hallux://chat/etc/passwd`, a 404 |
+| DNS prefetch | `DnsPrefetchEnabled` is off, and the `<link rel=dns-prefetch>` never showed up anywhere; a lookup itself can't be seen from here |
+| Chromium's own sandbox | **Fully on** in the user's environment: namespaces (a network namespace of its own for the page's process included) and seccomp. Inside the session's own sandbox it showed "Layer 1: None", which is that sandbox's doing, not the machine's |
+| The bridge | **Both ways,** with QWebChannel: the page's call reached Python, Python's signal reached the page. Its script is injected from Qt's own resources, so the page loads nothing for it. The page must listen before it asks: the injected `hallux` object takes care of that |
+| Errors | An uncaught JS error arrives with its message, file and line |
+| Storage | `localStorage` works, in the in-memory profile, gone with the window |
+| Emoji | A box, as in `gui`: no emoji font is installed (`fonts-noto-color-emoji`) |
+
+**What it changes in the design:**
+
+- **One child for all web windows,** not one per window as in `gui`: some 700 MB each is too
+  much to repeat. One Qt process holds every window, and the limit is 2 windows at a time.
+- **`open_page` mustn't wait for the very first start.** It could take 9 of the 10 seconds an
+  addon call may take. It returns once the window is starting, and the page's being ready
+  (or failing) arrives as an event.
+- **The child's own output goes to a file,** never to the terminal: Mesa and Chromium print
+  much.
+- **Fontconfig said it couldn't load its default config** in the venv. Text still drew (a
+  serif font by default); to look at while building.
+- **A navigation the interceptor blocks leaves the page on an error page.** A hostile page can
+  only break itself; a `reload` brings it back.
+
+**Verdict:** the foundation holds. Qt WebEngine runs here, in a real window, and nothing got
+out. The cost is size: 686 MB to install and about 700 MB of memory while a window is open.
 
 ## 9. What it means for the other GUI docs
 

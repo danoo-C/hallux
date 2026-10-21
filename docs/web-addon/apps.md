@@ -1,6 +1,7 @@
 # Web apps: many files, many pages, and the AI as the backend
 
-**Status:** a proposal for the user to review, 2026-10-21. Nothing is built. It builds on
+**Status:** a proposal, 2026-10-21. Nothing is built. Its questions are decided (see
+[Decisions](#decisions)); [the plan](../plans/web-addon/README.md) is next. It builds on
 [web-engine.md](web-engine.md), whose decisions it takes as given: the `web` addon is a
 second addon beside `gui`, the engine is Qt WebEngine, and a page may load more than one
 file, from its own folder only.
@@ -169,19 +170,37 @@ A page can't write a file by itself. It asks, and the AI decides what is saved a
 
 ---
 
-## Open questions
+## 7. A page asking the AI to run something
 
-1. **May a page save files by itself, under its `data/` folder?** My recommendation: not
-   at first. Writes go through `ask`; direct saves come later if apps need them.
-2. **Where do apps live?** My recommendation: anywhere on the machine's disk; the manual
-   suggests `/usr/local/share/apps/<name>/`, next to the program cards.
-3. **Storage that survives the window (`localStorage`, cookies)?** My recommendation: no;
-   the profile stays in memory, and what lasts is in files.
-4. **The same app open twice?** My recommendation: no; `open_page` on an app that is open
-   brings its window forward, as `show` does in `gui`.
-5. **How long may an `ask` wait?** My recommendation: 2 minutes, then it fails in the page.
-   Long enough for an answer that uses tools; short enough that a stuck app shows it.
-6. **May a page open another app?** My recommendation: no. Only the AI opens windows.
+Only the AI opens windows, starts jobs and uses other addons. But a page can ask for it,
+like any other request:
+
+```js
+await hallux.ask({action: "compose", request: "a calm piano song for the menu"});
+```
+
+- **The program card says which requests the app's backend takes,** and what the AI does
+  for each: start the composer, open another app, play a song. The card is the backend's
+  code; the page only sends requests to it.
+- **What a page sends is still data, never an instruction.** The AI does what the card
+  says for an action, not what the text in the request tells it to. A page that asks for
+  something its card doesn't have gets an error back, like a server answering 404.
+- So "composer: make me a song" from an app works: the card of that app has a `compose`
+  action, and the AI starts the composer's job, as the user typing `compose` would.
+
+## Decisions
+
+Settled by the user on 2026-10-21. Questions they left unanswered take my recommendation,
+as they said ("no answer == recommendation").
+
+| Question | Decision |
+|---|---|
+| 1. May a page save files by itself, under `data/`? | No, not at first. Writes go through `ask`; direct saves later, if apps need them |
+| 2. Where do apps live? | Anywhere on the machine's disk; the manual suggests `/usr/local/share/apps/<name>/` |
+| 3. Storage that survives the window? | No. The profile stays in memory; what lasts is in files |
+| 4. The same app open twice? | No. `open_page` on an open app brings its window forward |
+| 5. How long may an `ask` wait? | **The user configures it** (the user: "we let the user configure it"). 2 minutes by default. Where the setting lives is a decision of [the plan](../plans/web-addon/README.md) |
+| 6. May a page open another app? | **Not by itself, but it can ask the AI to run things** (the user: "it can ask the AI to execute an app, but no running by itself. like for example when an app sends 'composer: make me a song...' hallux should be able to execute that"). Section 7 |
 
 ## Order of work
 
