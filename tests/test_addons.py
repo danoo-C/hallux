@@ -1870,7 +1870,7 @@ def test_every_addon_that_exists_loads_and_music_has_its_composer():
         sys.modules[name].stop() if hasattr(sys.modules[name], "stop") else None
         del sys.modules[name]
     assert all(reason.startswith("No module named") for reason in skipped.values()), skipped
-    assert {addon.name for addon in loaded} | set(skipped) == {"music", "window"}
+    assert {addon.name for addon in loaded} | set(skipped) == {"gui", "music", "window"}
     agents = {addon.name: addon.agent.name for addon in loaded if addon.agent is not None}
     assert agents == ({"music": "composer"} if "music" not in skipped else {})
 
