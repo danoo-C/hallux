@@ -1,7 +1,8 @@
 # Web apps: many files, many pages, and the AI as the backend
 
-**Status:** a proposal, 2026-10-21. Nothing is built. Its questions are decided (see
-[Decisions](#decisions)); [the plan](../plans/web-addon/README.md) is next. It builds on
+**Status:** built 2026-10-21 and 2026-10-22 on branch `gui-addon`; where the code differs,
+see [As built](#as-built-2026-10-22). Proposed 2026-10-21. Its questions are decided (see
+[Decisions](#decisions)); [the plan](../plans/web-addon/README.md) built it. It builds on
 [web-engine.md](web-engine.md), whose decisions it takes as given: the `web` addon is a
 second addon beside `gui`, the engine is Qt WebEngine, and a page may load more than one
 file, from its own folder only.
@@ -213,3 +214,39 @@ These come after the check and the first build of [web-engine.md](web-engine.md)
 4. The manual: an app's folder, the three `hallux` calls, the cost table of section 3, how
    to build for a slow backend, a short example app.
 5. A live try by the user: a chat app of several pages, with its history in `data/`.
+
+## As built (2026-10-22)
+
+Built in five steps on branch `gui-addon`: [the plan](../plans/web-addon/README.md), whose
+step files each end with an "As built" of their own. Where the code differs from this
+document:
+
+- **An app lists its files in `app.json`,** and they are all read when the app opens or
+  reloads, not when the page asks for them (the plan's decision 1): the disk handle works
+  only during the call it was given for, and can't list a folder. A file not listed doesn't
+  exist for the page. A `fetch` is served from what was read, so a page sees a file the AI
+  saved only after a `reload`, and only if it is listed.
+- **The app's name comes from `app.json`,** not from the folder's last part. `app.json`
+  holds `name`, `title` (default: the name), `size` (default: 800 × 600) and `files`.
+  Unknown keys, a path listed twice, `app.json` listing itself and paths that aren't plain
+  are refused, all problems in one error.
+- **The limits** (section 5, point 2): 200 files, 1 MB each, 10 MB in all, not about 500
+  and 20 MB.
+- **Paths:** the scheme handler decodes a path, `%2e%2e` included, and takes `..` away, so no
+  path climbs out of the app; `/` is `index.html`, `folder/` is `folder/index.html`.
+- **The time limit of an `ask`** (decision 5) lives in `addons/web.toml`,
+  `ask_timeout_seconds`, from 10 to 3600, 120 without the file. A bad file keeps the addon
+  from loading, with the reason.
+- **`reply` and `tell` take any JSON value,** as a string, not only an object: a reply is
+  often one string. At most 3800 characters of JSON each way. `reply` says why an ask can't
+  be answered: answered already, timed out, never made, or the page reloaded or closed.
+- **The rate limits** are one ask and one emit a second per window, at most 10 asks waiting
+  (section 5, point 3). An ask nobody listens to fails at its time limit: an addon can't see
+  who listens.
+- **`open_page` returns at once,** `{"page": name}`, or `{"page": name, "open": "already"}`
+  when the app is open; `loaded` or `failed` follows as an event. A refused navigation and
+  a window the user closed are not failures; the user's close is a `closed` event.
+- **The manual** (`prompt()` in `addons/web.py`) has the cost table of section 3, how to
+  build for a slow backend, the card as the backend's code (section 7), that what a page
+  sends is data, no network, and a short example app. A test runs that example as the
+  manual tells it.

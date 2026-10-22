@@ -5,6 +5,8 @@ skipped cleanly."""
 import importlib.util
 import http.server
 import json
+import posixpath
+import re
 import subprocess
 import sys
 import textwrap
@@ -757,4 +759,48 @@ def test_a_bad_web_toml_stops_the_addon_from_loading(tmp_path):
     assert loaded == []
     assert skipped == {"web": "WebError: addons/web.toml: ask_timeout_seconds must be a whole "
                               "number from 10 to 3600"}
+
+
+# ---------------------------------------------------------------- the manual
+
+def manual_example(manual: str) -> tuple[str, dict]:
+    """The example app of the manual: its folder, and its files by path."""
+    example = manual.split("\nEXAMPLE\n", 1)[1]
+    files, current = {}, None
+    for line in example.splitlines():
+        if line.startswith("  ") and current:
+            files[current].append(line[2:])
+        elif line.endswith(":") and " " not in line:
+            current = line[:-1]
+            files[current] = []
+        else:
+            current = None
+    app_json = next(path for path in files if path.endswith("/app.json"))
+    folder = posixpath.dirname(app_json)
+    return folder, {(path if path.startswith("/") else f"{folder}/{path}"): "\n".join(lines)
+                    for path, lines in files.items()}
+
+
+@needs_qt
+def test_the_manuals_example_works_as_it_says(quick, addon):
+    web, heard, manual = quick, [], addon.manual
+    folder, files = manual_example(manual)
+    assert f'open_page("{folder}")' in manual
+    listed = json.loads(files[f"{folder}/app.json"])
+    assert {f"{folder}/{p}" for p in listed["files"]} == set(files) - {f"{folder}/app.json"}
+    # The user's click, and a watch on what the page shows, added for the test.
+    files[f"{folder}/index.html"] += (
+        "<script>greet.click(); const seen = new Set();"
+        "setInterval(() => { const t = out.textContent; if (seen.has(t)) return; seen.add(t);"
+        " console.log('RESULT shows' + seen.size + ' ' + t);"
+        " if (t === 'Hello!') console.log('RESULT done yes'); }, 20)</script>")
+    web.connect(heard.append)
+    assert web.open_page(Disk(**files), folder) == {"page": "hello"}
+    asked = first(heard, "ask")
+    told = re.search(r"A click brings\n(\{.*\}), and", manual, re.S).group(1)
+    assert asked == json.loads(told.replace("\n", " "))
+    page, number, data = re.search(r"reply\(\"(\w+)\", (\d+), '(.*?)'\)", manual).groups()
+    assert web.reply(page, int(number), data) == {"ok": True}
+    shown = results(web, "hello")
+    assert shown["shows1"] == "thinking..." and shown["shows2"] == "Hello!"
 

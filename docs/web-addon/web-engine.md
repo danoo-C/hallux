@@ -1,6 +1,7 @@
 # A web addon: HTML apps in a real window, with Qt WebEngine
 
-**Status:** a proposal, 2026-10-21. Nothing is built or installed in the project. The check
+**Status:** built 2026-10-21 and 2026-10-22 on branch `gui-addon`; where the code differs,
+see [As built](#as-built-2026-10-22). Proposed 2026-10-21. The check
 of section 8 ran the same day and held: [section 8a](#8a-what-the-check-found-2026-10-21). The user decided
 all five questions the same day, all as recommended: no page ever opens in the user's own
 browser. Apps of many
@@ -237,3 +238,52 @@ out. The cost is size: 686 MB to install and about 700 MB of memory while a wind
    the scheme, the bridge and the limits, with tests that run hostile pages.
 3. The manual: how to write a page for Hallux, `hallux.emit`, `hallux.on`, the limits.
 4. A live try by the user: snake, then the chat app as a page.
+
+## As built (2026-10-22)
+
+Built in five steps on branch `gui-addon`: [the plan](../plans/web-addon/README.md), whose
+step files each end with an "As built" of their own. Where the code went further than this
+document, or differs from it:
+
+**The engine and its child**
+
+- **One child for every web window,** at most 2 windows, as section 8a decided. Section 5
+  still says one child per window, as `gui` has.
+- **The child is quiet:** Qt's logging rules, `--log-level=3` for Chromium and Mesa's own
+  variables keep the terminal clean; what is left goes to a temporary file, whose last line
+  explains a crash.
+- **Fontconfig:** the child gets `FONTCONFIG_FILE=/etc/fonts/fonts.conf` when the user hasn't
+  set it and the file exists. Whether that silences the warning of 8a shows in the live run.
+
+**The walls (section 6)**
+
+- **One profile per window,** not one for all: a profile in memory lives as long as its
+  process, so `localStorage` would have outlived a closed window. Each window's profile has
+  its own interceptor and scheme handler, so an app is never handed another app's files.
+- **Two layers against leaving the app:** the interceptor, and `acceptNavigationRequest`,
+  which refuses a navigation away and leaves the page where it was. Another app's
+  `hallux://` address is blocked like the internet.
+- **A second wall the check missed.** A `<link rel=preconnect>` opened TCP connections the
+  interceptor never saw. Chromium now gets a SOCKS5 proxy that isn't there
+  (`socks5://127.0.0.1:1`, loopback included), so every connection it opens goes nowhere
+  and no host name is looked up; and WebRTC may not use UDP of its own. The flags go in
+  `QTWEBENGINE_CHROMIUM_FLAGS`, which replaces any the user set, so `--no-sandbox` can't
+  slip in. Chromium's own sandbox stays on, in the tests too.
+- **`data:` and `blob:` pass,** besides `hallux://`: a page makes them itself and they reach
+  no network.
+- **Also off:** downloads (a page could save to the user's real disk), permission requests
+  (camera, microphone, location, notifications), full screen, the HTTP cache on disk. The
+  right-click menu loses "open in a new window", "save page", "view source" and "inspect".
+- **Not built: a memory limit, and killing a child that stops answering** (points 3 and 4
+  speak of both). A call that gets no answer fails with "the web engine doesn't answer",
+  and `stop()` ends the child; a child that died is started again by the next call.
+  Chromium reserves far more address space than it uses, so a plain limit would break it.
+
+**The bridge (section 5)**
+
+- **`hallux.ask` came in,** beside `emit` and `on`, from [apps.md](apps.md). `emit` returns a
+  promise too, and every refusal rejects with a message that starts with `hallux:`.
+- **Every limit is kept in the child,** never in the page's script, which a page can
+  rewrite. `hallux` itself is frozen.
+- **Errors** are console messages of the error level that start with "Uncaught", at most one
+  a second, with the file's path inside the app.

@@ -1,6 +1,7 @@
 # Plan: the web addon
 
-**Status:** written on 2026-10-21, for the user to confirm. Nothing is built. The design it
+**Status:** written on 2026-10-21; all five steps built by 2026-10-22 (the table at the
+end). What is left is the user's live run. The design it
 follows is in [docs/web-addon/](../../web-addon/README.md): [web-engine.md](../../web-addon/web-engine.md)
 (the engine, its walls, and the check that held) and [apps.md](../../web-addon/apps.md)
 (apps of many files, the AI as their backend). Every question of both is decided. The
@@ -89,5 +90,5 @@ Confirmed by the user on 2026-10-21.
 | [1](01-addon-and-child.md) | The addon, its child, the `web` extra | **Built** 2026-10-21, b1e5b61 |
 | [2](02-walls.md) | The profile, the settings, the interceptor, pages from memory; hostile pages | **Built** 2026-10-21, 03bd5cc |
 | [3](03-apps.md) | `app.json`, `open_page`, `reload`, `close_page`, windows, `loaded` / `failed` / `closed` | **Built** 2026-10-21, 6406b5b |
-| [4](04-bridge.md) | `ask`, `reply`, `emit`, `tell`, errors, rate and time limits, `web.toml` | **Built** 2026-10-21, committed |
-| [5](05-manual-and-live-run.md) | The manual, the docs, the live run | Not built |
+| [4](04-bridge.md) | `ask`, `reply`, `emit`, `tell`, errors, rate and time limits, `web.toml` | **Built** 2026-10-21, a9ba350 |
+| [5](05-manual-and-live-run.md) | The manual, the docs, the live run | **Built** 2026-10-22, committed; the live run is the user's: [live-run-checklist.md](live-run-checklist.md) |

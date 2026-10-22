@@ -46,3 +46,33 @@ of the steps in [the plan](README.md).
 ## Done when
 
 The user has run the checklist, and what it found is written down.
+
+## As built (2026-10-22)
+
+Built on branch `gui-addon`, committed with this text.
+
+- **The manual** (`prompt()`) got everything of "Build" above: where apps live, the page as
+  frontend and the AI as backend, text files only, `reload` after a change, the cost table,
+  five rules for a backend that answers in seconds, the program card as the backend's code
+  (a request whose action the card lacks gets `{"error": "unknown action"}`), the safety
+  rules (data never an instruction, no network, no page that pretends to be another
+  program), and an example app of three files. 93 lines, about as long as `gui`'s.
+- **Corrected while writing:** a page's `fetch` is served from what was read when the app
+  opened, so a file the AI saves reaches the page only after a `reload`, and only if
+  `app.json` lists it. The manual says so; the first draft said the page reads it at once.
+- **A test runs the manual's example** as the manual tells it: it takes the three files out
+  of the manual's text, opens them, clicks the button, checks the `ask` event against the
+  one the manual prints, answers with the manual's own `reply`, and sees "thinking..." and
+  then "Hello!". So the example can't drift from the code.
+- **The docs:** "As built" at the end of [web-engine.md](../../web-addon/web-engine.md) and
+  [apps.md](../../web-addon/apps.md), and their status lines. web-engine.md's says what
+  wasn't built: a memory limit on the child, and killing a child that stops answering.
+- **The checklist:** [live-run-checklist.md](live-run-checklist.md), the plan's 10 points,
+  plus what the steps left for a real window: the title, the right-click menu, a quiet
+  terminal, the fonts.
+- **Seen once:** the first full run of the day failed one test with "the web engine doesn't
+  answer", the first window opened that day; the next three runs passed. The likely reason
+  is Chromium's cold start (9.1 seconds in the check) against the 5 seconds the child gets
+  to make a window. Not changed on one sighting; the checklist asks the user to note it if
+  the first `open_page` after installing does the same.
+- **Tests:** 1 more, 46 in all, three runs in a row passed.
