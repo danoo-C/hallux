@@ -319,3 +319,40 @@ def sha256(file: Path | str) -> str:
         for piece in iter(lambda: reader.read(PIECE), b""):
             digest.update(piece)
     return "sha256:" + digest.hexdigest()
+
+
+def listing(file: Path | str) -> dict[str, tuple[int, str]]:
+    """Every file of a .hpm file, by its name in the package: (size, "sha256:<hex>"). Read
+    from the archive itself, nothing unpacked; publish compares a world's files with it."""
+    file = Path(file)
+    found: dict[str, tuple[int, str]] = {}
+    try:
+        with tarfile.open(file, mode="r:gz") as tar:
+            for info in tar:
+                if not info.isreg():
+                    continue
+                digest = hashlib.sha256()
+                reader = tar.extractfile(info)
+                for piece in iter(lambda: reader.read(PIECE), b""):
+                    digest.update(piece)
+                found[info.name] = (info.size, "sha256:" + digest.hexdigest())
+    except (tarfile.TarError, OSError, EOFError, gzip.BadGzipFile) as e:
+        raise ArchiveError(f"{file}: not a package hpm can read ({type(e).__name__}: {e})") \
+            from None
+    return found
+
+
+def read_member(file: Path | str, name: str, limit: int = 1024 * 1024) -> bytes | None:
+    """One small file of a .hpm file, such as its CHANGELOG.md; None if it has none."""
+    file = Path(file)
+    try:
+        with tarfile.open(file, mode="r:gz") as tar:
+            for info in tar:
+                if info.name == name and info.isreg():
+                    if info.size > limit:
+                        raise ArchiveError(f"{file}: {name} is bigger than {limit} bytes")
+                    return tar.extractfile(info).read()
+    except (tarfile.TarError, OSError, EOFError, gzip.BadGzipFile) as e:
+        raise ArchiveError(f"{file}: not a package hpm can read ({type(e).__name__}: {e})") \
+            from None
+    return None

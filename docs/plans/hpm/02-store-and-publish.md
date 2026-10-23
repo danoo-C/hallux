@@ -82,3 +82,58 @@ the files by kind and their sizes.
 
 kittystory and its packs, published from a copy of `test-hallux` with a manifest written by
 hand from the world's real files (hpm.md section 2, as the review corrected it), are in the store as two `.hpm` files, and `hpm show kittystory` lists them.
+
+## As built
+
+Built 2026-10-23: `hallux/hpm/world.py`, `store.py`, `publish.py`, `cli.py`, `__main__.py`;
+`hpm = "hallux.hpm.cli:main"` in `pyproject.toml`; `listing` and `read_member` added to
+`archive.py`; `tests/test_hpm_store.py` (19 tests), `tests/test_hpm_publish.py` (46), and
+`HPM_HOME` set in `tests/conftest.py`, so that no test reaches your real store. The whole
+suite: 2098 passed (the sandbox test left out, as in step 1).
+
+**The run of "Done when"** (a copy of `test-hallux` in the session's scratchpad, a store of
+its own there, manifests written by hand from the world's real files): `kittystory 1.0`
+(10 app files and the seed, 34.5 KB) and `kittystory-packs 1.0` (the three packs from
+`~/.kittystory/packs/`) went into the store as two `.hpm` files; `hpm show` listed them,
+the seed under its own kind. A second publish with nothing changed was refused. In the
+world, only `/usr/local/share/hpm/kittystory/` changed (its `CHANGELOG.md`). It ran as
+`python -m hallux.hpm`: the `hpm` command itself appears in `.venv/bin/` only after the
+package is installed again (`pip install -e .`), which I didn't do to your venv.
+
+What the code does that the step above didn't say, or says differently:
+
+- **Four modules, not one.** `world.py` (finding the world, its user, the files a
+  manifest's patterns match, and `HpmError`), `store.py`, `publish.py` (publish, show and
+  the questions), and `cli.py`, which only reads the command line. Steps 3 and 4 use
+  `world.py` as it is: `world_user` is the rules of step 3 already (`/etc/passwd`, then the
+  homes that aren't empty).
+- **`--yes`** takes the version hpm suggests, without asking. Without it, `--all` couldn't
+  run without a terminal: each package's version is a question, and `--version` can't go
+  with `--all`. The run above found that.
+- **`--user U`** for a world with several users, and **`--private yes|no`** for the privacy
+  question. Without a terminal, every question without its flag is an error that names the
+  flag (as step 4 will do for its screens).
+- **What "changed" means:** the files' fingerprints, the migration notes and the manifest
+  (all but its version) against the store's latest. Nothing changed is an error for one
+  package and a line for each under `--all` ("unchanged, not published").
+- **The suggested version:** the manifest's own for a first release; after that the last
+  number up (1.4 → 1.5, 2 → 2.1), or the first up when `data_format` went up (1.4 → 2.0).
+  It doesn't look at which kinds of files changed. `data_format` going down is refused.
+- **The version goes into the world's manifest** by changing its one `version = …` line;
+  comments and everything else stay. `private = true` is put in the same way, before the
+  first table.
+- **The changelog entry** is `## <version> (<date>)`, then the text. It goes on top of
+  `/usr/local/share/hpm/<name>/CHANGELOG.md`, under its `# ` title if it has one, and the
+  release carries the whole file.
+- **The order of writing:** every check, then the release packed in a temporary folder and
+  put into the store, and only then the world (the manifest's version, the changelog). If
+  the world can't be written then, hpm says the release is in the store and what to set by
+  hand.
+- **A link** that a pattern reaches is refused, by name: a package holds plain files.
+- **The privacy question** comes for a package with `data` files or a `for`. The names it
+  looks for are `memory.md`, `shared.md`, `state.json`, `history*` and `chat*`.
+- **`hpm show`** lists at most 30 files of each kind by name, and the three newest
+  changelog entries.
+- **Seen in the real world:** kittystory's `state.json` seed is 2.9 KB and holds the chat.
+  Publish warns only when a seed has more than doubled since the last release; the clean
+  seed is `hpm init`'s (step 6).

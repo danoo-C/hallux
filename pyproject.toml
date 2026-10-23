@@ -32,6 +32,7 @@ web = [
 
 [project.scripts]
 hallux = "hallux.app:main"
+hpm = "hallux.hpm.cli:main"            # the package manager, docs/hpm/
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
