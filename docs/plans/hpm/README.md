@@ -1,7 +1,7 @@
 # Plan: hpm, the Hallux package manager
 
 **Status:** written on 2026-10-23, at the user's request ("go ahead, write the plan"). Steps 1
-to 3 are built (2026-10-23); the table at the end has each step's status. The design it follows is in [docs/hpm/](../../hpm/README.md):
+to 4 are built (2026-10-23); the table at the end has each step's status. The design it follows is in [docs/hpm/](../../hpm/README.md):
 [hpm.md](../../hpm/hpm.md) (packages, the store, publish, install, conflicts, the world's
 record, the Packages tab), [migrations.md](../../hpm/migrations.md) and
 [sharing.md](../../hpm/sharing.md). The design is done and every question of it is
@@ -128,7 +128,7 @@ the review changed 9, 11 and 15.
 | [1](01-manifest-and-archive.md) | `hpm.toml` and its checks; `.hpm` files | **Built** 2026-10-23 (see its "As built") |
 | [2](02-store-and-publish.md) | The store on your PC; `hpm publish` without the AI | **Built** 2026-10-23 (see its "As built") |
 | [3](03-install-engine.md) | The plan, marks, the copy, the record, the memory line, backups, many packages, adopting | **Built** 2026-10-23 (see its "As built") |
-| [4](04-command.md) | `hpm install / update / remove / list / rollback / adopt`, the screens, a running world | Not built |
+| [4](04-command.md) | `hpm install / update / remove / list / rollback / adopt`, the screens, a running world | **Built** 2026-10-23 (see its "As built") |
 | [5](05-packages-tab.md) | The Packages tab, `<installed>` | Not built |
 | [6](06-ai-session.md) | hpm's AI session: `init`, changelogs, merge, card review, test install | Not built |
 | [7](07-migrations.md) | Data formats, migration notes, staging, checks, accept, roll back | Not built |

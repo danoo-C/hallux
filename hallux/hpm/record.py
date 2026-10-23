@@ -112,8 +112,13 @@ def untagged_line(disk: Disk, name: str) -> str | None:
 def _change_memory(disk: Disk, change) -> None:
     text = disk.memory_read()["text"]
     new = change(text)
-    if new != text:
+    if new == text:
+        return
+    try:
         disk.memory_edit(text, new) if text else disk.memory_edit("", new)
+    except ValueError:                            # someone wrote it in between: the machine
+        raise HpmError("the machine's memory changed while hpm was writing its line into it; "
+                       "nothing of it was lost. Run the command again") from None
 
 
 def _put(text: str, title: str, name: str, lines_in: list[str], replace: str | None) -> str:

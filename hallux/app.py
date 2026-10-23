@@ -55,6 +55,19 @@ def main() -> None:
     except ValueError as e:
         sys.exit(f"hallux: {e}")
 
+    # The world is marked as running while this process runs it, whichever way it ends, so
+    # that hpm in your terminal doesn't write into it (docs/hpm/hpm.md, section 10). A hard
+    # kill leaves the mark; hpm sees then that its process is gone.
+    from hallux.hpm.world import mark_running, unmark_running
+    mark = mark_running(root)
+    try:
+        _run(root, hardware, flags, headless)
+    finally:
+        unmark_running(root, mark)
+
+
+def _run(root: Path, hardware: Hardware, flags: argparse.Namespace, headless: bool) -> None:
+    """One run of a machine, once its settings are read: headless, or in your terminal."""
     _log_to(root)
     log.info("power on: %s", hardware)
     events = addons.Events()                    # what the addons report, for the whole run

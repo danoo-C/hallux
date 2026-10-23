@@ -419,7 +419,7 @@ def test_an_update_replaces_ours_asks_about_changed_and_keeps_data(world, store,
     assert marks["/home/user/.kittystory/packs/tsundere.pack"] == ("data-kept", "skip")
     assert marks["/home/user/.kittystory/packs/metal-head.pack"] == ("data-kept", "skip")
     outcome = apply(plan, all_files=SKIP)
-    assert outcome.summary() == "3 updated"
+    assert outcome.summary() == "2 updated"               # kittystory-chars 1.1 is there as it is
     assert (world / "usr/local/share/apps/kittystory/app.js").read_text() == "// 1.5\n"
     assert (world / "usr/local/share/apps/kittystory/index.html").read_text() == "<html>mine</html>\n"
     assert (world / "home/user/.kittystory/packs/tsundere.pack").read_text() == "tsundere, my way\n"

@@ -198,3 +198,69 @@ def _one(disk: Disk, virtual: str, path: str, links: set[str]) -> dict[str, Path
         links.add(path)
         return {}
     return {path: real} if real.is_file() else {}
+
+
+# ---------------------------------------------------------------------- a running world
+
+RUNNING = "running"                      # .hallux/running: {"pid": …, "start": …}
+
+
+def _started(pid: int) -> int | None:
+    """When a process started (field 22 of /proc/<pid>/stat, in clock ticks since the boot),
+    or None if there is no such process."""
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    try:
+        return int(text[text.rindex(")") + 2:].split()[19])   # the fields after the name
+    except (ValueError, IndexError):
+        return None
+
+
+def mark_running(root: Path | str) -> dict:
+    """Mark the world as running in this process: .hallux/running, with the process's number
+    and start time. A mark left by a process that is gone is simply replaced."""
+    from hallux.disk import write_whole
+    import json
+    hidden = Path(root) / HIDDEN_NAME
+    hidden.mkdir(parents=True, exist_ok=True)
+    mark = {"pid": os.getpid(), "start": _started(os.getpid())}
+    write_whole(hidden / RUNNING, json.dumps(mark) + "\n")
+    return mark
+
+
+def unmark_running(root: Path | str, mark: dict) -> None:
+    """Take this process's mark away, and only this process's."""
+    path = Path(root) / HIDDEN_NAME / RUNNING
+    if read_mark(root) == mark:
+        path.unlink(missing_ok=True)
+
+
+def read_mark(root: Path | str) -> dict | None:
+    import json
+    try:
+        mark = json.loads((Path(root) / HIDDEN_NAME / RUNNING).read_text())
+    except (OSError, ValueError):
+        return None
+    return mark if isinstance(mark, dict) and isinstance(mark.get("pid"), int) else None
+
+
+def running(root: Path | str) -> int | None:
+    """The number of the Hallux that runs the world, or None. A mark whose process is gone,
+    or whose number another process got later (WSL starts low again after a restart), is
+    no Hallux running."""
+    mark = read_mark(root)
+    if mark is None:
+        return None
+    started = _started(mark["pid"])
+    if started is None or (mark.get("start") is not None and started != mark["start"]):
+        return None
+    return mark["pid"]
+
+
+def refuse_running(root: Path | str) -> None:
+    pid = running(root)
+    if pid is not None:
+        raise HpmError(f"this world is running (Hallux, process {pid}): use the Packages tab "
+                       f"there (Ctrl+F12), or stop the world first")

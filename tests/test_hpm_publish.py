@@ -479,7 +479,8 @@ def test_the_command_publishes_and_shows(world, store, capsys):
     q = Script()
     assert cli.main(["publish", "kittystory", "--world", str(world), "--version", "1.4",
                      "--changelog", "first"], questions=q, store=store) == 0
-    assert q.said == ["published kittystory 1.4: 5 files, 57 bytes"]
+    assert q.said == ["published kittystory 1.4: 5 files, 57 bytes",
+                      "  ✓ kittystory 1.4 adopted", "1 adopted"]   # its own world records it
     assert cli.main(["show", "kittystory"], questions=q, store=store) == 0
     assert q.said[-1].startswith("kittystory 1.4")
 

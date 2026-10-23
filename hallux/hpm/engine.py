@@ -206,8 +206,12 @@ def plan_install(world: Path | str, store: Store, wants: list[Want], user: str |
     chosen: dict[str, set[str]] = {}
     order: list[str] = []
 
-    def add(want: Want, by: str | None = None) -> None:
+    def add(want: Want, by: str | None = None, auto: bool = False) -> None:
         release = _release(store, want)
+        there = record.get(release.name, {})
+        if auto and release.name not in items and not there.get("incomplete") \
+                and there.get("version") is not None and Version(there["version"]) == release.version:
+            return                                # an extra that is there already, as it is
         manifest = release.manifest()
         if manifest.is_bundle:
             for name in manifest.bundle:
@@ -239,7 +243,7 @@ def plan_install(world: Path | str, store: Store, wants: list[Want], user: str |
             if manifest.for_app and manifest.for_app not in record:
                 add(Want(manifest.for_app, extras=()))
         for key in [k for k in manifest.extras if k in new]:     # in the manifest's order
-            add(Want(manifest.extras[key].package))
+            add(Want(manifest.extras[key].package), auto=True)
 
     for want in expand(store, wants):
         add(want)
@@ -321,27 +325,41 @@ def _ordered(items: dict[str, Item], first: list[str]) -> list[str]:
     return done
 
 
-def _check_addons(plan: Plan, folder: Path | None) -> None:
-    """Each package's requires.addons against the addons Hallux has (the *.py files of its
-    addons folder, never imported here) and the ones the world gets (its config's addons)."""
+def addons_known(root: Path, folder: Path | None = None) -> tuple[set[str], tuple | None, str | None]:
+    """The addons Hallux has (the *.py files of its addons folder, never imported here), the
+    ones the world gets (its config's `addons`; None: every one), and why the config can't be
+    read, if it can't."""
     from hallux import config
     from hallux.app import ADDONS_FOLDER
     folder = folder or ADDONS_FOLDER
     have = {p.stem for p in folder.glob("*.py")} if folder.is_dir() else set()
     try:
-        gets = config.load(plan.disk.root).addons
+        return have, config.load(root).addons, None
     except ValueError as e:
-        plan.notes.append(f"the world's config can't be read, so its addons aren't known: {e}")
-        gets = None
+        return have, None, str(e)
+
+
+def addon_problems(manifest: Manifest, have: set[str], gets: tuple | None) -> list[str]:
+    """What is missing of a package's requires.addons, in words."""
+    out = []
+    for addon in manifest.requires_addons:
+        if addon not in have:
+            out.append(f"needs the {addon} addon, which Hallux doesn't have")
+        elif gets is not None and addon not in gets:
+            out.append(f"needs the {addon} addon, which this world doesn't get (its config's "
+                       f"addons)")
+    return out
+
+
+def _check_addons(plan: Plan, folder: Path | None) -> None:
+    have, gets, unread = addons_known(plan.disk.root, folder)
+    if unread:
+        plan.notes.append(f"the world's config can't be read, so its addons aren't known: {unread}")
     for item in plan.items:
-        for addon in item.manifest.requires_addons:
-            if addon not in have:
-                plan.notes.append(f"{item.name} needs the {addon} addon, which Hallux doesn't "
-                                  f"have; it installs, but that part won't work")
-            elif gets is not None and addon not in gets:
-                plan.notes.append(f"{item.name} needs the {addon} addon, which this world doesn't "
-                                  f"get (its config's addons); it installs, but that part won't "
-                                  f"work there")
+        for problem in addon_problems(item.manifest, have, gets):
+            there = " there" if "world" in problem else ""
+            plan.notes.append(f"{item.name} {problem}; it installs, but that part won't "
+                              f"work{there}")
 
 
 def _check_format(item: Item, items: dict[str, Item], record: dict) -> None:
