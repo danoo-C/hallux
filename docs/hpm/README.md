@@ -18,6 +18,7 @@ recommended"), and they are written into all three documents and the plan.
 
 | Document | What it is | Status |
 |---|---|---|
+| [tutorial.md](tutorial.md) | **Start here:** hpm from zero, step by step, with a cheat sheet and the common errors | Written 2026-10-24 |
 | [hpm.md](hpm.md) | Packages, the store on your PC, publishing, installing with options, many packages at once, conflicts, what a world remembers of it, telling the machine, the panel's Packages tab | Done; 8 questions decided; built |
 | [migrations.md](migrations.md) | When an app changes how it stores its data: data formats, migrations the AI writes and runs, the backup and the checks around it | Done; 5 questions decided; built (but `--force`) |
 | [sharing.md](sharing.md) | Publishing to friends: stores on GitHub, `hpm push`, privacy, and packages as instructions to the AI | Done; 5 questions decided; built (public stores only) |

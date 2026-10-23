@@ -135,6 +135,8 @@ the review changed 9, 11 and 15.
 | [8](08-github-stores.md) | `hpm store`, `hpm push`, `yank`, installing from a friend | **Built** 2026-10-23, the user's GitHub run still to do (see its "As built") |
 | [9](09-manual-docs-live-run.md) | The manual, the docs, the live run | **Written** 2026-10-23; the live run is the user's ([checklist](live-run-checklist.md)) |
 
+Fixes found after the build, from the user's own use, are planned in [fixes/](fixes/README.md).
+
 ## What the review changed
 
 The review of 2026-10-23 ([docs/hpm-review-2026-10-23.md](../../hpm-review-2026-10-23.md));

@@ -307,7 +307,7 @@ class Run:
         if release is None:
             raise HpmError(f"there is no package {name} in "
                            + (f"the store {where}" if where else "the store")
-                           + " (hpm search finds one)")
+                           + " (hpm search WORD lists the packages it has)")
         return Want(name, store=release.where)
 
     def _extras(self, world: Path, wants: list[Want]) -> list[Want] | None:

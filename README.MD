@@ -234,7 +234,7 @@ store on your PC, above every world (`~/.local/share/hallux/hpm/`, or `$HPM_HOME
   merge, a migration), with the model and the cap of the store's `config.toml` (default:
   the world's model, effort medium, at most $1.00 a session).
 
-The design and how it was built: [docs/hpm/](docs/hpm/README.md).
+New to it? [docs/hpm/tutorial.md](docs/hpm/tutorial.md) walks through it from zero. The design and how it was built: [docs/hpm/](docs/hpm/README.md).
 
 ## Addons
 
