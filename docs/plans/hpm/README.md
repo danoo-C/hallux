@@ -1,7 +1,7 @@
 # Plan: hpm, the Hallux package manager
 
-**Status:** written on 2026-10-23, at the user's request ("go ahead, write the plan"). No
-step is built. The design it follows is in [docs/hpm/](../../hpm/README.md):
+**Status:** written on 2026-10-23, at the user's request ("go ahead, write the plan"). Step 1
+is built (2026-10-23); the table at the end has each step's status. The design it follows is in [docs/hpm/](../../hpm/README.md):
 [hpm.md](../../hpm/hpm.md) (packages, the store, publish, install, conflicts, the world's
 record, the Packages tab), [migrations.md](../../hpm/migrations.md) and
 [sharing.md](../../hpm/sharing.md). The design is done and every question of it is
@@ -125,7 +125,7 @@ the review changed 9, 11 and 15.
 
 | Step | What | Status |
 |---|---|---|
-| [1](01-manifest-and-archive.md) | `hpm.toml` and its checks; `.hpm` files | Not built |
+| [1](01-manifest-and-archive.md) | `hpm.toml` and its checks; `.hpm` files | **Built** 2026-10-23 (see its "As built") |
 | [2](02-store-and-publish.md) | The store on your PC; `hpm publish` without the AI | Not built |
 | [3](03-install-engine.md) | The plan, marks, the copy, the record, the memory line, backups, many packages, adopting | Not built |
 | [4](04-command.md) | `hpm install / update / remove / list / rollback / adopt`, the screens, a running world | Not built |
