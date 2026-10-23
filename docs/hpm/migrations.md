@@ -1,6 +1,7 @@
 # Migrations: when an app changes how it stores its data
 
-**Status:** proposed 2026-10-23. No code, no plan. It builds on [hpm.md](hpm.md), whose
+**Status:** design declared done by the user 2026-10-23. No code, no plan; the open
+questions at the end are decided with the plan. It builds on [hpm.md](hpm.md), whose
 three kinds of files (`app`, `seed`, `data`) it takes as given.
 
 **Where it came from:** the user: "lets say i do a drastic change on how kittystory stores

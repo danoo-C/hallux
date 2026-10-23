@@ -1,7 +1,7 @@
 # hpm: packages for Hallux worlds
 
-**Status:** proposed 2026-10-23. No code, no plan. The questions at the end are open, each
-with a recommendation. Migrations are in [migrations.md](migrations.md), sharing with
+**Status:** design declared done by the user 2026-10-23. No code, no plan. The questions
+at the end are still open, each with a recommendation; they are decided with the plan. Migrations are in [migrations.md](migrations.md), sharing with
 friends in [sharing.md](sharing.md); this document is the rest.
 
 ## In short
@@ -20,6 +20,8 @@ friends in [sharing.md](sharing.md); this document is the rest.
    identical (skipped) or different (you choose: overwrite, skip, keep both).
 6. **A world remembers what it installed.** That makes `update`, `remove` and `list`
    possible, and an update can tell a file you changed from one it may replace.
+7. **Many packages install as one.** A whole store (`danika/*`) or a bundle goes through
+   one checkbox screen, one conflicts screen and one backup (section 6a).
 
 ---
 
@@ -205,6 +207,61 @@ kittystory 1.4  ·  Chat with characters built from personality packs  ·  by da
 - **The order:** the extras' requirements first, then the app, then data. A failure in the
   middle leaves what was written in the world's record (section 8), so `hpm remove` can
   clean it up.
+
+## 6a. Many packages at once
+
+A store can hold any number of packages, and one command can install all of them, or a
+chosen set. (Added 2026-10-23: the user asked "i can have my danika store that has like 15
+apps? and can i install all 15 in one command?", and liked the answer.)
+
+**Two ways to say "all of them":**
+- **The whole store:** `hpm install danika/* --world ~/my-world`.
+- **A bundle:** a package with no files of its own, only a list of packages. It is
+  published and pushed like any other.
+  ```toml
+  name = "kitty-desktop"
+  summary = "All of danika's kitty apps"
+  bundle = ["kittystory", "kittymusic", "kittydash", "kittycalc", "kittyshop", "kittyfiles"]
+  ```
+  `hpm install danika/kitty-desktop` installs the set.
+
+**One screen for all of it.** One row per package, and its extras fold open under it:
+
+```
+danika · 15 packages
+
+  [x] kittystory      chat with characters          ▸ packs, characters
+  [x] kittymusic      music player and composer     ▸ songs
+  [x] kittydash       GUI dashboard
+  [ ] kittyshop       SVG drawing app               needs the web addon ✗
+  ...
+  space toggle · → open extras · a all · n none · Enter install
+```
+
+**What happens on Enter:**
+
+1. **Everything is checked first.** The walk of section 7 goes over every file of every
+   ticked package before anything is written, and the conflicts come on one screen,
+   grouped by package, with "overwrite all" and "skip all" across all of them.
+2. **The order follows needs:** a package that another one needs goes first.
+3. **One backup** of everything the install touches ([migrations.md](migrations.md),
+   section 4, for all the packages together).
+4. **One package after another**, each written into the world's record (section 8) as it
+   ends. One that fails doesn't stop the others; the end says
+   `14 installed · 1 failed: kittyshop (…)`, and `hpm install` of that one tries again.
+5. **Migrations one at a time.** Each package that needs one shows its own plan and waits
+   for its own Enter: each changes your data.
+6. **The machine is told once:** every memory line, and one note naming every package
+   (section 9).
+
+`hpm update --world …` works the same way: every package with a newer version, on one
+screen, in one go. The panel's Packages tab (section 10) shows a store and a bundle the same
+way.
+
+**What it costs the machine.** Every package adds a line to `memory.md`, which the AI reads
+at every boot. Fifteen short lines are fine; a world with a hundred packages would start to
+cost more per boot. hpm keeps memory lines to one line each, and publish warns about a long
+one.
 
 ## 7. Conflicts
 

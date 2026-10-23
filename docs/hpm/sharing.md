@@ -1,6 +1,7 @@
 # Sharing packages with friends
 
-**Status:** proposed 2026-10-23. No code, no plan. It builds on [hpm.md](hpm.md) (packages,
+**Status:** design declared done by the user 2026-10-23. No code, no plan; the open
+questions at the end are decided with the plan. It builds on [hpm.md](hpm.md) (packages,
 the store on your PC, publishing) and [migrations.md](migrations.md).
 
 **Where it came from:** of three levels offered (only your PC; friends; a public store
