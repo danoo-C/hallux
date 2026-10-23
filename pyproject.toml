@@ -26,6 +26,9 @@ music = [
     "numpy",                    # the music addon's child renders with it
     "pygame",                   # and plays through its mixer
 ]
+web = [
+    "PySide6",                  # the web addon's child: Qt WebEngine, about 690 MB
+]
 
 [project.scripts]
 hallux = "hallux.app:main"
