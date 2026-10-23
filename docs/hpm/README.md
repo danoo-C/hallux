@@ -5,15 +5,15 @@ characters and memories. You build an app in one world, publish it once, and ins
 update it into any other world, or a friend's, without asking the AI for an install file
 each time.
 
-**The design is done** (the user, 2026-10-23: "the design doc can be declared done"). The
-open questions at the end of each document still have only recommendations; they are
-decided together with the plan, which comes next. No code yet.
+**The design is done** (the user, 2026-10-23: "the design doc can be declared done"). Every
+question is decided, all as recommended (the user, 2026-10-23: "i read trogh the questions
+and go all recommended"). The plan comes next. No code yet.
 
 | Document | What it is | Status |
 |---|---|---|
-| [hpm.md](hpm.md) | Packages, the store on your PC, publishing, installing with options, many packages at once, conflicts, what a world remembers of it, telling the machine, the panel's Packages tab | Done; 8 open questions |
-| [migrations.md](migrations.md) | When an app changes how it stores its data: data formats, migrations the AI writes and runs, the backup and the checks around it | Done; 4 open questions |
-| [sharing.md](sharing.md) | Publishing to friends: stores on GitHub, `hpm push`, privacy, and packages as instructions to the AI | Done; 5 open questions |
+| [hpm.md](hpm.md) | Packages, the store on your PC, publishing, installing with options, many packages at once, conflicts, what a world remembers of it, telling the machine, the panel's Packages tab | Done; 8 questions decided |
+| [migrations.md](migrations.md) | When an app changes how it stores its data: data formats, migrations the AI writes and runs, the backup and the checks around it | Done; 4 questions decided |
+| [sharing.md](sharing.md) | Publishing to friends: stores on GitHub, `hpm push`, privacy, and packages as instructions to the AI | Done; 5 questions decided |
 
 ## Where it came from
 

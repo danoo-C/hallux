@@ -1,7 +1,7 @@
 # hpm: packages for Hallux worlds
 
-**Status:** design declared done by the user 2026-10-23. No code, no plan. The questions
-at the end are still open, each with a recommendation; they are decided with the plan. Migrations are in [migrations.md](migrations.md), sharing with
+**Status:** design declared done by the user 2026-10-23. No code, no plan. Every question is
+decided, all as recommended ([Decisions](#decisions)). Migrations are in [migrations.md](migrations.md), sharing with
 friends in [sharing.md](sharing.md); this document is the rest.
 
 ## In short
@@ -130,7 +130,7 @@ write under "Invented programs" itself. Hallux puts it there at install (section
 **Rules are not part of a package by default.** kittystory's look leans on the world's pink
 kitty theme, which is a rule in `memory.md`, not a file. A package may carry rules (an extra
 like `kittystory-theme` with `rules = ["..."]`), but they change the whole machine, so the
-install screen shows them loudly (open question 5).
+install screen shows them loudly (decision 5).
 
 ## 4. The store on your PC
 
@@ -173,7 +173,7 @@ files again.
    ([migrations.md](migrations.md), section 3).
 5. **Test install, if you want it.** hpm copies a clean world (the base world named in its
    `config.toml`), installs the package there, and the AI starts the app once and reports
-   what is missing. It costs a model call, so it is a question, not a step (open question 6).
+   what is missing. It costs a model call, so it is a question, not a step (decision 6).
 6. **Writes `kittystory/1.4.hpm`** into `local/`.
 
 `hpm publish --all` publishes the main package and every extra that changed.
@@ -377,9 +377,12 @@ From the panel, the same session runs beside the machine, like an addon agent's 
 - The manual: the machine should know what `[hpm …]` in its memory means, and that it
   doesn't install hpm packages itself.
 
-## Open questions
+## Decisions
 
-| Question | Recommendation |
+All decided as recommended (the user, 2026-10-23: "i read trogh the questions and go all
+recommended").
+
+| Question | Decision |
 |---|---|
 | 1. One package with parts, or separate packages joined as extras? | **Extras** (section 3): each part has its own version, so characters can be released without the app |
 | 2. Where is the manifest kept in the world? | `/usr/local/share/hpm/<name>/hpm.toml`, beside the app's other files, so it moves with a copy of the world |

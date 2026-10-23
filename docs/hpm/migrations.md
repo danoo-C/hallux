@@ -1,7 +1,7 @@
 # Migrations: when an app changes how it stores its data
 
-**Status:** design declared done by the user 2026-10-23. No code, no plan; the open
-questions at the end are decided with the plan. It builds on [hpm.md](hpm.md), whose
+**Status:** design declared done by the user 2026-10-23. No code, no plan; every question
+is decided, all as recommended ([Decisions](#decisions)). It builds on [hpm.md](hpm.md), whose
 three kinds of files (`app`, `seed`, `data`) it takes as given.
 
 **Where it came from:** the user: "lets say i do a drastic change on how kittystory stores
@@ -158,9 +158,12 @@ format need no AI and cost nothing.
   manifest doesn't list, neither the backup nor the migration knows of it. Publish warns
   about files the card mentions that no pattern of the manifest covers.
 
-## Open questions
+## Decisions
 
-| Question | Recommendation |
+All decided as recommended (the user, 2026-10-23: "i read trogh the questions and go all
+recommended").
+
+| Question | Decision |
 |---|---|
 | 1. Should a migration have an exact form (a list of moves) Hallux can run without the AI, for simple cases? | Not at first. Notes for everything; a "moves" form later, if many migrations turn out to be plain renames |
 | 2. May an older app run on newer data with `--force`? | Yes, with a backup first and a warning that the app may not see all of it |

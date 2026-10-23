@@ -1,7 +1,7 @@
 # Sharing packages with friends
 
-**Status:** design declared done by the user 2026-10-23. No code, no plan; the open
-questions at the end are decided with the plan. It builds on [hpm.md](hpm.md) (packages,
+**Status:** design declared done by the user 2026-10-23. No code, no plan; every question
+is decided, all as recommended ([Decisions](#decisions)). It builds on [hpm.md](hpm.md) (packages,
 the store on your PC, publishing) and [migrations.md](migrations.md).
 
 **Where it came from:** of three levels offered (only your PC; friends; a public store
@@ -57,7 +57,7 @@ latest = "1.0"
 
 **Who can see it.** A public repository can be read by anyone who has the link. A private
 one only by people you add on GitHub; they then sign in once (`gh auth login`) and hpm uses
-that. Which to use is open question 1.
+that. Which to use is decision 1: public.
 
 **More than one store.** You can add a friend's store as they add yours, and a group can
 share one store where everyone sends packages as a pull request and one person merges them.
@@ -116,7 +116,7 @@ copied card is enough.
   files outside the package's own paths, changes to the world's rules, the machine's memory
   or other programs' cards. The review is saved with the release and shown to whoever
   installs it.
-- **Rules are loud.** A package that carries rules (hpm.md, open question 5) says so in red
+- **Rules are loud.** A package that carries rules (hpm.md, decision 5) says so in red
   on the install screen.
 - **A package can only write what its manifest lists**, and never into `/.hallux` (except
   the memory line and the world's record, which Hallux's code writes). This is enforced by
@@ -141,9 +141,12 @@ server, logins, and handling of abuse, which section 4 shows is a real concern f
 that are instructions to an AI. It is left until stores on GitHub have shown that people
 share packages.
 
-## Open questions
+## Decisions
 
-| Question | Recommendation |
+All decided as recommended (the user, 2026-10-23: "i read trogh the questions and go all
+recommended").
+
+| Question | Decision |
 |---|---|
 | 1. Is your store public or private on GitHub? | **Public**, with the link only given to friends: no sign-in for them. Private if a package ever must not be seen by others |
 | 2. Do archives go in GitHub releases, or into the repository itself? | **Releases**: the repository stays small, and a version can't be changed by accident |
