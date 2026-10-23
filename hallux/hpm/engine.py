@@ -554,12 +554,13 @@ def plan_adopt(world: Path | str, release: Release, user: str | None = None) -> 
 # ---------------------------------------------------------------------- carrying it out
 
 def apply(plan: Plan, answers: dict[str, str] | None = None, all_files: str | None = None,
-          progress=None) -> Outcome:
+          progress=None, stop=None) -> Outcome:
     """Carry the plan out. `answers` answers its questions: a placed path to one of the
     question's choices, and "memory:<name>" to REPLACE or KEEP for an old memory line.
     `all_files` answers every file question that `answers` doesn't, if it is one of that
     question's choices. A question left without an answer is an error before anything is
-    written. `progress(done)` is told after each package."""
+    written. `progress(done)` is told after each package. `stop`, a threading.Event, ends
+    the write between two packages, never in the middle of one: the rest are skipped."""
     answers = dict(answers or {})
     for action in plan.questions:
         answer = answers.get(action.path)
@@ -575,7 +576,7 @@ def apply(plan: Plan, answers: dict[str, str] | None = None, all_files: str | No
     try:
         if plan.kind == "remove":
             return _apply_remove(plan, answers, progress)
-        return _apply_install(plan, answers, progress)
+        return _apply_install(plan, answers, progress, stop)
     finally:
         plan.close()
 
@@ -589,7 +590,7 @@ def _resolved(action: Action, answers: dict[str, str]) -> str:
             KEEP: "keep"}[answer]
 
 
-def _apply_install(plan: Plan, answers: dict[str, str], progress) -> Outcome:
+def _apply_install(plan: Plan, answers: dict[str, str], progress, stop=None) -> Outcome:
     disk = plan.disk
     record = rec.load(disk)
     live = [item for item in plan.items if not item.blocked]
@@ -613,6 +614,8 @@ def _apply_install(plan: Plan, answers: dict[str, str], progress) -> Outcome:
             failed.add(item.name)
         elif full is not None:
             done.append(Done(item.name, version, item.was, "skipped", full))
+        elif stop is not None and stop.is_set():
+            done.append(Done(item.name, version, item.was, "skipped", "stopped"))
         elif missing := [n for n in item.needs if n in failed]:
             done.append(Done(item.name, version, item.was, "skipped",
                              "needs " + ", ".join(missing)))

@@ -185,6 +185,7 @@ def test_the_panel_the_app_builds_shows_the_six_rows_only_with_an_agent(tmp_path
     from hallux import addons, app, machine, terminal
     from hallux.agents import Jobs
     from hallux.disk import Disk
+    from hallux.hpm.running import Installs
     from hallux.importing import Imports
     given = {}
 
@@ -193,6 +194,7 @@ def test_the_panel_the_app_builds_shows_the_six_rows_only_with_an_agent(tmp_path
             super().__init__(hardware)
             self.jobs = Jobs(Disk(root), lambda: hardware, addons=more["addons"])
             self.imports = Imports(Disk(root))
+            self.installs = Installs(Disk(root))
 
         async def run(self):
             pass
@@ -228,8 +230,9 @@ def test_the_panel_the_app_builds_shows_the_six_rows_only_with_an_agent(tmp_path
         for name in [name for name in sys.modules if name.startswith(addons.MODULE_PREFIX)]:
             del sys.modules[name]
     panel = given["panel"]
-    tab = panel.tabs[-1]                                    # Config, behind the three others
-    assert [other.title for other in panel.tabs] == ["Agents", "Details", "Files", "Config"]
+    tab = panel.tabs[-1]                                    # Config, behind the four others
+    assert [other.title for other in panel.tabs] == ["Agents", "Details", "Files", "Packages",
+                                                     "Config"]
     assert [(other.title, other.disabled() is None) for other in panel.tabs[:2]] == [
         ("Agents", has_agent), ("Details", has_agent)]      # grey without an agent
 

@@ -4,7 +4,7 @@ to 6 and step 3): its record, its backups, and the lines hpm owns in its memory.
 All of it is in the world's hidden folder, /.hallux, which the machine can't see and the
 world's Disk refuses. So it is written here straight under `disk.hidden`, whole
 (write_whole, copy_whole), and never through the Disk's file methods. The memory is the one
-exception: its lines go through Disk.memory_edit, the Disk's own door into /.hallux.
+exception: its lines go through Disk.memory_change, the Disk's own door into /.hallux.
 
     .hallux/hpm/installed.json             the record: every package, its files' fingerprints
     .hallux/hpm/backups/<time>-<name>/     one backup: backup.json and files/<path>
@@ -110,15 +110,9 @@ def untagged_line(disk: Disk, name: str) -> str | None:
 
 
 def _change_memory(disk: Disk, change) -> None:
-    text = disk.memory_read()["text"]
-    new = change(text)
-    if new == text:
-        return
-    try:
-        disk.memory_edit(text, new) if text else disk.memory_edit("", new)
-    except ValueError:                            # someone wrote it in between: the machine
-        raise HpmError("the machine's memory changed while hpm was writing its line into it; "
-                       "nothing of it was lost. Run the command again") from None
+    """Change the memory under the Disk's lock: the machine's own edits, which the AI makes
+    in the same Hallux while the Packages tab writes, never come in between."""
+    disk.memory_change(change)
 
 
 def _put(text: str, title: str, name: str, lines_in: list[str], replace: str | None) -> str:

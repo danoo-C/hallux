@@ -166,6 +166,7 @@ class Checkboxes(Screen):
     """hpm.md, sections 6 and 6a: one row per package, its extras folding open under it."""
 
     foot = "space tick · → extras · + all · - none · v the card · Enter install · q cancel"
+    summary_width = 40                            # the panel's tab narrows it to fit
 
     def __init__(self, choices: list[Choice], title: str = "") -> None:
         super().__init__()
@@ -198,9 +199,11 @@ class Checkboxes(Screen):
             if key is None:
                 box = "[x]" if choice.ticked else "[ ]"
                 fold = ("▾ " if choice.open else "▸ ") if choice.manifest.extras else "  "
-                more = ", ".join(k for k, on in choice.extras.items() if on) if not choice.open else ""
-                summary = _cut(choice.manifest.summary or "", 40)
-                row = [("", f"{box} {fold}{choice.name:<20} {summary:<40} "),
+                more = ", ".join(k for k, on in choice.extras.items() if on) \
+                    if choice.ticked and not choice.open else ""
+                width = self.summary_width
+                summary = _cut(choice.manifest.summary or "", width)
+                row = [("", f"{box} {fold}{choice.name:<20} {summary:<{width}} "),
                        ("class:bad" if choice.bad else "class:dim", choice.note)]
                 if more:
                     row.append(("class:dim", f"  ▸ {more}"))

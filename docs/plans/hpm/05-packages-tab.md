@@ -87,3 +87,58 @@ told the same way, with `"removed": true`.
 In a running world, Ctrl+F12, `g`, kittystory installed with its packs, Esc, and the next
 `kittystory` typed at the shell starts the app the AI now knows about. Checked on a pty
 through a terminal emulator first.
+
+## As built
+
+Built 2026-10-23: `hallux/panel_tabs/packages.py` (the tab), `hallux/hpm/running.py`
+(`Installs`: the engine in a thread, the notes), a tab's own `key` in `hallux/panel.py`
+(`key_of`), `Disk.memory_change` and its lock in `hallux/disk.py`, `installed_block` and the
+machine's `installs` in `hallux/machine.py`, the tab in the panel's list in `hallux/app.py`;
+a stop between packages in `engine.apply`; `tests/test_panel_packages.py` (18 tests), three
+in `tests/test_machine.py`, and the tab lists of `test_machine.py` and `test_panel_config.py`
+with five tabs. The whole suite: 2223 passed, the sandbox test left out as before.
+
+**The run of "Done when",** on a real pty: the real `hallux` command in tmux (100 × 26,
+outside the session's sandbox) on a fresh copy of `oliver-test`, with the machine tests'
+pretend model in place of Claude (no model was called), and the store of step 4's run.
+Ctrl+F12 opened the panel with five tabs and "a d f g c tabs" in the foot; `g` showed the
+Packages tab ("local · 1 package · installed here: 0"); space and Enter showed "kittystory
+1.1: 13 new · kittystory-packs 1.0: 5 new"; Enter wrote both ("2 installed", the backup,
+"The machine is told with your next line"); Esc closed the panel. The tab opened again
+showed "installed ✓", the memory had hpm's tagged line, and the message the pretend model
+got for the next line, `kittystory`, began with `<installed>{"packages": [{"name":
+"kittystory", "version": "1.1", …`; the one after it (`exit`) had none. The running mark
+was gone when Hallux ended.
+
+**Not shown in that run:** that the real AI reads `<installed>` and starts the app. That
+takes a paid run, and the manual's lines about `<installed>` (step 9); it is a point of the
+live-run checklist.
+
+The run found two things, fixed before its last round: Esc after the outcome went back to
+the list instead of closing the panel (so the next keys went to the tab: its `r` planned a
+remove, which only asks); and the keys' row was cut at 100 columns (the view keys, `+ -
+all · u updates · i installed · / find`, are in the tab's head line now).
+
+What the code does that the step above didn't say, or says differently:
+
+- **The tab's rows and answers are the terminal's:** it shows `screens.Checkboxes` and
+  `screens.Conflicts` as its models, so ticking, needs and the conflicts' keys behave the
+  same in both. `Checkboxes.summary_width` lets the tab narrow the summaries to its width.
+- **After Enter the tab always shows what would be written,** even with nothing to ask
+  ("kittystory 1.1: 13 new"), and writes only on a second Enter. A remove (`r`) is the same:
+  "remove kittycalc 1.0: 2 files; its data stays", then Enter. Esc there writes nothing.
+- **While the plan's questions are shown, the tab counts as typing,** so `o s k f r` (and
+  `y n` for the old memory line) are its answers, not tabs. Esc while a plan is worked out
+  or written stops it (between packages, `engine.apply(stop=…)`), and the foot says "Esc
+  stop".
+- **`i`** is the view of what is installed here; `u` the updates; each again goes back to
+  the whole store.
+- **A world with several users** can't be planned from the tab yet: it says "say which with
+  --user". hpm in the terminal can, once the world is stopped.
+- **The memory's lock** is `Disk.memory_change(change)`, a read, change and write under one
+  lock; `memory_edit` goes through it, and hpm's lines too. This replaces step 4's "the
+  machine's memory changed while hpm was writing" stop, which could only happen in the
+  window this lock now closes. Between two processes (a terminal `hpm adopt` on a running
+  world) there is no lock: the window is the few milliseconds of one write.
+- **A bundle** is a row of its own, with "bundle of N"; an extra is shown under its app, and
+  as a row of its own only when its app isn't in the store.

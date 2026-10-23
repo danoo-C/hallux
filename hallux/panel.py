@@ -37,7 +37,8 @@ class Tab:
     """One tab of the panel. It is built before the panel exists and needs nothing of it
     until the host attaches itself. What a tab doesn't say for itself is as below."""
 
-    title = ""                        # in the tab row; its first letter, in lowercase, is its key
+    title = ""                        # in the tab row; its first letter, in lowercase, is its key,
+    key = ""                          # unless it names one: a letter of its title (Packa_g_es)
     container: AnyContainer           # its part of the screen
     bindings: KeyBindingsBase         # its keys: they act only while it is the shown tab
     typing = False                    # True while a row is open for typing: the letters are its own
@@ -74,6 +75,11 @@ class Tab:
         return False
 
 
+def key_of(tab: Tab) -> str:
+    """The letter that chooses a tab: its own key, or its title's first letter."""
+    return tab.key or tab.title[:1].lower()
+
+
 class Panel:
     def __init__(self, tabs: Sequence[Tab], bar: StatusBar | None = None,
                  power_cut: Callable[[], None] = lambda: None,
@@ -81,8 +87,8 @@ class Panel:
         self.tabs = list(tabs)                           # in the order of the tab row
         keys: dict[str, Tab] = {}
         for tab in self.tabs:
-            if (other := keys.setdefault(tab.title[:1].lower(), tab)) is not tab:
-                raise ValueError(f"two tabs start with the same letter: {other.title} and "
+            if (other := keys.setdefault(key_of(tab), tab)) is not tab:
+                raise ValueError(f"two tabs have the same key, {key_of(tab)}: {other.title} and "
                                  f"{tab.title}")
         self.bar = bar                                   # hallux's status bar, for the last row
         self.power_cut = power_cut                       # the hard exit
@@ -201,8 +207,10 @@ class Panel:
             style = f"fg:{DIM}" if tab.disabled() else "bold" if tab is self.tab else ""
             left, right = ("[ ", " ]") if tab is self.tab else ("  ", "  ")
             click = self._click(tab)
-            row += [(style, left, click), (f"{style} underline", tab.title[:1], click),
-                    (style, tab.title[1:], click), (style, right, click), ("", " ")]
+            at = max(0, tab.title.lower().find(key_of(tab)))      # the key, underlined
+            row += [(style, left, click), (style, tab.title[:at], click),
+                    (f"{style} underline", tab.title[at:at + 1], click),
+                    (style, tab.title[at + 1:], click), (style, right, click), ("", " ")]
         return row
 
     def _click(self, tab: Tab) -> Callable[[MouseEvent], None]:
@@ -218,7 +226,7 @@ class Panel:
         keys = [self.tab.hint()]
         if not self.tab.typing:                          # while it is, the letters and Esc are its
             if len(self.tabs) > 1:
-                keys.append(" ".join(tab.title[:1].lower() for tab in self.tabs) + " tabs")
+                keys.append(" ".join(key_of(tab) for tab in self.tabs) + " tabs")
             keys.append(f"Esc {self.tab.esc}")
         return [(f"fg:{GRAY}", " " + " · ".join(key for key in keys if key))]
 
@@ -228,7 +236,7 @@ class Panel:
         kb = KeyBindings()
         letters = Condition(lambda: not self.tab.typing)
         for tab in self.tabs:
-            kb.add(tab.title[:1].lower(), filter=letters)(lambda event, tab=tab: self._choose(tab))
+            kb.add(key_of(tab), filter=letters)(lambda event, tab=tab: self._choose(tab))
         # Eager: a row that is open for typing has keys that start with Esc, and without this
         # Esc would wait a second to see whether one of them follows.
         kb.add("escape", eager=True)(lambda event: self._escape())
