@@ -15,9 +15,16 @@
     hpm show NAME
     hpm search WORD
     hpm backups --clean [--yes] [--world W]
+    hpm store init NAME --repo OWNER/REPO     your store on GitHub (gh and git)
+    hpm store add NAME ADDRESS                a friend's: https://github.com/<owner>/<repo>
+    hpm store list | remove NAME | refresh [NAME]
+    hpm push NAME… [--all] [--store S] [--review] [--yes]     to your store on GitHub
+    hpm yank NAME VERSION [--store S]
 
-A NAME is a package (kittystory), a package of a store (local/kittystory), a whole store
-(local/, with the slash and nothing after it: bash would expand local/*), or a bundle.
+A NAME is a package (kittystory), a package of a store (local/kittystory, danika/kittystory),
+a whole store (local/ or danika/, with the slash and nothing after it: bash would expand
+danika/*), or a bundle. local is your own store on this PC; any other is a friend's
+(docs/hpm/sharing.md). A name that is in two stores is asked about.
 Without --world, hpm works on the world you are in. Every question has a flag; without a
 terminal a question whose flag is missing is an error that names it. install, update,
 remove and rollback refuse a world that is running: use its Packages tab then.
@@ -40,10 +47,11 @@ from hallux.hpm.archive import read_member
 from hallux.hpm.engine import KEEP, OVERWRITE, REMOVE, REPLACE, SKIP, Plan, Want
 from hallux.hpm.manifest import NAME, Version
 from hallux.hpm.publish import Questions, publish, show
-from hallux.hpm.store import Store
+from hallux.hpm.store import LOCAL, Ambiguous, Store
 from hallux.hpm.world import HpmError, find_world, homes, refuse_running
 
-FORMS = "a package (kittystory), local/kittystory, a whole store (local/), or a bundle"
+FORMS = ("a package (kittystory), one of a store (local/kittystory, danika/kittystory), a "
+         "whole store (local/), or a bundle")
 
 
 # ---------------------------------------------------------------------- the screens
@@ -162,6 +170,36 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--clean", action="store_true", help="remove them all, after a question")
     p.add_argument("--yes", action="store_true", help="without the question")
     world(p)
+
+    p = commands.add_parser("store", help="stores on GitHub: yours, and your friends'")
+    stores = p.add_subparsers(dest="action", required=True, metavar="ACTION")
+    q = stores.add_parser("init", help="make your store on GitHub (with gh), and its clone")
+    q.add_argument("name", metavar="NAME")
+    q.add_argument("--repo", metavar="OWNER/REPO", required=True,
+                   help="the repository to make, like danika/hpm-store")
+    q = stores.add_parser("add", help="add a friend's store")
+    q.add_argument("name", metavar="NAME")
+    q.add_argument("address", metavar="ADDRESS", help="https://github.com/<owner>/<repo>")
+    stores.add_parser("list", help="the stores you have added, and your own")
+    q = stores.add_parser("remove", help="remove a friend's store, and its downloads")
+    q.add_argument("name", metavar="NAME")
+    q = stores.add_parser("refresh", help="download the stores' indexes again")
+    q.add_argument("name", metavar="NAME", nargs="?")
+
+    p = commands.add_parser("push", help="send releases to your store on GitHub")
+    p.add_argument("names", nargs="*", metavar="NAME")
+    p.add_argument("--all", action="store_true", help="every package newer than in the store")
+    p.add_argument("--store", metavar="S", help="which of your stores (if you have several)")
+    p.add_argument("--review", action="store_true",
+                   help="have the AI review a card that has no review yet (it asks on a "
+                        "terminal)")
+    p.add_argument("--yes", action="store_true", help="push even if the review found something")
+    world(p)
+
+    p = commands.add_parser("yank", help="mark a pushed version so nobody gets it by default")
+    p.add_argument("name", metavar="NAME")
+    p.add_argument("version", metavar="VERSION")
+    p.add_argument("--store", metavar="S", help="which of your stores (if you have several)")
     return cli
 
 
@@ -171,7 +209,7 @@ def main(argv: list[str] | None = None, questions: Questions | None = None,
     run = Run(flags, questions or Questions(), store or Store(), screens or TerminalScreens(),
               client_factory)
     try:
-        return getattr(run, flags.command)()
+        return getattr(run, {"store": "stores"}.get(flags.command, flags.command))()
     except HpmError as e:
         print(f"hpm: {e}", file=sys.stderr)
         return 1
@@ -203,6 +241,7 @@ class Run:
     def install(self) -> int:
         world = self.world()
         refuse_running(world)
+        self.store.remotes.refresh_stale(self.say)
         wants = engine.expand(self.store, [self._want(name) for name in self.flags.names])
         wants = self._extras(world, wants)
         if wants is None:
@@ -213,19 +252,25 @@ class Run:
         world = self.world()
         refuse_running(world)
         record = rec.load(Disk(world))
+        self.store.remotes.refresh_stale(self.say)
         names = self.flags.names or sorted(record)
         wants = []
         for name in names:
             if name not in record:
                 raise HpmError(f"{name} isn't installed in this world; hpm install it")
-            latest = self.store.find(name)
+            where = record[name].get("from") or LOCAL
+            try:
+                latest = self.store.find(name, where)
+            except HpmError as e:                 # its store was removed, or can't be read
+                self.say(f"{name}: {e}; left as it is")
+                continue
             if latest is None:
-                self.say(f"{name}: not in the store any more; left as it is")
+                self.say(f"{name}: not in the store {where} any more; left as it is")
                 continue
             if latest.version > Version(record[name]["version"]) or record[name].get("incomplete"):
                 manifest = latest.manifest()
                 extras = tuple(k for k in record[name].get("extras", []) if k in manifest.extras)
-                wants.append(Want(name, extras=extras))
+                wants.append(Want(name, extras=extras, store=where))
             elif self.flags.names:
                 self.say(f"{name} {record[name]['version']} is the newest")
         if not wants:
@@ -238,19 +283,32 @@ class Run:
         return self._install(world, wants)
 
     def _want(self, name: str) -> Want:
+        """A NAME as a Want, with its store: the one named, the one that has it, or the one
+        picked on the screen when several have it."""
+        where = None
         if "/" in name:
             where, _, rest = name.partition("/")
-            if where != "local":
-                raise HpmError(f"there is no store {where!r}: only local/ until friends' stores "
-                               f"come (a NAME is {FORMS})")
+            if where not in self.store.wheres():
+                raise HpmError(f"there is no store {where!r} (hpm store list; a NAME is {FORMS})")
             if not rest:
-                return Want("local/")
+                return Want(f"{where}/")
             name = rest
         if not NAME.fullmatch(name):
             raise HpmError(f"{name!r} is no NAME: a NAME is {FORMS}")
-        if self.store.find(name) is None:
-            raise HpmError(f"there is no package {name} in the store (hpm search finds one)")
-        return Want(name)
+        try:
+            release = self.store.find(name, where)
+        except Ambiguous as e:
+            if not self.interactive:
+                raise
+            picked = self.screens.pick(f"{name} is in several stores. Which one?", e.places)
+            if picked is None:
+                raise HpmError("cancelled; nothing was written") from None
+            return Want(name, store=picked)
+        if release is None:
+            raise HpmError(f"there is no package {name} in "
+                           + (f"the store {where}" if where else "the store")
+                           + " (hpm search finds one)")
+        return Want(name, store=release.where)
 
     def _extras(self, world: Path, wants: list[Want]) -> list[Want] | None:
         """The extras of each package: --extras, else the checkboxes, else (--yes) the
@@ -259,10 +317,10 @@ class Run:
             keys = [] if self.flags.extras == "none" else [k for k in self.flags.extras.split(",") if k]
             out, found = [], set()
             for want in wants:
-                manifest = self.store.find(want.name).manifest()
+                manifest = engine._release(self.store, want).manifest()
                 mine = tuple(k for k in keys if k in manifest.extras)
                 found |= set(mine)
-                out.append(Want(want.name, extras=mine, version=want.version))
+                out.append(Want(want.name, extras=mine, version=want.version, store=want.store))
             unknown = [k for k in keys if k not in found]
             if unknown:
                 raise HpmError(f"no package here has the extra {', '.join(unknown)}")
@@ -280,7 +338,7 @@ class Run:
         have, gets, _ = engine.addons_known(world)
         choices = []
         for want in wants:
-            release = self.store.find(want.name)
+            release = engine._release(self.store, want)
             manifest = release.manifest()
             problems = engine.addon_problems(manifest, have, gets)
             notes = []
@@ -297,14 +355,16 @@ class Run:
                       if not any(f"the {a} addon" in p for p in problems)]
             labels = {}
             for key, extra in manifest.extras.items():
-                other = self.store.find(extra.package)
+                other = (self.store.find(extra.package, release.where)
+                         or self.store.find(extra.package, LOCAL))
                 labels[key] = (other.manifest().summary or extra.package) if other else \
                     "(not in the store)"
             card = read_member(release.path, f"files/root/usr/local/bin/{want.name}")
             review = (read_member(release.path, "review.md") or b"").decode("utf-8", "replace")
             extras = ({k: k in want.extras for k in manifest.extras} if want.extras is not None
                       else {})
-            choices.append(Choice(want.name, manifest, extras=extras, labels=labels,
+            shown = want.name if release.where == LOCAL else f"{release.where}/{want.name}"
+            choices.append(Choice(shown, manifest, extras=extras, labels=labels,
                                   note=" · ".join(notes), bad=bool(problems),
                                   card=(card or b"").decode("utf-8", "replace").splitlines(),
                                   review=review.splitlines()))
@@ -533,9 +593,10 @@ class Run:
 
     def adopt(self) -> int:
         world = self.world()
-        release = self.store.find(self.flags.name)
+        want = self._want(self.flags.name)
+        release = self.store.find(want.name, want.store)
         if self.flags.version is not None:
-            release = next((r for r in self.store.releases(self.flags.name)
+            release = next((r for r in self.store.releases(want.name, want.store or LOCAL)
                             if r.version == Version(self.flags.version)), None)
         if release is None:
             raise HpmError(f"the store has no {self.flags.name}"
@@ -554,9 +615,14 @@ class Run:
         if not record:
             self.say("nothing installed by hpm in this world")
         for name, entry in sorted(record.items()):
-            latest = self.store.find(name)
+            where = entry.get("from") or LOCAL
+            try:
+                latest = self.store.find(name, where)
+            except HpmError:
+                latest = None
             newer = f"  ↑ {latest.version} in the store" if latest and latest.version > Version(
                 entry["version"]) else ""
+            newer += f"  (from {where})" if where != LOCAL else ""
             marks = [m for m in ("incomplete", "adopted") if entry.get(m)]
             extras = f"  extras: {', '.join(entry['extras'])}" if entry.get("extras") else ""
             self.say(f"{name} {entry['version']}{newer}{extras}"
@@ -613,11 +679,19 @@ class Run:
     def search(self) -> int:
         word = self.flags.word.lower()
         found = 0
+        self.store.remotes.refresh_stale(self.say)
         for name in self.store.names():
-            manifest = self.store.find(name).manifest()
+            manifest = self.store.latest(name).manifest()
             if word in name.lower() or word in manifest.summary.lower():
                 self.say(f"{name} {manifest.version}  {manifest.summary}")
                 found += 1
+        for where in self.store.remotes.names():          # from the index: nothing downloaded
+            for name, entry in sorted(self.store.remotes.packages(where).items()):
+                latest = self.store.latest(name, where)
+                summary = entry.get("summary", "")
+                if latest and (word in name.lower() or word in summary.lower()):
+                    self.say(f"{where}/{name} {latest.version}  {summary}")
+                    found += 1
         if not found:
             self.say(f"nothing in the store has {self.flags.word!r} in its name or summary")
         return 0
@@ -641,3 +715,200 @@ class Run:
             return self._cancelled()
         self.say(f"removed {rec.clean_backups(disk)} backups")
         return 0
+
+    # ------------------------------------------------------------------ stores on GitHub
+
+    def stores(self) -> int:
+        """hpm store: the store is self.store, so the command is this."""
+        from hallux.hpm import remote
+        action, remotes = self.flags.action, self.store.remotes
+        if action == "init":
+            mine = remote.Mine(self.store.home, self.flags.name)
+            mine.init(self.flags.repo)
+            self.say(f"made your store {self.flags.name}: {mine.address}, its clone in "
+                     f"{mine.folder}. hpm push NAME sends a package there; a friend adds it "
+                     f"with:\n  hpm store add {self.flags.name} {mine.address}")
+        elif action == "add":
+            added = remotes.add(self.flags.name, self.flags.address)
+            count = len(added.index.get("packages", {}))
+            self.say(f"added the store {added.name} ({count} package{'s' * (count != 1)}): "
+                     f"hpm install {added.name}/<package>, or {added.name}/ for all of them")
+        elif action == "list":
+            for name in remote.Mine.names(self.store.home):
+                self.say(f"{name}  yours: {remote.Mine(self.store.home, name).address}")
+            for name in remotes.names():
+                found = remotes.get(name)
+                count = len(found.index.get("packages", {}))
+                self.say(f"{name}  {found.source.get('url')}  {count} package"
+                         f"{'s' * (count != 1)}, index from {found.source.get('fetched')}")
+            if not remotes.names() and not remote.Mine.names(self.store.home):
+                self.say("no stores yet: hpm store add NAME ADDRESS adds a friend's, hpm store "
+                         "init NAME --repo OWNER/REPO makes yours")
+        elif action == "remove":
+            remotes.remove(self.flags.name)
+            self.say(f"removed the store {self.flags.name} and its downloads; what you "
+                     f"installed from it stays installed")
+        elif action == "refresh":
+            for name in [self.flags.name] if self.flags.name else remotes.names():
+                found = remotes.refresh(name)
+                self.say(f"{name}: {len(found.index.get('packages', {}))} packages")
+        return 0
+
+    def _mine(self):
+        from hallux.hpm import remote
+        names = remote.Mine.names(self.store.home)
+        if not names:
+            raise HpmError("you have no store on GitHub yet: hpm store init NAME --repo "
+                           "OWNER/REPO makes one")
+        name = self.flags.store or (names[0] if len(names) == 1 else None)
+        if name is None:
+            raise HpmError(f"you have several stores ({', '.join(names)}): pass --store")
+        if name not in names:
+            raise HpmError(f"you have no store {name} (yours: {', '.join(names)})")
+        return remote.Mine(self.store.home, name)
+
+    def push(self) -> int:
+        """sharing.md, section 2: the newest release of each, private ones refused, the
+        review shown, a GitHub release, and the index committed and pushed."""
+        import tempfile
+
+        from hallux.hpm import assist
+        from hallux.hpm.publish import _entries
+        mine = self._mine()
+        mine.pull()
+        index = mine.index()
+        packages = index.setdefault("packages", {})
+        if not self.flags.names and not self.flags.all:
+            raise HpmError("name the packages to push, or --all")
+        names = self.flags.names or self.store.names()
+        chosen = []
+        for name in names:
+            release = self.store.latest(name)
+            if release is None:
+                raise HpmError(f"there is no {name} in your store on this PC: hpm publish it "
+                               f"first")
+            manifest = release.manifest()
+            pushed = packages.get(name, {}).get("versions", {})
+            if manifest.private:
+                if self.flags.all:
+                    self.say(f"– {name}: private, it never leaves this PC")
+                    continue
+                raise HpmError(f"{name} is private (its memories or chat stay on this PC): hpm "
+                               f"push never sends it")
+            if str(release.version) in pushed:
+                if self.flags.all:
+                    continue
+                raise HpmError(f"{name} {release.version} is in {mine.name} already; a pushed "
+                               f"version never changes (publish a newer one)")
+            if self.flags.all and pushed and max(map(Version, pushed)) > release.version:
+                continue
+            chosen.append((release, manifest))
+        if not chosen:
+            self.say(f"nothing to push: {mine.name} has every release already")
+            return 0
+        going = {r.name for r, _ in chosen}
+        for release, manifest in chosen:
+            for extra in manifest.extras.values():
+                if extra.package not in going and extra.package not in packages:
+                    self.say(f"note: {release.name}'s extra {extra.package} isn't in "
+                             f"{mine.name}; a friend can't tick it until you push it too")
+        try:
+            world = self.world()
+        except HpmError:
+            world = None
+        reviewer = assist.card_reviewer(world, self.store, self.q, given=self.flags.review,
+                                        client_factory=self.client_factory) if world else None
+        reviews = {}
+        for release, manifest in chosen:
+            reviews[release.name] = self._push_review(release, manifest, reviewer, world)
+        for release, manifest in chosen:
+            name, version = release.name, str(release.version)
+            changelog = (read_member(release.path, "CHANGELOG.md") or b"").decode("utf-8", "replace")
+            notes = (_entries(changelog) or [f"{name} {version}"])[0]
+            if reviews[name]:
+                notes += "\n\nThe AI's review of the card:\n" + reviews[name]
+            with tempfile.TemporaryDirectory(prefix="hpm-push-") as temp:
+                file = Path(temp) / f"{name}-{version}.hpm"
+                file.write_bytes(release.path.read_bytes())
+                url = mine.release(f"{name}-{version}", file, f"{name} {version}", notes)
+            entry = packages.setdefault(name, {})
+            entry["summary"] = manifest.summary
+            versions = entry.setdefault("versions", {})
+            versions[version] = {
+                "url": url, "sha256": sha_hex(release.path), "data_format": manifest.data_format,
+                "requires": {"addons": list(manifest.requires_addons)},
+                "extras": [e.package for e in manifest.extras.values()]}
+            entry["latest"] = _latest(versions)
+            mine.save_index(index)
+            mine.commit(f"push {name} {version}", ["index.toml"])
+            self.say(f"✓ pushed {name} {version} to {mine.name}")
+        self.say(f"a friend adds the store with:\n  hpm store add {mine.name} {mine.address}\n"
+                 f"GitHub may show the old index for a few minutes after a push.")
+        return 0
+
+    def _push_review(self, release, manifest, reviewer, world) -> str:
+        """The card's review: the one made at publish, else the AI's now if it may. Shown;
+        if it found something, push only on yes (--yes)."""
+        name = release.name
+        card = read_member(release.path, f"files/root/usr/local/bin/{name}")
+        said = read_member(release.path, "review.md")
+        text = said.decode("utf-8", "replace").strip() if said else ""
+        if not text and card is not None:
+            text = (reviewer(name, card.decode("utf-8", "replace"),
+                             (read_member(release.path, "hpm.toml") or b"").decode()) or "").strip() \
+                if reviewer else ""
+            if not text:
+                self.say(f"note: {name} {release.version}'s card has no review"
+                         + ("" if world else " (hpm push in a world, with --review, has the AI "
+                                             "make one)"))
+        elif text:
+            self.say(f"the review of {name}'s card, made at publish:\n{text}")
+        if text and not _clean(text):
+            if self.flags.yes:
+                return text
+            if not self.interactive:
+                raise HpmError(f"the review of {name}'s card found something (above): pass "
+                               f"--yes to push it anyway")
+            if not self.q.confirm(f"the review found something; push {name} {release.version} "
+                                  f"anyway?", False, "--yes"):
+                raise HpmError(f"{name} isn't pushed; nothing was")
+        return text
+
+    def yank(self) -> int:
+        mine = self._mine()
+        mine.pull()
+        index = mine.index()
+        versions = index.get("packages", {}).get(self.flags.name, {}).get("versions", {})
+        version = next((v for v in versions if Version(v) == Version(self.flags.version)), None)
+        if version is None:
+            raise HpmError(f"{mine.name} has no {self.flags.name} {self.flags.version}")
+        versions[version]["yanked"] = True
+        entry = index["packages"][self.flags.name]
+        latest = _latest(versions)
+        if latest:
+            entry["latest"] = latest
+        else:
+            entry.pop("latest", None)
+        mine.save_index(index)
+        mine.commit(f"yank {self.flags.name} {version}", ["index.toml"])
+        self.say(f"yanked {self.flags.name} {version} in {mine.name}: nobody gets it by "
+                 f"default any more; the newest is "
+                 + (f"{latest}" if latest else "none (every version is yanked)"))
+        return 0
+
+
+def _latest(versions: dict) -> str:
+    """The newest version that isn't yanked, or ""."""
+    live = [v for v, info in versions.items() if not info.get("yanked")]
+    return str(max(map(Version, live))) if live else ""
+
+
+def _clean(review: str) -> bool:
+    """A review that found nothing."""
+    lines = [line.strip("- ").strip().lower() for line in review.splitlines() if line.strip()]
+    return lines == ["nothing reaches beyond the program"]
+
+
+def sha_hex(path: Path) -> str:
+    from hallux.hpm.archive import sha256
+    return sha256(path).split(":", 1)[1]

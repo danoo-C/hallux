@@ -27,7 +27,7 @@ from hallux.hpm import record as rec
 from hallux.hpm.archive import read_member
 from hallux.hpm.engine import Done, Outcome, Plan, Want
 from hallux.hpm.manifest import Manifest, Version
-from hallux.hpm.store import Release, Store
+from hallux.hpm.store import LOCAL, Release, Store
 from hallux.hpm.world import HpmError
 
 log = logging.getLogger("hallux")
@@ -51,6 +51,12 @@ class Entry:
     labels: dict[str, str] = field(default_factory=dict)    # an extra's key: what it is
     card: tuple[str, ...] = ()
     review: tuple[str, ...] = ()              # the AI's review of the card, made at publish
+    where: str = LOCAL                        # the store: local, or a friend's
+
+    @property
+    def shown(self) -> str:
+        """Its name on the tab, and in a Want: a friend's store's name in front."""
+        return self.name if self.where == LOCAL else f"{self.where}/{self.name}"
 
     @property
     def newer(self) -> bool:
@@ -109,6 +115,8 @@ class Installs:
         self._answers: dict | None = None     # the questions' answers, kept over the migrations
         self._merged_kept: dict[str, str] = {}
         self._shared = None                   # the update's backup, which its migrations make
+        self._unfetched: dict[str, int] = {}  # a friend's store: packages not downloaded yet
+        self._store_notes: list[str] = []     # what the last refresh couldn't do
         self._landed = False
 
     # ------------------------------------------------------------------ what the tab is shown
@@ -123,34 +131,76 @@ class Installs:
                     incoming, self._busy, tuple(self._said), self._asked, self._landed)
 
     def catalog(self, fresh: bool = False) -> list[Entry]:
-        """The store's packages: each app and bundle, with its extras under it (an extra of
-        another package isn't a row of its own, unless its app isn't in the store). Read once,
-        and again when `fresh` or after a write. An HpmError says what is wrong with the store."""
+        """Every store's packages: each app and bundle, with its extras under it (an extra of
+        another package isn't a row of its own, unless its app isn't in that store). A
+        friend's package shows once its archive is downloaded: the tab never waits on the
+        network while it draws, and R (refresh) downloads in a thread. Read once, and again
+        when `fresh` or after a write. An HpmError says what is wrong with a store."""
         if self._catalog is not None and not fresh:
             return self._catalog
         record = rec.load(self.disk)
         have, gets, _ = engine.addons_known(self.disk.root)
         manifests = {}
-        for name in self.store.names():
-            release = self.store.latest(name)
-            manifests[name] = (release, release.manifest())
-        extras = {e.package: m.name for _, m in manifests.values() for e in m.extras.values()}
+        self._unfetched = {}
+        for where in self.store.wheres():
+            for name in self.store.names(where):
+                release = self.store.latest(name, where)
+                if where != LOCAL and not release.fetched:
+                    self._unfetched[where] = self._unfetched.get(where, 0) + 1
+                    continue
+                manifests[(where, name)] = (release, release.manifest())
+        extras = {(where, e.package): m.name for (where, _), (_, m) in manifests.items()
+                  for e in m.extras.values()}
         entries = []
-        for name, (release, manifest) in manifests.items():
-            if extras.get(name) in manifests:
+        for (where, name), (release, manifest) in manifests.items():
+            if (where, extras.get((where, name))) in manifests:
                 continue                          # it is shown under its app
             labels = {}
             for key, extra in manifest.extras.items():
-                found = manifests.get(extra.package)
+                found = manifests.get((where, extra.package)) or manifests.get((LOCAL, extra.package))
                 labels[key] = (found[1].summary or extra.package) if found else "(not in the store)"
             card = read_member(release.path, f"files/root/usr/local/bin/{name}") or b""
             review = read_member(release.path, "review.md") or b""
-            entries.append(Entry(name, release, manifest, record.get(name, {}).get("version"),
+            there = record.get(name, {})
+            installed = there.get("version") if (there.get("from") or LOCAL) == where else None
+            entries.append(Entry(name, release, manifest, installed,
                                  tuple(engine.addon_problems(manifest, have, gets)), labels,
                                  tuple(card.decode("utf-8", "replace").splitlines()),
-                                 tuple(review.decode("utf-8", "replace").splitlines())))
+                                 tuple(review.decode("utf-8", "replace").splitlines()), where))
         self._catalog = entries
         return entries
+
+    def unfetched(self) -> dict[str, int]:
+        """A friend's store: how many of its packages aren't downloaded yet."""
+        return dict(self._unfetched)
+
+    def store_notes(self) -> list[str]:
+        return list(self._store_notes)
+
+    def refresh(self) -> None:
+        """R: every friend's index downloaded again, and the newest archive of each of their
+        packages, in a thread. A store that can't be reached is told, and kept as it was."""
+        def work(stop: threading.Event) -> list[str]:
+            notes = []
+            for where in self.store.remotes.names():
+                try:
+                    self.store.remotes.refresh(where)
+                except HpmError as e:
+                    notes.append(f"{where} couldn't be refreshed: {e}")
+                for name in self.store.names(where):
+                    if stop.is_set():
+                        return notes
+                    try:
+                        self.store.latest(name, where).path        # downloads it
+                    except HpmError as e:
+                        notes.append(str(e))
+            return notes
+
+        def landed(notes: list[str]) -> None:
+            self._store_notes, self._state, self._catalog = notes, LISTING, None
+            log.info("hpm refresh: %s", "; ".join(notes) or "every store")
+
+        self._begin("refresh", PLANNING, work, landed)
 
     def installed(self) -> dict:
         return rec.load(self.disk)

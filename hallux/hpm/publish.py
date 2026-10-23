@@ -133,6 +133,7 @@ def publish(world: Path, name: str, store: Store, questions: Questions, *,
                                review=review, write_note=write_note)
         if release is not None:
             published.append(release)
+            _extras_behind(release, store, questions)
     if every and not published:
         questions.say("nothing changed since the last releases; nothing published")
     return published
@@ -343,6 +344,19 @@ def _check_data(name: str, manifest: Manifest, before: Manifest, latest: Release
             f"data_format is still {manifest.data_format}: an update would leave the data "
             f"behind. Raise data_format, and write a migration for it (hpm publish "
             f"--write-migration has the AI write it; docs/hpm/migrations.md)")
+
+
+def _extras_behind(release: Release, store: Store, q: Questions) -> None:
+    """An app's data format went up, and an extra of it is still in an older one: every
+    install of that extra next to the app migrates it (migrations.md, section 2). Told."""
+    manifest = release.manifest()
+    for extra in manifest.extras.values():
+        found = store.latest(extra.package)
+        if found is not None and found.manifest().data_format < manifest.data_format:
+            q.say(f"note: {release.name}'s data format is {manifest.data_format}, and its extra "
+                  f"{extra.package} {found.version} is still in format "
+                  f"{found.manifest().data_format}: every install of it beside {release.name} "
+                  f"migrates it with the AI. Publish it in format {manifest.data_format} too")
 
 
 def _note_needed(manifest: Manifest, before: Manifest, migrations: dict[str, Path]):

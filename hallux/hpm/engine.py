@@ -183,22 +183,42 @@ class Outcome:
 
 @dataclass(frozen=True)
 class Want:
-    """A package to install, with the keys of the extras chosen (None: its defaults)."""
+    """A package to install, with the keys of the extras chosen (None: its defaults). `store`
+    is the store it comes from (None: the one that has it); with `hint`, the store is only
+    where to look first, as for an extra, which comes from its app's store if that has it."""
     name: str
     extras: tuple[str, ...] | None = None
     version: str | None = None
+    store: str | None = None
+    hint: bool = False
+
+
+def qualified(want: Want) -> Want:
+    """"danika/kittystory" as a name: the package kittystory of the store danika."""
+    if "/" in want.name and not want.name.endswith(STORE_ALL):
+        where, _, name = want.name.partition("/")
+        return Want(name, want.extras, want.version, where)
+    return want
 
 
 def _release(store: Store, want: Want) -> Release:
+    want = qualified(want)
+    where = want.store
+    if want.hint and where is not None and not store.releases(want.name, where):
+        # not in its app's store: your own, else wherever it is
+        where = "local" if store.releases(want.name, "local") else None
     if want.version is None:
-        release = store.find(want.name)
+        release = store.find(want.name, where)
         if release is None:
-            raise HpmError(f"there is no package {want.name} in the store")
+            raise HpmError(f"there is no package {want.name} in "
+                           + (f"the store {where}" if where else "the store"))
         return release
     version = Version(want.version)
-    for release in store.releases(want.name):
-        if release.version == version:
-            return release
+    places = [where] if where else store.places(want.name) or ["local"]
+    for place in places:
+        for release in store.releases(want.name, place):
+            if release.version == version:
+                return release                    # named exactly: a yanked one too
     raise HpmError(f"the store has no {want.name} {want.version}")
 
 
@@ -209,19 +229,22 @@ def expand(store: Store, wants: list[Want]) -> list[Want]:
     for want in wants:
         if want.name.endswith(STORE_ALL):
             where = want.name[:-1]
-            if where != "local":
-                raise HpmError(f"there is no store {where!r} (only local/ until friends' "
-                               f"stores come)")
-            manifests = {name: store.latest(name).manifest() for name in store.names()}
+            if where not in store.wheres():
+                raise HpmError(f"there is no store {where!r} (hpm store list shows them)")
+            manifests = {name: store.latest(name, where).manifest()
+                         for name in store.names(where)}
             extras = {e.package for m in manifests.values() for e in m.extras.values()}
-            out += [Want(name) for name, m in manifests.items()
+            out += [Want(name, store=where) for name, m in manifests.items()
                     if not m.is_bundle and name not in extras]
             continue
-        manifest = _release(store, want).manifest()
-        if manifest.is_bundle:
-            out += expand(store, [Want(name) for name in manifest.bundle])
+        want = qualified(want)
+        release = _release(store, want)
+        if release.manifest().is_bundle:
+            out += expand(store, [Want(name, store=release.where, hint=True)
+                                  for name in release.manifest().bundle])
         else:
-            out.append(want)
+            out.append(want if want.store or release.where == "local"
+                       else Want(want.name, want.extras, want.version, release.where))
     return out
 
 
@@ -244,9 +267,10 @@ def plan_install(world: Path | str, store: Store, wants: list[Want], user: str |
                 and there.get("version") is not None and Version(there["version"]) == release.version:
             return                                # an extra that is there already, as it is
         manifest = release.manifest()
+        here = release.where                      # what it needs comes from there first
         if manifest.is_bundle:
             for name in manifest.bundle:
-                add(Want(name), by)
+                add(Want(name, store=here, hint=True), by)
             return
         keys = set(want.extras if want.extras is not None
                    else [k for k, e in manifest.extras.items() if e.default])
@@ -270,11 +294,11 @@ def plan_install(world: Path | str, store: Store, wants: list[Want], user: str |
             order.append(manifest.name)
             for name in manifest.requires_packages:
                 if name not in record:
-                    add(Want(name))
+                    add(Want(name, store=here, hint=True))
             if manifest.for_app and manifest.for_app not in record:
-                add(Want(manifest.for_app, extras=()))
+                add(Want(manifest.for_app, extras=(), store=here, hint=True))
         for key in [k for k in manifest.extras if k in new]:     # in the manifest's order
-            add(Want(manifest.extras[key].package), auto=True)
+            add(Want(manifest.extras[key].package, store=here, hint=True), auto=True)
 
     for want in expand(store, wants):
         add(want)
@@ -439,7 +463,7 @@ def _check_format(item: Item, items: dict[str, Item], record: dict, store: Store
                 pass
             layout = got[0] if got else None
             if not notes or layout is None:
-                found = store.find(app)
+                found = store.find(app, item.release.where) or store.find(app, "local")
                 if found is not None and found.manifest().data_format >= app_format:
                     notes = notes or mig.release_notes(found)
                     layout = layout or found.manifest()

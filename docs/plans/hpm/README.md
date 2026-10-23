@@ -1,7 +1,7 @@
 # Plan: hpm, the Hallux package manager
 
 **Status:** written on 2026-10-23, at the user's request ("go ahead, write the plan"). Steps 1
-to 7 are built (2026-10-23; the paid runs of steps 6 and 7 wait for the user); the table at the end has each step's status. The design it follows is in [docs/hpm/](../../hpm/README.md):
+to 8 are built (2026-10-23; the paid runs of steps 6 and 7 and the GitHub run of step 8 wait for the user); the table at the end has each step's status. The design it follows is in [docs/hpm/](../../hpm/README.md):
 [hpm.md](../../hpm/hpm.md) (packages, the store, publish, install, conflicts, the world's
 record, the Packages tab), [migrations.md](../../hpm/migrations.md) and
 [sharing.md](../../hpm/sharing.md). The design is done and every question of it is
@@ -132,7 +132,7 @@ the review changed 9, 11 and 15.
 | [5](05-packages-tab.md) | The Packages tab, `<installed>` | **Built** 2026-10-23 (see its "As built") |
 | [6](06-ai-session.md) | hpm's AI session: `init`, changelogs, merge, card review, test install | **Built** 2026-10-23, its paid run still to do (see its "As built") |
 | [7](07-migrations.md) | Data formats, migration notes, staging, checks, accept, roll back | **Built** 2026-10-23, its paid run still to do (see its "As built") |
-| [8](08-github-stores.md) | `hpm store`, `hpm push`, `yank`, installing from a friend | Not built |
+| [8](08-github-stores.md) | `hpm store`, `hpm push`, `yank`, installing from a friend | **Built** 2026-10-23, the user's GitHub run still to do (see its "As built") |
 | [9](09-manual-docs-live-run.md) | The manual, the docs, the live run | Not built |
 
 ## What the review changed

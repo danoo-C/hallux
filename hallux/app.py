@@ -106,7 +106,8 @@ def _run(root: Path, hardware: Hardware, flags: argparse.Namespace, headless: bo
     packages = PackagesTab(installs.watch, installs.catalog, installs.installed,
                            installs.plan_install, installs.plan_remove, installs.go,
                            installs.stop, installs.back, installs.migration_go,
-                           installs.migration_cancel)
+                           installs.migration_cancel, installs.refresh, installs.unfetched,
+                           installs.store_notes)
     terminal.set_panel(Panel([*watching, files, packages, settings], bar=bar,
                              power_cut=terminal.power_cut, ctrl_c=terminal.count_ctrl_c))
     try:

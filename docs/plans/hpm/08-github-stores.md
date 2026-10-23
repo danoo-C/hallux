@@ -59,3 +59,75 @@ commands that record what they were asked.
 The user makes their store on GitHub, pushes kittystory with packs and characters, and
 installs it into a second world from the store's URL, as a friend would. The user's run,
 since it uses their GitHub account.
+
+## As built
+
+Built 2026-10-23, **without the user's run** (it needs their GitHub account):
+`hallux/hpm/remote.py` (the index and its TOML writer, downloads, a friend's store, your own
+store's clone, the `gh` and `git` calls), the store (`Store.find` and the rest take a store
+name; `Ambiguous`), the engine (a `Want` names its store), `cli.py` (`hpm store
+init/add/list/remove/refresh`, `push`, `yank`; install, update, list and search across
+stores), `publish.py`, `running.py` and the Packages tab; `tests/test_hpm_remote.py` (17
+tests), with a folder in place of GitHub and a stand-in for `gh` and `git`. No test, and
+nothing else in this step, touched the network or GitHub. The whole suite: 2291 passed, the
+sandbox test left out as before.
+
+**Checked on a real terminal** (tmux, 80 columns): danika's store pushed into the folder
+that stands in for GitHub, oliver's PC with it added and nothing downloaded, Hallux on a
+fresh copy of `oliver-test`. Ctrl+F12, `g`: "danika: 2 packages not downloaded yet · R
+downloads them"; `R`: `danika/kittystory` with its packs; space, Enter, Enter: both
+installed, and `hpm list` says `kittystory 1.1 (from danika)`. That run found: the empty
+list said "hpm publish puts one there" while a friend's packages waited for R (now it says
+only the R line); a line cut at 80 columns (folded now); the list's head, cut at 80 columns
+since step 5 (its keys fold onto a line of their own when it doesn't fit); and a store whose
+kittystory was in data format 2 with its packs still in 1, so installing the packs migrated
+them, as migrations.md section 2 says. Publish now tells that to the author.
+
+**The user's run, still to do:** `hpm store init <name> --repo <you>/hpm-store`, `hpm push
+kittystory kittystory-packs` (and characters, if published), then in a second world `hpm
+store add <name> https://github.com/<you>/hpm-store` and `hpm install <name>/kittystory`,
+as a friend would; `gh` must be installed and signed in (`gh auth login`).
+
+What the code does that the step above didn't say, or says differently:
+
+- **`hpm store`** is dispatched to `Run.stores`, since `Run.store` is the store itself.
+- **Your own store** is the clone in `mine/<name>/` and a small `mine/<name>.toml` with its
+  owner and repository (so push needn't ask git). `store init` runs `gh repo create
+  OWNER/REPO --public`, `gh repo clone` into `mine/`, writes `index.toml` and `README.md`
+  (with the line a friend needs), commits and pushes. A friend's store is `stores/<name>/`
+  with `index.toml` and `source.toml` (owner, repo, branch, url, when it was fetched).
+- **A friend's release downloads when it is first needed** (its path is wanted), into
+  `cache/<store>/<name>-<version>.hpm`. Every use checks its sha256 against the index, and
+  that its manifest is the name and version the index says; one that isn't is deleted and
+  refused. Downloads: HTTPS only, 20 s each, an index at most 4 MB, an archive 256 MB; 401,
+  403 and 404 say "isn't there, or it is private".
+- **Names:** `danika/kittystory` is that store's; `kittystory` is the one store's that has
+  it; in two (your `local` counts) the terminal asks with the pick screen, and without a
+  terminal the error names both forms. **Extras, needs and a bundle's packages** come from
+  the store of the package that brought them, else from your own store, else from wherever
+  they are. The record keeps the store (`from`), and `update` and `list` look there.
+- **`push`** pulls the clone first, takes the newest local release of each NAME (or `--all`:
+  each newer than in the store, private ones skipped and told), refuses a private package
+  and a version that is there already, tells an extra that isn't in the store, shows the
+  review made at publish, and if there is none and you are in a world, can have the AI make
+  one (`--review`, or asked on a terminal). A review that found something stops the push
+  unless you say yes (`--yes`). Each package is its own GitHub release (the changelog's
+  entry and the review as its notes) and its own commit of the index, so a failure half way
+  leaves the index right about what was pushed.
+- **The index** keeps `sha256` as bare hex, `requires = { addons = […] }`, `extras`,
+  `data_format`, `yanked`, and `latest`, the newest version that isn't yanked. `yank`
+  changes only that (a yanked version is still installed when named exactly, as update and
+  the test install can).
+- **install, update and search** refresh an index older than an hour first; one that can't
+  be reached is used as it was, with a note. `search` reads friends' summaries from their
+  indexes and downloads nothing.
+- **The Packages tab** shows every store's packages, a friend's as `danika/kittystory`,
+  once its archive is downloaded: the tab never waits on the network while it draws. `R`
+  refreshes every store and downloads their newest archives in a thread; until then a line
+  says how many wait. `R refresh` shows in the list's head only when there is a friend's
+  store.
+- **Publish** says when an app's data format is newer than an extra's in the store: every
+  install of that extra beside the app would be migrated.
+
+**Not built:** reading a private store through `gh` (sharing.md: when someone needs it);
+`hpm show` of a friend's package (it shows your own store's).

@@ -77,7 +77,8 @@ def tab_of(installs):
     return PackagesTab(installs.watch, installs.catalog, installs.installed,
                        installs.plan_install, installs.plan_remove, installs.go,
                        installs.stop, installs.back, installs.migration_go,
-                       installs.migration_cancel)
+                       installs.migration_cancel, installs.refresh, installs.unfetched,
+                       installs.store_notes)
 
 
 def panel_of(installs, *more):
@@ -154,8 +155,10 @@ def test_the_list_at_80_and_120_columns(world, store):
         shown = session(panel, script, columns=columns)
         assert shown[1].startswith(" local · 2 packages")
         assert "installed here: 0" in shown[1]
-        assert shown[2].startswith("▸ [ ]   kittycalc")         # sorted by name
-        assert shown[3].startswith("  [ ] ▸ kittystory")
+        top = 3 if columns == 80 else 2                     # at 80 the keys fold below
+        assert "u updates · i installed · / find" in shown[top - 1]
+        assert shown[top].startswith("▸ [ ]   kittycalc")       # sorted by name
+        assert shown[top + 1].startswith("  [ ] ▸ kittystory")
         assert all(len(row) <= columns for row in shown)
         assert any("needs the web addon" in row for row in shown) is False   # web.py exists
 

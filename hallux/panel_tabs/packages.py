@@ -58,11 +58,16 @@ class PackagesTab(Tab):
                  installed: Callable[[], dict], plan_install: Callable, plan_remove: Callable,
                  go: Callable[[dict], None], stop: Callable[[], None],
                  back: Callable[[], None], migration_go: Callable[[], None] = lambda: None,
-                 migration_cancel: Callable[[], None] = lambda: None) -> None:
+                 migration_cancel: Callable[[], None] = lambda: None,
+                 refresh: Callable[[], None] = lambda: None,
+                 unfetched: Callable[[], dict] = dict,
+                 store_notes: Callable[[], list] = list) -> None:
         self.watch, self.catalog, self.installed = watch, catalog, installed
         self.plan_install, self.plan_remove = plan_install, plan_remove
         self.go, self.stop, self.back = go, stop, back
         self.migration_go, self.migration_cancel = migration_go, migration_cancel
+        self.refresh, self.unfetched, self.store_notes = refresh, unfetched, store_notes
+        self.refreshing = False                          # R: read the list again once it lands
         self.looking = False                             # l: the staged files, at the checks
         self.scrolled = 0                                # ↑ ↓ on a migration's screens
         self.view = STORE
@@ -78,6 +83,7 @@ class PackagesTab(Tab):
         self.problem: str | None = None                  # the store couldn't be read
         self.top = 0
         self.lines_drawn = 0
+        self.rows_at = 2
         self.body = Window(FormattedTextControl(self._text, focusable=True,
                                                 get_cursor_position=self._cursor),
                            always_hide_cursor=True, wrap_lines=False)
@@ -176,7 +182,7 @@ class PackagesTab(Tab):
         kept = self.choices
         self.choices = {}
         for entry in self.entries:
-            old = kept.get(entry.name)
+            old = kept.get(entry.shown)
             notes = []
             if entry.installed:
                 notes.append(f"installed {entry.installed} ↑" if entry.newer else "installed ✓")
@@ -188,8 +194,8 @@ class PackagesTab(Tab):
             extras = old.extras if old else (
                 {k: k in record.get(entry.name, {}).get("extras", []) for k in entry.manifest.extras}
                 if entry.installed else {})
-            self.choices[entry.name] = Choice(
-                entry.name, entry.manifest, ticked=old.ticked if old else False, extras=extras,
+            self.choices[entry.shown] = Choice(
+                entry.shown, entry.manifest, ticked=old.ticked if old else False, extras=extras,
                 labels=entry.labels, note=" · ".join(notes), bad=bool(entry.problems),
                 card=list(entry.card), review=list(entry.review))
         self._rebuild()
@@ -204,7 +210,7 @@ class PackagesTab(Tab):
             word = self.word.lower()
             if word and word not in entry.name.lower() and word not in entry.manifest.summary.lower():
                 continue
-            out.append(self.choices[entry.name])
+            out.append(self.choices[entry.shown])
         return out
 
     def _rebuild(self) -> None:
@@ -241,9 +247,14 @@ class PackagesTab(Tab):
     def _lines(self, seen: Seen) -> list[list]:
         if self.model is None:
             self._read()
+        if self.refreshing and seen.state in (LISTING, FAILED):
+            self.refreshing = False
+            self._read(fresh=True)
         if seen.state == PLANNING:
             if seen.merging:
                 return [[("bold", " The AI is merging the memory files…")]]
+            if seen.doing == "refresh":
+                return [[("bold", " Downloading the stores' indexes and their packages…")]]
             what = "removing" if seen.doing == "remove" else "installing"
             return [[("bold", f" Working out what {what} would write…")]]
         if seen.state == MIGRATING:
@@ -267,18 +278,35 @@ class PackagesTab(Tab):
         if self.problem:
             return [[(LOUD, f" The store can't be read: {self.problem}")]]
         here = sum(1 for e in self.entries if e.installed)
-        head = f" local · {len(self.entries)} package{'s' * (len(self.entries) != 1)}"
+        stores = sorted({e.where for e in self.entries} | set(self.unfetched()) | {"local"},
+                        key=lambda where: (where != "local", where))
+        count = len(self.entries)
+        head = f" {' + '.join(stores)} · {count} package{'s' * (count != 1)}"
+        refresh = " · R refresh" if len(stores) > 1 else ""
         view = f" · {self.view}" if self.view != STORE else ""
         found = f" · “{self.word}”" if self.word else ""
-        lines = [[("bold", head + view + found), (NOTE, f"    installed here: {here}    "
-                                                         f"+ - all · u updates · i installed · / find")],
-                 []]
+        keys = f"+ - all · u updates · i installed · / find{refresh}"
+        first = head + view + found + f"    installed here: {here}"
+        if len(first) + 4 + len(keys) < self._width():
+            lines = [[("bold", head + view + found),
+                      (NOTE, f"    installed here: {here}    {keys}")], []]
+        else:                                            # too narrow: the keys go below
+            lines = [[("bold", head + view + found), (NOTE, f"    installed here: {here}")],
+                     [(NOTE, f" {keys}")], []]
+        for where, count in sorted(self.unfetched().items()):
+            lines.insert(1, [(NOTE, f" {where}: {count} package{'s' * (count != 1)} not "
+                                    f"downloaded yet · R downloads them")])
+        for note in self.store_notes():
+            lines.insert(1, [(WARNED, f" {note}")])
+        if not self.entries and self.unfetched():
+            return lines
         if not self.entries:
             return lines + [[(NOTE, " The store has no packages yet: hpm publish puts one there, "
                                     "from your terminal.")]]
         if not self.model.choices:
             return lines + [[(NOTE, " Nothing here in this view.")]]
         self.model.summary_width = max(12, min(40, self._width() - 62))
+        self.rows_at = len(lines)                        # where the rows start, for the scroll
         for i, row in enumerate(self.model.rows()):
             mark = [("reverse", "▸")] if i == self.model.cursor else [("", " ")]
             lines.append(mark + [("", " ")] + _styled(row))
@@ -330,10 +358,10 @@ class PackagesTab(Tab):
         lines += [[]] if seen.said else []
         for item in plan.items:
             if item.blocked:
-                lines.append([(LOUD, f" ✗ {item.name}: {item.blocked}")])
+                lines += self._wrapped(LOUD, f"✗ {item.name}: {item.blocked}")
                 continue
             if item.skip:
-                lines.append([(NOTE, f" – {item.name}: {item.skip}")])
+                lines += self._wrapped(NOTE, f"– {item.name}: {item.skip}")
                 continue
             if seen.doing == "remove":
                 gone = sum(1 for a in item.actions if a.op == "remove")
@@ -416,7 +444,7 @@ class PackagesTab(Tab):
         seen, row = self.watch(), 0
         if seen.state == LISTING and self.model is not None and self.model.viewing is None \
                 and self.model.choices and not self.problem:
-            row = 2 + self.model.cursor
+            row = self.rows_at + self.model.cursor
         elif seen.state == ASKING and self._has_questions():
             row = self.lines_drawn - len(self.questions.rows()) - 4 + self.questions.cursor
         return Point(0, max(0, min(row, self.lines_drawn - 1)))
@@ -455,6 +483,7 @@ class PackagesTab(Tab):
         kb.add("i", filter=listing)(to(lambda: self._switch(HERE)))
         kb.add("/", filter=listing)(to(self._open_row))
         kb.add("r", filter=listing)(to(self._remove))
+        kb.add("R", filter=listing)(to(self._refresh))
         kb.add("enter", filter=listing)(to(self._install))
         kb.add("up", filter=viewing)(to(lambda: self.model._scroll(-1)))
         kb.add("down", filter=viewing)(to(lambda: self.model._scroll(1)))
@@ -503,6 +532,10 @@ class PackagesTab(Tab):
             self.looking, self.scrolled = False, 0
             self.migration_cancel()
 
+    def _refresh(self) -> None:
+        self.refreshing = True
+        self.refresh()
+
     def _switch(self, view: str) -> None:
         self.view = STORE if self.view == view else view
         self._rebuild()
@@ -518,10 +551,11 @@ class PackagesTab(Tab):
         if not self.model or not self.model.choices:
             return
         choice, _ = self.model.here()
-        if choice.name not in self.installed():
-            self.host.say(f"{choice.name} isn't installed here")
+        name = choice.name.rsplit("/", 1)[-1]             # danika/kittystory: kittystory
+        if name not in self.installed():
+            self.host.say(f"{name} isn't installed here")
             return
-        self.plan_remove(choice.name)
+        self.plan_remove(name)
 
     def _answer(self, answer: str) -> None:
         if self._has_questions():
