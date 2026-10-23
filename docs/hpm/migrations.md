@@ -1,7 +1,7 @@
 # Migrations: when an app changes how it stores its data
 
-**Status:** design declared done by the user 2026-10-23. No code; the plan is in
-[docs/plans/hpm/](../plans/hpm/README.md), step 7. Every question is decided, all as
+**Status:** design declared done by the user 2026-10-23, and **built** the same day
+([docs/plans/hpm/](../plans/hpm/README.md), step 7; [As built](#as-built) at the end). Every question is decided, all as
 recommended ([Decisions](#decisions)). It builds on [hpm.md](hpm.md), whose three kinds of
 files (`app`, `seed`, `data`) it takes as given. Changed after the review of 2026-10-23
 ([docs/hpm-review-2026-10-23.md](../hpm-review-2026-10-23.md), taken as recommended): the
@@ -189,3 +189,30 @@ recommended").
 | 3. How long do backups stay? | Until you remove them; `hpm list` shows their size |
 | 4. Does "accept" have a time limit, so the old files don't stay forever? | No. The old paths stay until you accept or roll back; `hpm list` reminds you |
 | 5. Where does the AI write a migration's new files? (the plan's decision 8, confirmed 2026-10-23) | Into a staging folder under `/.hallux/hpm/staging/`; Hallux's code lands them when you accept |
+
+## As built
+
+Built 2026-10-23 in `hallux/hpm/migrate.py` (the notes, the staging disk, one package's
+migration) and `prompts/{migrate,write-migration}.md`; plan step 7's "As built" has the
+details. What the code does differently from this document:
+
+- **One backup for an update and its migrations** (section 5): the first migration takes it,
+  the install after it adds to it, so one rollback brings back the old data and the old
+  version together. A migration you cancel takes its package out of it again.
+- **The order:** incoming data is migrated first, then every question of the install is
+  asked, then the world's data is migrated, and only then is anything installed.
+- **Each note is two sessions of the AI,** the plan (it can't write) and the migration, each
+  ending in JSON hpm reads; one it can't read goes back to the AI once. Before the first, hpm
+  asks (the model and the cap); without a terminal, `--accept-migration` lets it run and
+  accepts only when every check held.
+- **A note** needs its line `Old paths…:` (`none` is allowed); hpm refuses an old path that
+  is `~/` or `/` themselves, a whole top folder, or under `/.hallux`. At accept, an old file
+  that another package's record holds stays.
+- **The staging disk** reads `~/` as the user's home, writes only under the new layout's
+  data paths, and holds at most 10,000 files and 512 MB.
+- **Publish** refuses a hole in the chain of notes from the format of any earlier release,
+  and offers the AI's note when the data moved without one (`--write-migration`); it also
+  says when an extra of the app is in an older format than the app.
+- **The machine is told** where the data went (`data_migrated` in `<installed>`).
+- **Not built:** `--force` for an older app on newer data (decision 2); newer data in the
+  world is refused.

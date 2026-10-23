@@ -46,3 +46,24 @@ addon:
 ## Done when
 
 The manual and the docs are written and committed; what is left is the user's live run.
+
+## As built
+
+Written 2026-10-23. What is left is the user's live run, with
+[live-run-checklist.md](live-run-checklist.md) (11 points; points 1 and 7 are the paid runs
+of steps 6 and 7, point 9 step 8's run with a GitHub account).
+
+- **The manual** (`hallux/prompt.md`) got three passages and nothing else: `<installed>`
+  beside `<imported>` (what each package's fields mean, `data_migrated` among them, and
+  that its files are read from the disk before they are used); under MEMORY, that a line
+  ending in `[hpm <name> <version>]` is hpm's, kept as it is; under PROGRAMS, that the
+  machine doesn't install hpm packages or write install files for them, and points the user
+  to `hpm init`, `hpm publish` and `hpm push`.
+- **The docs:** `README.MD` has a section "Packages: `hpm`" under Usage, the Ctrl+F12 row
+  names the Packages tab, the project layout has `hpm/` and `packages.py`, and the
+  documentation list has `docs/hpm/`. `docs/concept.md` has `.hallux/hpm/` in the folder's
+  picture. `docs/hpm/hpm.md` starts with "Using it"; each of the three design documents
+  ends with "As built" (what the code does differently, and what isn't built), and the
+  README of `docs/hpm/` says it is built.
+- **Not tried with a real model:** that the machine's AI reads `<installed>` and the
+  `[hpm …]` lines as the manual now says; that is points 5 and 10 of the checklist.

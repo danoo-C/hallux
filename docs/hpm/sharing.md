@@ -1,7 +1,8 @@
 # Sharing packages with friends
 
-**Status:** design declared done by the user 2026-10-23. No code; the plan is in
-[docs/plans/hpm/](../plans/hpm/README.md), step 8. Every question is decided, all as
+**Status:** design declared done by the user 2026-10-23, and **built** the same day, public
+stores only ([docs/plans/hpm/](../plans/hpm/README.md), step 8; [As built](#as-built) at the
+end). Its run with a real GitHub account is the user's, still to do. Every question is decided, all as
 recommended ([Decisions](#decisions)). It builds on [hpm.md](hpm.md) (packages, the store on
 your PC, publishing) and [migrations.md](migrations.md). Changed after the review of
 2026-10-23 ([docs/hpm-review-2026-10-23.md](../hpm-review-2026-10-23.md), taken as
@@ -172,3 +173,28 @@ recommended").
 | 3. Is `gh` (GitHub's command line) needed, or does hpm talk to GitHub itself? | **`gh`** for pushing; reading a public store needs nothing but downloads |
 | 4. Is the AI's review of a card a hard stop? | No, it is shown, and you decide. It is also shown to whoever installs |
 | 5. Does a store name have to be your GitHub name? | No, you choose it when you make the store (`hpm store init danika`) |
+
+## As built
+
+Built 2026-10-23 in `hallux/hpm/remote.py` and the store, the engine, the command and the
+Packages tab; plan step 8's "As built" has the details. What the code does differently from
+this document:
+
+- **The commands:** `hpm store init NAME --repo OWNER/REPO`, `hpm store add NAME ADDRESS`,
+  `hpm store list | remove NAME | refresh [NAME]`, `hpm push NAME… [--all]`, `hpm yank NAME
+  VERSION`. `--store S` picks one of your stores if you have several.
+- **Your store's clone** is `mine/<name>/` with `mine/<name>.toml` naming its repository; a
+  friend's store is `stores/<name>/` (`index.toml`, `source.toml`).
+- **The index** keeps `sha256` as bare hex and `latest` as the newest version that isn't
+  yanked; one GitHub release and one commit of the index per package pushed.
+- **A friend's archive** downloads when it is first needed, into `cache/`, and is checked
+  against the index's sha256 and its own name and version every time it is used. Extras
+  come from the same store as their app, else from your own.
+- **An index older than an hour** is refreshed by `install`, `update` and `search`; one that
+  can't be reached is used as it was, with a note.
+- **Push** refuses private packages and a version pushed already, shows the review made at
+  publish, can have the AI make one when there is none (`--review`, in a world), and pushes
+  a card whose review found something only on yes (`--yes`).
+- **The Packages tab** shows a friend's packages once downloaded (`danika/kittystory`);
+  `R` downloads them in a thread, so the tab never waits on the network.
+- **Not built:** reading a private store through `gh`, and `hpm show` of a friend's package.

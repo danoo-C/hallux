@@ -8,16 +8,19 @@ each time.
 **The design is done** (the user, 2026-10-23: "the design doc can be declared done"). Every
 question is decided, all as recommended (the user, 2026-10-23: "i read trogh the questions
 and go all recommended"). The step plan for building it: [docs/plans/hpm/](../plans/hpm/README.md).
-No code yet. A review of the design and the plan on 2026-10-23
+**Built** 2026-10-23, all nine steps, in `hallux/hpm/` and the panel's Packages tab; each
+document has an "As built" at its end, and each step of the plan its own. What is left is the
+user's live run ([the checklist](../plans/hpm/live-run-checklist.md)), the paid runs of plan
+steps 6 and 7, and step 8's run with a GitHub account. A review of the design and the plan on 2026-10-23
 ([docs/hpm-review-2026-10-23.md](../hpm-review-2026-10-23.md)) found things that would break
 against the code and the worlds, and gaps; the user took all its recommendations ("go all
 recommended"), and they are written into all three documents and the plan.
 
 | Document | What it is | Status |
 |---|---|---|
-| [hpm.md](hpm.md) | Packages, the store on your PC, publishing, installing with options, many packages at once, conflicts, what a world remembers of it, telling the machine, the panel's Packages tab | Done; 8 questions decided |
-| [migrations.md](migrations.md) | When an app changes how it stores its data: data formats, migrations the AI writes and runs, the backup and the checks around it | Done; 4 questions decided |
-| [sharing.md](sharing.md) | Publishing to friends: stores on GitHub, `hpm push`, privacy, and packages as instructions to the AI | Done; 5 questions decided |
+| [hpm.md](hpm.md) | Packages, the store on your PC, publishing, installing with options, many packages at once, conflicts, what a world remembers of it, telling the machine, the panel's Packages tab | Done; 8 questions decided; built |
+| [migrations.md](migrations.md) | When an app changes how it stores its data: data formats, migrations the AI writes and runs, the backup and the checks around it | Done; 5 questions decided; built (but `--force`) |
+| [sharing.md](sharing.md) | Publishing to friends: stores on GitHub, `hpm push`, privacy, and packages as instructions to the AI | Done; 5 questions decided; built (public stores only) |
 
 ## Where it came from
 

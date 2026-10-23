@@ -1,7 +1,8 @@
 # hpm: packages for Hallux worlds
 
-**Status:** design declared done by the user 2026-10-23. No code; the plan is in
-[docs/plans/hpm/](../plans/hpm/README.md). Every question is decided, all as recommended
+**Status:** design declared done by the user 2026-10-23, and **built** the same day, plan
+steps 1 to 5 and the AI of step 6 ([docs/plans/hpm/](../plans/hpm/README.md); what the code
+does differently is in [As built](#as-built) at the end). Every question is decided, all as recommended
 ([Decisions](#decisions)). Changed after the review of 2026-10-23
 ([docs/hpm-review-2026-10-23.md](../hpm-review-2026-10-23.md), all its recommendations
 taken by the user: "go all recommended"): kittystory's real files (section 2), a file two
@@ -9,6 +10,22 @@ kinds match (section 3), `danika/` for a whole store (section 6a), apps installe
 (section 7a), the Packages tab's key `g` (section 10), and smaller points. Migrations are in
 [migrations.md](migrations.md), sharing with friends in [sharing.md](sharing.md); this
 document is the rest.
+
+## Using it
+
+```bash
+hpm init kittystory                    # in the world it was built in: the AI drafts hpm.toml
+hpm publish kittystory --all           # a release of it and its extras into your PC's store
+hpm install kittystory                 # in another world: checkboxes, then the questions
+hpm update                             # everything this world has that is newer
+hpm list                               # what it has, and what is newer
+hpm rollback kittystory                # undo its last install, update or remove
+hpm adopt kittystory                   # an app this world got before hpm, recorded
+```
+
+Without `--world W`, hpm works on the world you are in. In a running world use the panel's
+Packages tab instead: Ctrl+F12, then `g`. Every question has a flag for scripts
+(`hpm install --help`).
 
 ## In short
 
@@ -487,3 +504,45 @@ Packages tab forward to step 5. The order as this design first had it:
 6. Stores on GitHub, `hpm push` ([sharing.md](sharing.md)).
 7. The panel's Packages tab, and the note to a running machine.
 8. The manual, the docs, a live run with kittystory between two worlds.
+
+## As built
+
+Built 2026-10-23 in `hallux/hpm/` (`manifest.py`, `archive.py`, `world.py`, `store.py`,
+`publish.py`, `record.py`, `engine.py`, `screens.py`, `cli.py`, `running.py`, `ai.py`,
+`assist.py`, `prompts/`) and `hallux/panel_tabs/packages.py`. Each step of the plan has its
+own "As built" with the details; what the code does differently from this document:
+
+- **Versions:** `1.4` and `1.4.0` are one version; a leading zero is refused. A pattern's
+  `**` at the end is what is inside the folder, not the folder.
+- **The archive** keeps no modes and no owners, and its layout is strict (`hpm.toml`,
+  `CHANGELOG.md`, `review.md`, `files/`, `migrations/`); it is read twice at unpack, once to
+  check, once to write.
+- **Publish** suggests the next version (`--yes` takes it), opens the changelog entry in
+  `$EDITOR` (or `--changelog`, or the AI's draft with `--draft`), asks about privacy for a
+  data package (`--private`), and adopts its own world afterwards, so `hpm list` there shows
+  what was published. A clean seed at `/usr/local/share/hpm/<name>/seed/<path>` is published
+  in place of the world's own. The AI's review of the card is asked for (`--review`), not
+  always made: it costs a call each time.
+- **Install:** every question is answered before anything is written; without a terminal
+  each needs its flag (`--extras`, `--overwrite all|none`, `--old-line replace|keep`,
+  `--user`, `--yes`). "Merge" is offered for `memory.md` and `shared.md`: the AI merges,
+  hpm refuses a merge that drops a line, and you see the text before it is written. An
+  extra that is installed already at the same version is left alone.
+- **A NAME** is `kittystory`, `local/kittystory` or `danika/kittystory`, `local/` or
+  `danika/` for a whole store; a name in two stores is asked about.
+- **The world's record** keeps each package's memory line, rules, home and store (`from`);
+  a package that failed in the middle is marked `incomplete` and counts as new.
+- **A running world:** Hallux writes `.hallux/running` (`{"pid", "start"}`) while it runs,
+  and the terminal hpm refuses install, update, remove and rollback there. The memory is
+  changed under one lock, so the machine's own edit and hpm's line never cross.
+- **The Packages tab** is `g`, counts as typing while it asks (so `o s k f r m` are answers
+  there), shows every store's packages, `R` refreshes friends' stores in a thread, and
+  `<installed>` reaches the machine with the next line: names, versions, places, and
+  `data_migrated` when a migration moved its data. The machine's manual
+  (`hallux/prompt.md`) says what to do with it, and with the `[hpm …]` lines in memory.
+- **hpm's AI** runs with the store's `config.toml` (`model`, `effort`, `cap_usd`,
+  `base_world`; default the world's model, `medium`, $1.00 a session), always after a
+  question that names the model and the cap; the tests can't reach it
+  (`HALLUX_NO_REAL_MODEL`).
+- **Not built:** a world with several users can't be planned from the Packages tab (the
+  terminal's `--user` can).
