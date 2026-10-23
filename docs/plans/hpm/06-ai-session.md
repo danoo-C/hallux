@@ -26,7 +26,8 @@ it prints the cost, and the log of the world gets a line.
 | `merge` | the two files | nothing | the merged text; hpm writes it, after showing it |
 | `review` | the card and the manifest | nothing | a list: what reaches beyond the package's paths, rules, memory, other cards |
 
-**`hpm init NAME`:** asks the AI for a manifest from the card `/usr/local/bin/<name>` and the
+**`hpm init NAME`** (it works on a running world: it writes only the manifest, under
+`/usr/local/share/hpm/<name>/`): asks the AI for a manifest from the card `/usr/local/bin/<name>` and the
 memory's line about it, shows it, opens `$EDITOR` on it, checks it again, saves it. It
 suggests the extras (packs, characters, memories) and marks a memories package private
 (sharing.md section 3), and asks the AI for a clean seed where a seed holds a chat.
@@ -34,7 +35,11 @@ suggests the extras (packs, characters, memories) and marks a memories package p
 **Publish** (step 2) now offers the AI's changelog draft, and, with `--test`, the test
 install (decision 17): a copy of `base_world` from the store's `config.toml` into a temporary
 folder, `hpm install` into it with every default extra, then `run_script` with the app's name
-as the only line, the screen and the cost shown. The copy is removed afterwards.
+as the only line, the screen and the cost shown. The copy is removed afterwards. It is a
+whole machine (a boot, then the line), so it costs more than a job: it runs on the copy's
+own `config.toml` with the model and effort of hpm's `config.toml` put in, and with hpm's
+cap as the boot's `max_budget_usd` (a setting `Hardware` has already). The question before
+it says that it is a boot and a line, and the cap.
 
 **Merge** comes into the conflict screens of step 4 and the tab: for `memory.md` and
 `shared.md`, `m` shows the merged text before it is written.
@@ -50,7 +55,8 @@ All with a stand-in client; no model is called.
   refused; no `remove`, no `memory_edit`).
 - The cap reaches the session's options; the cost is printed.
 - `init`: a bad manifest from the AI shown to it once, then to the user.
-- The test install: the copy made and removed, the one line typed, the screen shown.
+- The test install: the copy made and removed, the one line typed, the screen shown; the
+  model, effort and cap of hpm's `config.toml` in the copy's `Hardware`.
 - Merge: the merged text shown, written only after yes.
 
 ## Done when

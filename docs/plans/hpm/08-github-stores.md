@@ -18,11 +18,11 @@ it reads.
 
 | Command | What |
 |---|---|
-| `hpm store init NAME --repo OWNER/REPO` | makes the repository with `gh repo create` (public, sharing.md decision 1), an empty `index.toml` and a README saying how to add the store |
-| `hpm store add NAME URL` | downloads `index.toml` into `stores/NAME/` |
+| `hpm store init NAME --repo OWNER/REPO` | makes the repository with `gh repo create` (public, sharing.md decision 1), an empty `index.toml` and a README saying how to add the store, and clones it into `mine/NAME/` for `push` |
+| `hpm store add NAME URL` | `URL` is the repository's address as the browser shows it (`https://github.com/<owner>/<repo>`). hpm asks GitHub's API for its default branch (`https://api.github.com/repos/<owner>/<repo>`, no sign-in needed for a public one) and downloads `https://raw.githubusercontent.com/<owner>/<repo>/<branch>/index.toml` into `stores/NAME/` |
 | `hpm store list` / `hpm store remove NAME` | |
 | `hpm store refresh [NAME]` | downloads the indexes again; `install`, `update` and `search` refresh one older than an hour |
-| `hpm push NAME… [--all]` | sharing.md section 2: refuses private packages, shows the review (step 6) when it found something, `gh release create <name>-<version>` with the archive, the index updated, committed and pushed with `git` |
+| `hpm push NAME… [--all]` | sharing.md section 2: refuses private packages, shows the review (step 6) when it found something, `gh release create <name>-<version>` with the archive, the index updated in `mine/<store>/` (pulled first), committed and pushed with `git`; the last line says GitHub may show the old index for a few minutes |
 | `hpm yank NAME VERSION` | marks it in the index; installs skip it unless named exactly |
 
 **Installing from a store:** `Store.find` looks in `local/` and every store; `store/name`
@@ -31,11 +31,13 @@ into `cache/`, and its sha256 must be the index's or it is deleted and refused. 
 keeps the store, and `hpm update` takes the next version from the same one.
 
 **Network:** HTTPS only, with `urllib`, a time limit, and a clear error when GitHub can't be
-reached. `gh` and `git` must be installed for `store init` and `push`; hpm says how when
+reached. **Public stores only** in this step (sharing.md section 1): a store that answers
+"not found" or asks for a sign-in is an error that says so; reading a private store through
+`gh` comes when someone needs it. `gh` and `git` must be installed for `store init` and `push`; hpm says how when
 they aren't, and never asks for a token itself.
 
-**The Packages tab** shows every store's packages, the store's name on each row, and a
-`refresh` key.
+**The Packages tab** shows every store's packages, the store's name on each row, and `R`
+to refresh (an uppercase letter, so no tab's key).
 
 ## Tests
 
@@ -45,7 +47,10 @@ commands that record what they were asked.
 - `index.toml` written and read back; the same index from the same releases.
 - Push: private refused, the review shown, the release and index commands, a version pushed
   twice refused.
-- Add, refresh, remove; a stale index refreshed; a broken index refused.
+- Add from a repository's address: the default branch asked for, the raw address built;
+  refresh, remove; a stale index refreshed; a broken index refused; a private store's
+  answer told as such.
+- `store init` makes the clone in `mine/`; push pulls it first.
 - Install from a store: the checksum checked (a changed archive refused), the cache, a yanked
   version skipped, a name in two stores asked about, the record's store, update from it.
 

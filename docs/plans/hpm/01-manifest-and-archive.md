@@ -24,13 +24,16 @@ Nothing reads a world or writes one yet.
 | `files.app`, `files.seed`, `files.data` | lists of patterns |
 | `extras.<key>` | `package`, `default`, `needs` (other extras' keys) |
 | `for` | a data package's app |
-| `bundle` | a list of package names; a bundle has no `files` |
+| `bundle` | a list of package names; a bundle has no `files`, but a `version` like any package |
 | `private` | true or false; missing means false |
 | `rules` | a list of lines, for a rules extra (hpm.md decision 5) |
 
 - Every problem is found and told at once, as `gui`'s layouts are checked: unknown keys,
   wrong types, an extra that needs one that doesn't exist, needs that go round in a circle,
-  a bundle with files, a pattern in two kinds.
+  a bundle with files or without a version, the same pattern written in two kinds.
+- **A file two kinds match** (hpm.md section 3) isn't a problem: `kind_of(path)` gives the
+  narrower kind, `data` before `seed` before `app`. So the design's own manifest, with
+  `state.json` as a `seed` inside the `app` folder, is good.
 - **Patterns.** `/` or `~/` in front, then a path; `*` within a name and `**` for any depth.
   No `..`, nothing under `/.hallux`, nothing under `/proc`-like names the machine invents
   (`/proc`, `/sys`, `/dev`). `match(pattern, path)` and `expand(pattern, files)` work on
@@ -50,6 +53,8 @@ Nothing reads a world or writes one yet.
 ## Tests
 
 - Good manifests: an app, a data package, a bundle, a rules extra; their defaults.
+- `kind_of`: `state.json` under the app's `**` is a `seed`; a file only `app` matches is
+  `app`; a file no pattern matches has no kind.
 - Every check, and all problems at once.
 - Patterns: `*`, `**`, `~`, refused paths; `expand` over a list of paths.
 - Versions: 1.4 < 1.10 < 2.0; 1.4 == 1.4.0 is refused as ambiguous (one form only).
@@ -59,5 +64,6 @@ Nothing reads a world or writes one yet.
 
 ## Done when
 
-kittystory's manifest from hpm.md section 3, typed by hand, is read and checked, and a
-folder laid out as a package packs and unpacks to the same files.
+kittystory's manifest from hpm.md section 3 (as corrected by the review: its `seed` inside
+the `app` folder), typed by hand, is read and checked, and a folder laid out as a package
+packs and unpacks to the same files.

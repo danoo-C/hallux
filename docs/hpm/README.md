@@ -8,7 +8,10 @@ each time.
 **The design is done** (the user, 2026-10-23: "the design doc can be declared done"). Every
 question is decided, all as recommended (the user, 2026-10-23: "i read trogh the questions
 and go all recommended"). The step plan for building it: [docs/plans/hpm/](../plans/hpm/README.md).
-No code yet.
+No code yet. A review of the design and the plan on 2026-10-23
+([docs/hpm-review-2026-10-23.md](../hpm-review-2026-10-23.md)) found things that would break
+against the code and the worlds, and gaps; the user took all its recommendations ("go all
+recommended"), and they are written into all three documents and the plan.
 
 | Document | What it is | Status |
 |---|---|---|

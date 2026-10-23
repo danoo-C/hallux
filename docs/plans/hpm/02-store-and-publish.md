@@ -20,6 +20,7 @@ draft, the migration's offer, the test install) come with steps 6 and 7.
 config.toml        model, effort, cap_usd (step 6); base_world (step 6's test install)
 local/<name>/<version>.hpm
 stores/<store>/index.toml      (step 8)
+mine/<store>/                  a clone of your own store on GitHub (step 8)
 cache/<store>/<name>-<version>.hpm   (step 8)
 ```
 
@@ -36,6 +37,9 @@ parents, to the first with `.hallux/` in it.
 2. Collects the files its patterns match, through `Disk` (so nothing outside the world, and
    nothing in `/.hallux`, can get in). `~` patterns are read from the home of the world's
    user (step 3's `world_user`, written here). A pattern that matches nothing is an error.
+   Each file gets its kind by `kind_of` (step 1). A file that this package and one of its
+   extras both carry (their manifests are beside it in `/usr/local/share/hpm/`) stops the
+   publish, with the file's name.
 3. **Version:** higher than the store's latest. Without `--version` it suggests one: the
    last number up when only `app` files changed, the first number up when `data_format` went
    up, and asks.
@@ -53,6 +57,10 @@ parents, to the first with `.hallux/` in it.
    warning ("it may hold your own data now").
 8. Packs the folder (step 1) and adds it to the store.
 
+Publish writes into the world only under `/usr/local/share/hpm/<name>/` (the changelog
+here), so it works on a running world too (hpm.md section 10). Recording the release in the
+world it came from (hpm.md section 5) needs the world's record, and comes in step 4.
+
 `--all` publishes the package and each of its extras whose files changed since their last
 release, each with its own version and changelog question.
 
@@ -65,10 +73,12 @@ the files by kind and their sizes.
 - Finding the world from a folder deep inside it; refusing without one.
 - Publish: the files collected, `~` from the world's user, a pattern that matches nothing,
   a lower version, an empty changelog, data paths that moved, the privacy warning, the seed
-  warning; `--all` with one extra unchanged.
-- A publish never writes outside the store, but for the world's `CHANGELOG.md`.
+  warning; `--all` with one extra unchanged; a file both the app and an extra carry.
+- `state.json` inside the `app` folder is collected as a `seed`.
+- A publish never writes outside the store, but for the world's
+  `/usr/local/share/hpm/<name>/CHANGELOG.md`.
 
 ## Done when
 
 kittystory and its packs, published from a copy of `test-hallux` with a manifest written by
-hand, are in the store as two `.hpm` files, and `hpm show kittystory` lists them.
+hand from the world's real files (hpm.md section 2, as the review corrected it), are in the store as two `.hpm` files, and `hpm show kittystory` lists them.

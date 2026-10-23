@@ -30,14 +30,18 @@ addon:
 1. `hpm init kittystory` in `test-hallux`; the manifest read and fixed.
 2. `hpm publish kittystory --all`: four packages, memories private.
 3. Install into a copy of `oliver-test` from your terminal: checkboxes, a conflict on a pack.
+   `hpm list` in `test-hallux` shows what it published (the publish adopted it).
 4. In that world: `kittystory -w` works, with Emma, Lucy and Emilly.
-5. The same from the Packages tab of a running world; the AI knows the app at once.
+5. The same from the Packages tab of a running world (Ctrl+F12, `g`); the AI knows the app
+   at once, and the Files tab's `p` still opens its path row.
 6. A change by hand to a pack, then an update: asked about, not replaced.
 7. kittystory 2.0 with a new character layout: the migration, accept, every memory line still
    there; then `hpm rollback`.
-8. 15 packages at once from `danika/*` (or as many as there are): one conflicts screen.
+8. 15 packages at once from `danika/` (or as many as there are): one conflicts screen.
 9. Your store on GitHub, `hpm push`, and an install into a third world from its URL.
 10. `hpm remove kittystory`: the app gone, the data kept, the memory line gone.
+11. `hpm adopt kittystory` in a world that got kittystory the old way (an `.update` file):
+    the identical files recorded, the old memory line offered for replacing.
 
 ## Done when
 

@@ -1,8 +1,12 @@
 # Sharing packages with friends
 
-**Status:** design declared done by the user 2026-10-23. No code, no plan; every question
-is decided, all as recommended ([Decisions](#decisions)). It builds on [hpm.md](hpm.md) (packages,
-the store on your PC, publishing) and [migrations.md](migrations.md).
+**Status:** design declared done by the user 2026-10-23. No code; the plan is in
+[docs/plans/hpm/](../plans/hpm/README.md), step 8. Every question is decided, all as
+recommended ([Decisions](#decisions)). It builds on [hpm.md](hpm.md) (packages, the store on
+your PC, publishing) and [migrations.md](migrations.md). Changed after the review of
+2026-10-23 ([docs/hpm-review-2026-10-23.md](../hpm-review-2026-10-23.md), taken as
+recommended): where your store's clone is kept, which address a friend adds, public stores
+only at first, and a check at install that needs no AI.
 
 **Where it came from:** of three levels offered (only your PC; friends; a public store
 anyone can use), the user chose **level 2, friends**. A public store is left for later
@@ -56,8 +60,15 @@ latest = "1.0"
 ```
 
 **Who can see it.** A public repository can be read by anyone who has the link. A private
-one only by people you add on GitHub; they then sign in once (`gh auth login`) and hpm uses
-that. Which to use is decision 1: public.
+one only by people you add on GitHub; they would sign in once (`gh auth login`) and hpm
+would download through `gh`. Which to use is decision 1: public. The first version reads
+public stores only; reading a private one through `gh` comes when someone needs it.
+
+**The address a friend adds** is the repository's, as they would copy it from the browser
+(`https://github.com/<you>/hpm-store`). hpm asks GitHub for the repository's main branch
+and reads `index.toml` from there. GitHub serves such files from a cache for a few minutes,
+so right after a push a friend may still see the index as it was; a refresh a little later
+shows the new one.
 
 **More than one store.** You can add a friend's store as they add yours, and a group can
 share one store where everyone sends packages as a pull request and one person merges them.
@@ -80,8 +91,11 @@ hpm push kittystory            → to your GitHub store
 3. **Checks the card**, if the AI hasn't reviewed this version yet (section 4). What it
    finds is shown, and you decide whether to push anyway.
 4. Makes a GitHub release `kittystory-1.4` with the archive, through `gh`, and adds the
-   version to `index.toml` with its checksum.
-5. Says what it pushed, and the line a friend needs to add the store.
+   version to `index.toml` with its checksum. The index is changed in a clone of your store
+   that `hpm store init` made on your PC (`mine/danika/` in hpm's folder), then committed
+   and pushed with `git`.
+5. Says what it pushed, the line a friend needs to add the store, and that GitHub may
+   show the old index for a few minutes.
 
 A version that was pushed is never changed. A wrong release is followed by a fixed one
 (1.4.1), and `hpm yank kittystory 1.4` marks the bad one in the index, so nobody installs it
@@ -115,7 +129,11 @@ copied card is enough.
 - **At publish, the AI reviews the card** and lists anything that reaches beyond the app:
   files outside the package's own paths, changes to the world's rules, the machine's memory
   or other programs' cards. The review is saved with the release and shown to whoever
-  installs it.
+  installs it. It was made at the publisher's end, which is fine between friends.
+- **At install, hpm's own code checks what needs no AI,** at the installer's end: a package
+  that writes a file the machine reads at every boot (`/etc/passwd`, `/etc/motd`,
+  `/etc/hostname`, `.bashrc` and the rest of `BOOT_FILES` in `hallux/disk.py`) or another
+  program's card in `/usr/local/bin` is shown loudly on the install screen, as rules are.
 - **Rules are loud.** A package that carries rules (hpm.md, decision 5) says so in red
   on the install screen.
 - **A package can only write what its manifest lists**, and never into `/.hallux` (except
@@ -129,8 +147,9 @@ copied card is enough.
 
 ## 5. Names
 
-In a friend's world, packages are named by store: `danika/kittystory`. `hpm install
-kittystory` works when only one store has the name, and asks otherwise. The world's record
+In a friend's world, packages are named by store: `danika/kittystory`, and `danika/` alone
+means every package of the store (hpm.md section 6a). `hpm install kittystory` works when
+only one store has the name, and asks otherwise. The world's record
 remembers which store a package came from, so `hpm update` takes the next version from the
 same store.
 

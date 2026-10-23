@@ -1,8 +1,14 @@
 # hpm: packages for Hallux worlds
 
-**Status:** design declared done by the user 2026-10-23. No code, no plan. Every question is
-decided, all as recommended ([Decisions](#decisions)). Migrations are in [migrations.md](migrations.md), sharing with
-friends in [sharing.md](sharing.md); this document is the rest.
+**Status:** design declared done by the user 2026-10-23. No code; the plan is in
+[docs/plans/hpm/](../plans/hpm/README.md). Every question is decided, all as recommended
+([Decisions](#decisions)). Changed after the review of 2026-10-23
+([docs/hpm-review-2026-10-23.md](../hpm-review-2026-10-23.md), all its recommendations
+taken by the user: "go all recommended"): kittystory's real files (section 2), a file two
+kinds match (section 3), `danika/` for a whole store (section 6a), apps installed before hpm
+(section 7a), the Packages tab's key `g` (section 10), and smaller points. Migrations are in
+[migrations.md](migrations.md), sharing with friends in [sharing.md](sharing.md); this
+document is the rest.
 
 ## In short
 
@@ -20,7 +26,7 @@ friends in [sharing.md](sharing.md); this document is the rest.
    identical (skipped) or different (you choose: overwrite, skip, keep both).
 6. **A world remembers what it installed.** That makes `update`, `remove` and `list`
    possible, and an update can tell a file you changed from one it may replace.
-7. **Many packages install as one.** A whole store (`danika/*`) or a bundle goes through
+7. **Many packages install as one.** A whole store (`danika/`) or a bundle goes through
    one checkbox screen, one conflicts screen and one backup (section 6a).
 
 ---
@@ -41,17 +47,23 @@ other worlds on your PC and into your friends' worlds, and keeping them up to da
 
 ## 2. What an app is today
 
-kittystory in `test-hallux` is spread over four places:
+kittystory in `test-hallux` is spread over four places (as the world had it on 2026-10-23):
 
 | Piece | Where it lives |
 |---|---|
 | The card (what the AI follows when you type `kittystory`) | `/usr/local/bin/kittystory` |
-| The web app | `/usr/local/share/apps/kittystory/**` (`index.html`, `app.js`, `sprites/`, …) |
+| The web app | `/usr/local/share/apps/kittystory/**` (`index.html`, `app.js`, `faces.js`, `style.css`, `app.json`) |
+| The characters' sprites | in the web app's folder: `/usr/local/share/apps/kittystory/sprites/{emma,lucy,emilly,cat}.svg` |
 | Its first state, and later the chat history | `/usr/local/share/apps/kittystory/data/state.json` |
-| Packs | `~/.kittystory/packs/*.pack` |
-| Characters | `~/.kittystory/chars/<Name>/{char.md, looks.md, sprite.prev.svg}`, `places/`, `me/` |
+| Packs | `~/.kittystory/packs/*.pack` (`tsundere`, `sensitive-sweetheart`, `dirty`) |
+| Characters | `~/.kittystory/chars/<Name>/char.md` (folders `Emma`, `Lucy`, `emilly`) |
+| The scene and how things look | `~/.kittystory/scene.md` (who is where), `~/.kittystory/assets/{places,things}.md` |
 | Memories | `~/.kittystory/chars/<Name>/memory.md`, `~/.kittystory/shared.md` |
 | What the machine knows about it | one line under "Invented programs" in `/.hallux/memory.md` |
+
+The sprites are the one awkward piece: they belong to the characters, but live in the app's
+folder, so they travel with the app (section 3). An app that wants its characters to travel
+alone keeps their sprites beside them, under `~/.kittystory/`.
 
 Today the machine moves all this with files it writes itself, like `kittystory-web.update`:
 a README the AI follows in the target world, step by step. That works, but each install
@@ -104,6 +116,11 @@ memories   = { package = "kittystory-memories", default = false, needs = ["chara
 | `seed` | copied only if missing | never touched |
 | `data` | copied, conflicts asked (section 7) | never overwritten; changed only by a migration ([migrations.md](migrations.md)) |
 
+**A file two kinds match** takes the narrower kind: `data` before `seed` before `app`. So
+`app = ["/usr/local/share/apps/kittystory/**"]` with `seed = [".../data/state.json"]` means
+"the app's folder, but its first state only if missing". Two packages of the same app (the
+app and its extras) may not carry the same file: publish refuses it and names the file.
+
 **Paths.** `/…` is a path in the world. `~/…` is the home of the world's user, whatever
 their name is (`danika-hous` in one world, `user` in another; section 6).
 
@@ -118,8 +135,11 @@ version = "1.1"
 data_format = 2
 for = "kittystory"                           # useless without it; installs it first
 [files]
-data = ["~/.kittystory/chars/**", "~/.kittystory/places/**", "~/.kittystory/me/**"]
+data = ["~/.kittystory/chars/*/char.md", "~/.kittystory/scene.md", "~/.kittystory/assets/**"]
 ```
+
+`kittystory-memories` carries `~/.kittystory/chars/*/memory.md` and `~/.kittystory/shared.md`,
+so no file is in both.
 
 `kittystory-memories` is private by default, so it never leaves your PC
 ([sharing.md](sharing.md), section 3).
@@ -143,6 +163,8 @@ install screen shows them loudly (decision 5).
       1.4.hpm                 an archive: the folder of section 3, in one file
   stores/                     friends' stores, copied from GitHub (sharing.md)
     oliver/index.toml
+  mine/                       a clone of your own store on GitHub, for `hpm push`
+    danika/
   cache/                      downloaded packages
 ```
 
@@ -157,7 +179,9 @@ memory line and the files around them, and drafts `hpm.toml`: which files are `a
 are `seed`, which extras there should be and what goes in each, and the memory line. You
 read it and change what's wrong. The manifest is saved in the world, beside the app, at
 `/usr/local/share/hpm/kittystory/hpm.toml`, so the next publish needs no AI to find the
-files again.
+files again. An install writes the manifest (and the migration notes) to the same place in
+the world it installs into, so a friend can publish a fix of their own, and a copy of the
+world keeps them.
 
 **Every release: `hpm publish kittystory`.** Hallux's code, with the AI for two things:
 
@@ -174,7 +198,12 @@ files again.
 5. **Test install, if you want it.** hpm copies a clean world (the base world named in its
    `config.toml`), installs the package there, and the AI starts the app once and reports
    what is missing. It costs a model call, so it is a question, not a step (decision 6).
-6. **Writes `kittystory/1.4.hpm`** into `local/`.
+6. **Writes `kittystory/1.4.hpm`** into `local/`, and records the release in the world it
+   came from (section 8), whose files *are* that release: `hpm list` there shows it, and
+   the next update there knows the files as hpm's.
+
+Publish writes into the world only under `/usr/local/share/hpm/<name>/` (the manifest, the
+changelog, migration notes) and the world's record, so it works on a running world too.
 
 `hpm publish --all` publishes the main package and every extra that changed.
 
@@ -203,7 +232,10 @@ kittystory 1.4  ·  Chat with characters built from personality packs  ·  by da
 - **The card can be read before installing** (`v`). A card is instructions to the AI that
   runs the machine; [sharing.md](sharing.md), section 4.
 - **The user.** `~/…` goes to the home of the world's user, read from its `/etc/passwd`
-  (the first user with uid 1000 or more). If there are several, hpm asks.
+  (the users with uid 1000 or more and a home under `/home`). A world without
+  `/etc/passwd` (`hallux-world` has none) gives the homes under `/home` that aren't empty:
+  every world gets an empty `/home/user` when it is made, so that one doesn't count by
+  itself. If there are several, hpm asks (`--user`).
 - **The order:** the extras' requirements first, then the app, then data. A failure in the
   middle leaves what was written in the world's record (section 8), so `hpm remove` can
   clean it up.
@@ -215,11 +247,14 @@ chosen set. (Added 2026-10-23: the user asked "i can have my danika store that h
 apps? and can i install all 15 in one command?", and liked the answer.)
 
 **Two ways to say "all of them":**
-- **The whole store:** `hpm install danika/* --world ~/my-world`.
+- **The whole store:** `hpm install danika/ --world ~/my-world`: the store's name with a
+  slash and nothing after it. (Not `danika/*`: bash expands that whenever a folder
+  `danika` is where you stand, and `~/hallux-distros/danika` is a world.)
 - **A bundle:** a package with no files of its own, only a list of packages. It is
-  published and pushed like any other.
+  published and pushed like any other, so it has a version too.
   ```toml
   name = "kitty-desktop"
+  version = "1.0"
   summary = "All of danika's kitty apps"
   bundle = ["kittystory", "kittymusic", "kittydash", "kittycalc", "kittyshop", "kittyfiles"]
   ```
@@ -235,8 +270,10 @@ danika · 15 packages
   [x] kittydash       GUI dashboard
   [ ] kittyshop       SVG drawing app               needs the web addon ✗
   ...
-  space toggle · → open extras · a all · n none · Enter install
+  space toggle · → open extras · + all · - none · Enter install
 ```
+
+(`+` and `-`, not letters: in the panel's Packages tab, letters like `a` choose a tab.)
 
 **What happens on Enter:**
 
@@ -247,8 +284,10 @@ danika · 15 packages
 3. **One backup** of everything the install touches ([migrations.md](migrations.md),
    section 4, for all the packages together).
 4. **One package after another**, each written into the world's record (section 8) as it
-   ends. One that fails doesn't stop the others; the end says
-   `14 installed · 1 failed: kittyshop (…)`, and `hpm install` of that one tries again.
+   ends. One that fails doesn't stop the others, but every package that needs it (an extra
+   of it, a package that requires it) is skipped. The end says
+   `12 installed · 1 failed: kittystory (…) · 2 skipped: need kittystory`, and
+   `hpm install` of the failed one tries again.
 5. **Migrations one at a time.** Each package that needs one shows its own plan and waits
    for its own Enter: each changes your data.
 6. **The machine is told once:** every memory line, and one note naming every package
@@ -273,6 +312,9 @@ Before writing anything, hpm walks every file it would write and sorts them into
 | The same file | skips it, silently |
 | A different file hpm installed, and you haven't changed it since | an update replaces it |
 | A different file you changed, or one hpm didn't install | asks |
+| A folder or a link where the file goes | asks: it can be skipped, never written through |
+
+Folders a file needs are made first.
 
 When it asks, it groups files by what they are, not one by one:
 
@@ -289,10 +331,26 @@ When it asks, it groups files by what they are, not one by one:
 - **Memories are asked about more carefully.** For `memory.md` and `shared.md` there is a
   fourth choice, **merge**: the AI keeps the dated lines of both, without repeats. The
   default for memories is skip, never overwrite.
-- **The drag-and-drop work does this already.** Its tree (`hallux/importing.py`, `look`)
-  marks "what is in the way" before a copy, and its copy (`carry_out`, `copy_whole`) never
-  shows a half-written file and never replaces one the user wasn't asked about. hpm reuses
-  both.
+- **The drag-and-drop work does this already, for a drop.** Its tree (`hallux/importing.py`,
+  `look`) marks "what is in the way" before a copy, and its copy (`carry_out`) never
+  replaces a file the user wasn't asked about. Those two copy things from your PC into one
+  folder, so hpm doesn't call them: it takes their way of marking, and their file copy,
+  `copy_whole` (`hallux/disk.py`), which never shows a half-written file.
+
+## 7a. Apps installed before hpm
+
+Your worlds already have apps the machine installed by its own install files
+(`kittystory-web.update`). To hpm, those files are foreign, and the world's memory already
+has an untagged line about the app. So:
+
+- **`hpm adopt kittystory --world …`** compares the world's files with a release in the
+  store. The identical ones are recorded as hpm's (section 8), so later updates replace them
+  without a question; the different ones stay foreign, and an update asks about them. The
+  world you publish from adopts by itself at publish (section 5).
+- **The old memory line.** When an install or an adopt finds an untagged line under
+  "Invented programs" that starts with the program's name, it shows it and offers to replace
+  it with the tagged one (default: replace), so the machine doesn't read two lines about one
+  program that may disagree.
 
 ## 8. What a world remembers
 
@@ -317,6 +375,12 @@ It lives in `/.hallux`, so the machine can't see it or change it. With it:
 - **`hpm remove kittystory`** deletes the `app` files and the memory line. Data stays
   unless you add `--data`, and then it goes to a backup first.
 - **`hpm update --all`** goes over every package of the world.
+- **`hpm adopt kittystory`** records an app that was there before hpm (section 7a).
+
+`installed.json`, the backups and a migration's staging folder are written by hpm's own code
+straight into the world's `.hallux` folder. The world's `Disk` refuses every path under
+`/.hallux`, as it should: what a package carries goes through the `Disk`, so it can never
+land there.
 
 ## 9. Telling the machine
 
@@ -325,11 +389,13 @@ The AI must know what changed, or it answers from what it saw before.
 - **The memory line.** Hallux writes it under "Invented programs" in `/.hallux/memory.md`,
   with a tag at its end, `[hpm kittystory 1.4]`, so the next update finds and replaces the
   line instead of adding a second one. The AI may still write about the program on other
-  lines; hpm only owns the tagged one.
+  lines; hpm only owns the tagged one. The machine's AI edits `memory.md` too, and the
+  Packages tab may write while it answers, so every edit of `memory.md` takes one lock (in
+  `Disk.memory_edit`); neither edit is lost.
 - **A note before the next message.** If the world is running (section 10), the machine
   gets a note in front of the AI's next message: "kittystory 1.4 was installed: 214 files
-  under /usr/local/…, ~/.kittystory/…". The drag-and-drop work does the same after a copy
-  (`Note` in `hallux/importing.py`).
+  under /usr/local/…, ~/.kittystory/…". It is an `<installed>` block of its own, told the way
+  drag and drop tells a copy with `<imported>` (`imported_block` in `hallux/machine.py`).
 - **At the next boot** the memory line is enough: the AI reads `memory.md` when it boots.
 
 ## 10. Where you type it
@@ -337,21 +403,31 @@ The AI must know what changed, or it answers from what it saw before.
 | Where | How | When |
 |---|---|---|
 | **Your real terminal** | `hpm install kittystory --world ~/hallux-distros/oliver-test`: a program of its own, with real checkboxes; works while the world isn't running | first |
-| **The settings panel** (Ctrl+F12) | a **Packages** tab beside Files: the store's packages, the checkboxes, the conflicts, for the running world | second |
+| **The settings panel** (Ctrl+F12) | a **Packages** tab beside Files, chosen with `g` (Packa**g**es): the store's packages, the checkboxes, the conflicts, for the running world | second |
 | **The world's shell** | `hpm install kittystory` typed in the machine: the AI draws the screens and calls one tool that does the copy | later, maybe |
 
 The panel is drawn by Hallux, not the AI, like the Files tab, so it keeps the first
 principle of [concept.md](../concept.md): every character on the machine's screen comes from
 the AI, and the panel is not the machine's screen.
 
+**The tab's key.** The panel chooses a tab by its first letter, but `p` is the Files tab's
+own key (it opens the path row), and the panel's letters win over a tab's keys. So a tab
+gets an optional key of its own, and Packages takes `g`. Inside the tab no key is a tab's
+letter (`a`, `d`, `f`, `c`, `g`): a migration is accepted with Enter, and "all" and "none"
+are `+` and `-`.
+
 **Inside a world, `hallux <anything>` reshapes the machine** (concept.md, principle 5). So
 `hallux publish kittystory` typed in a world would be read as a wish, not a command. The
 command is `hpm`, in your real terminal, and the Packages tab in the panel.
 
 **A running world.** Hallux doesn't mark a world as running today. hpm needs that: a
-running Hallux writes `/.hallux/running` (its process number) and removes it when it ends.
-An `hpm` in your terminal won't write into a running world; it says to use the panel's
-Packages tab there, or to stop the world. Reading (`list`, `publish`) is always allowed.
+running Hallux writes `/.hallux/running` (its process number and the time that process
+started) and removes it when it ends. A mark whose process is gone, or is another program
+that got the same number later (WSL hands out low numbers again after a restart), counts as
+not running. An `hpm` in your terminal won't install, update, remove or roll back in a
+running world; it says to use the panel's Packages tab there, or to stop the world. `list`,
+`show`, `publish`, `init` and `adopt` are allowed: they write only under
+`/usr/local/share/hpm/<name>/` and the world's record.
 
 ## 11. Where the AI runs
 
@@ -369,9 +445,12 @@ From the panel, the same session runs beside the machine, like an addon agent's 
 - A new command, `hpm` (`[project.scripts]` in `pyproject.toml`), and its package,
   `hallux/hpm/`: the manifest, the store, install, conflicts, the world's record.
 - `/.hallux/running`, written and removed by `hallux/app.py`.
-- The Packages tab, `hallux/panel_tabs/packages.py`.
-- A way to put a note in front of the AI's next message from outside the drag-and-drop work
-  (the `Note` of `hallux/importing.py`, made general).
+- The Packages tab, `hallux/panel_tabs/packages.py`, and a key of its own for a tab in
+  `hallux/panel.py` (section 10).
+- `<installed>` in front of the AI's next message, beside drag and drop's `<imported>`
+  (`hallux/machine.py`).
+- A lock in `Disk.memory_edit` (`hallux/disk.py`), so the tab and the machine's AI never
+  lose each other's edit of `memory.md`.
 - The session for AI work outside a running machine (section 11), built from what
   `hallux/agents.py` has.
 - The manual: the machine should know what `[hpm …]` in its memory means, and that it
@@ -394,6 +473,9 @@ recommended").
 | 8. Is the name `hpm` right? | Yes, unless it clashes with something on your PC; `hpm` is short and says what it is |
 
 ## Order of work
+
+The plan ([docs/plans/hpm/](../plans/hpm/README.md)) builds it in nine steps, and brings the
+Packages tab forward to step 5. The order as this design first had it:
 
 1. The manifest and the package archive; `hpm publish` without the AI (a manifest you write
    by hand).
