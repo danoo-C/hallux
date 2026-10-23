@@ -12,3 +12,6 @@ import tempfile as _tempfile
 # hpm's store: never the real one in ~/.local/share/hallux/hpm. Each test that needs its own
 # store passes one; this keeps any other from reaching yours.
 _os.environ["HPM_HOME"] = _os.path.join(_tempfile.gettempdir(), "hpm-tests-store")
+
+# hpm's AI costs money: no test may reach the real model (hallux/hpm/ai.py, real_client).
+_os.environ["HALLUX_NO_REAL_MODEL"] = "1"

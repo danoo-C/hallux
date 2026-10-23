@@ -32,9 +32,10 @@ from hallux.hpm.manifest import MANIFEST_MAX, Manifest, ManifestError, check_pat
 
 MANIFEST = "hpm.toml"
 CHANGELOG = "CHANGELOG.md"
+REVIEW = "review.md"                      # the AI's review of the card, made at publish
 FILES, MIGRATIONS = "files", "migrations"
 ROOTS = {"root": "/", "home": "~/"}       # files/<this>/... is the machine path <that>...
-TOP = {MANIFEST, CHANGELOG, FILES, MIGRATIONS}
+TOP = {MANIFEST, CHANGELOG, REVIEW, FILES, MIGRATIONS}
 FILES_MAX = 10_000                        # files in one package
 BYTES_MAX = 200 * 1024 * 1024             # what they hold together, unpacked
 NAME_MAX = 1024                           # characters of one name in the archive
@@ -79,7 +80,7 @@ def _member_problem(name: str, is_dir: bool) -> str | None:
     top = parts[0]
     if top not in TOP:
         return f"{shown} is no part of a package ({', '.join(sorted(TOP))})"
-    if top in (MANIFEST, CHANGELOG):
+    if top in (MANIFEST, CHANGELOG, REVIEW):
         return f"{shown} must be a file" if is_dir or len(parts) > 1 else None
     if top == MIGRATIONS:
         if is_dir:

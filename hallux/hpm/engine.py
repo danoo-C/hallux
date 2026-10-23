@@ -23,15 +23,18 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from hallux.disk import BOOT_FILES, Disk, copy_whole
+from hallux.disk import BOOT_FILES, Disk, copy_whole, write_whole
 from hallux.hpm import record as rec
 from hallux.hpm.archive import ArchiveError, package_files, sha256, unpack
 from hallux.hpm.manifest import Manifest, Version, place
 from hallux.hpm.store import Release, Store
 from hallux.hpm.world import MANIFESTS, HpmError, world_user
 
-# Answers to a file's question. ("merge", for memories, comes with the AI in step 6.)
-OVERWRITE, SKIP, BOTH, FAIL, REMOVE, KEEP = "overwrite", "skip", "both", "fail", "remove", "keep"
+# Answers to a file's question. Merge is for a memory file (memory.md, shared.md): the AI
+# keeps the lines of both, and hpm writes what it gives back (hallux/hpm/ai.py).
+OVERWRITE, SKIP, BOTH, FAIL, REMOVE, KEEP, MERGE = (
+    "overwrite", "skip", "both", "fail", "remove", "keep", "merge")
+MERGEABLE = ("memory.md", "shared.md")
 REPLACE = "replace"                       # the old untagged memory line: replace it, or KEEP
 STORE_ALL = "/"                           # "local/": every package of a store
 META = "meta"                             # the manifest, changelog and notes in /usr/local/share/hpm
@@ -82,6 +85,7 @@ class Plan:
     notes: list[str] = field(default_factory=list)                   # addons, and the like
     temp: tempfile.TemporaryDirectory | None = None
     data: bool = False                    # a remove with --data
+    merged: dict[str, str] = field(default_factory=dict)   # a path: the merged text to write
 
     @property
     def questions(self) -> list[Action]:
@@ -469,10 +473,14 @@ def _mark(disk: Disk, item: Item, path: str, machine: str, kind: str, source: Pa
     if path in mine:
         if mine[path]["sha256"] == there:
             return act("ours", "write") if kind in ("app", META) else act("data-kept", "skip")
-        return act("changed", "ask", choices=(OVERWRITE, SKIP, BOTH), default=SKIP)
+        return act("changed", "ask", choices=(OVERWRITE, SKIP, BOTH) + _merge(path), default=SKIP)
     default = SKIP if kind == "data" else OVERWRITE
-    return act("foreign", "ask", choices=(OVERWRITE, SKIP, BOTH), default=default,
+    return act("foreign", "ask", choices=(OVERWRITE, SKIP, BOTH) + _merge(path), default=default,
                owner=rec.owner(record, path, but=item.name))
+
+
+def _merge(path: str) -> tuple[str, ...]:
+    return (MERGE,) if posixpath.basename(path) in MERGEABLE else ()
 
 
 def _loud(plan: Plan, item: Item, path: str, kind: str) -> None:
@@ -554,7 +562,7 @@ def plan_adopt(world: Path | str, release: Release, user: str | None = None) -> 
 # ---------------------------------------------------------------------- carrying it out
 
 def apply(plan: Plan, answers: dict[str, str] | None = None, all_files: str | None = None,
-          progress=None, stop=None) -> Outcome:
+          progress=None, stop=None, merged: dict[str, str] | None = None) -> Outcome:
     """Carry the plan out. `answers` answers its questions: a placed path to one of the
     question's choices, and "memory:<name>" to REPLACE or KEEP for an old memory line.
     `all_files` answers every file question that `answers` doesn't, if it is one of that
@@ -571,11 +579,14 @@ def apply(plan: Plan, answers: dict[str, str] | None = None, all_files: str | No
                            f"it is one of: {', '.join(action.choices)}")
         if answer not in action.choices:
             raise HpmError(f"{action.path}: {answer!r} isn't one of {', '.join(action.choices)}")
+        if answer == MERGE and action.path not in (merged or {}):
+            raise HpmError(f"{action.path}: merge needs the merged text, and there is none")
     for item in plan.memory_questions():
         answers.setdefault(f"memory:{item.name}", REPLACE)
     try:
         if plan.kind == "remove":
             return _apply_remove(plan, answers, progress)
+        plan.merged = dict(merged or {})
         return _apply_install(plan, answers, progress, stop)
     finally:
         plan.close()
@@ -587,7 +598,7 @@ def _resolved(action: Action, answers: dict[str, str]) -> str:
         return action.op
     answer = answers[action.path]
     return {OVERWRITE: "write", SKIP: "skip", BOTH: "both", FAIL: "fail", REMOVE: "remove",
-            KEEP: "keep"}[answer]
+            KEEP: "keep", MERGE: "merge"}[answer]
 
 
 def _apply_install(plan: Plan, answers: dict[str, str], progress, stop=None) -> Outcome:
@@ -595,7 +606,7 @@ def _apply_install(plan: Plan, answers: dict[str, str], progress, stop=None) -> 
     record = rec.load(disk)
     live = [item for item in plan.items if not item.blocked]
     touched = {a.path: a.package for item in live for a in item.actions
-               if _resolved(a, answers) in ("write", "remove")}
+               if _resolved(a, answers) in ("write", "remove", "merge")}
     touched |= {_beside(a.path): a.package for item in live for a in item.actions
                 if _resolved(a, answers) == "both"}
     backup = None
@@ -670,6 +681,12 @@ def _install_item(plan: Plan, item: Item, answers: dict[str, str], record: dict)
                 files[target] = {"kind": action.kind, "sha256": sha256(real)}
                 written += 1
                 places.add(_place_of(action.machine if what == "write" else target))
+            elif what == "merge":                 # the AI's merged text, in place of both
+                real = disk.place(action.path)
+                write_whole(real, plan.merged[action.path])
+                files[action.path] = {"kind": action.kind, "sha256": sha256(real)}
+                written += 1
+                places.add(_place_of(action.machine))
             elif what == "record":
                 real = disk.place(action.path)
                 files[action.path] = {"kind": action.kind, "sha256": sha256(real)}

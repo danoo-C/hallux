@@ -64,3 +64,63 @@ All with a stand-in client; no model is called.
 One paid run, after the user says go: `hpm init kittystory` on a copy of `test-hallux` with
 the default model, the manifest it drafts compared with the one written by hand in step 2,
 and the cost noted in "As built".
+
+## As built
+
+Built 2026-10-23, **without the paid run** (it waits for the user's go): `hallux/hpm/ai.py`
+(the session, its tools, the store's settings), `hallux/hpm/assist.py` (init, the
+changelog's draft, the review, the merge, the test install),
+`hallux/hpm/prompts/{init,changelog,merge,review}.md` (package data in `pyproject.toml`);
+`hpm init` and publish's `--draft`, `--review` and `--test` in `cli.py`; merge in the
+engine, the conflict screens and the Packages tab; `review.md` in a package, shown by `v`;
+`tests/test_hpm_ai.py` (26 tests). The whole suite: 2248 passed, the sandbox test left out
+as before; one web addon test (`test_a_hostile_page_gets_nothing_out`) failed once under the
+full suite's load and its file passed twice on its own afterwards.
+
+**No test can reach the model.** While this step was built, a test whose scripted terminal
+answered every question with its default said yes to the new "have the card reviewed?" and
+reached for the real client. The session's sandbox refused every connection to
+`api.anthropic.com`, so nothing was sent or spent. Since then `ai.real_client()` refuses
+when `HALLUX_NO_REAL_MODEL` is set, and `tests/conftest.py` sets it: a test that reaches
+for the model fails loudly instead.
+
+**The paid run, still to do** (after the user says go): `hpm init kittystory` on a copy of
+`test-hallux` with the default model (the world's, `claude-opus-5-5` there, at effort
+`medium`, the cap $1.00), the manifest it drafts compared with the one written by hand in
+step 2, and its cost noted here.
+
+What the code does that the step above didn't say, or says differently:
+
+- **Every AI part asks first,** with the model and the cap in the question: `hpm init`
+  (or `--yes`), the changelog's draft (`--draft`), the review (`--review`), the test install
+  (`--test`; its question defaults to no). Without a terminal and without the flag, the AI
+  isn't asked: init stops and says so; publish goes on without the draft or the review.
+- **The review is asked for at publish,** not always run: it costs a model call each time.
+  Step 8's push reviews a version that has none.
+- **init's tools** read the world (`list_dir`, `stat`, `read_file`, `find`) and write only
+  `/usr/local/share/hpm/<name>/hpm.toml`, `/usr/local/share/hpm/<name>-<part>/hpm.toml`
+  (the extras) and files under `/usr/local/share/hpm/<name>/seed/`. Its problems (a manifest
+  that doesn't read, a pattern that matches nothing, a manifest in the wrong folder) go back
+  to the AI once, in the same session; what is still wrong after that is told to you, and
+  the files are left to fix by hand.
+- **A data package that holds memories or a chat is marked private by hpm's code,** whatever
+  the AI wrote.
+- **A clean seed:** a file at `/usr/local/share/hpm/<name>/seed/<the seed's path>` is
+  published in place of the world's own seed (so kittystory's `state.json` with your chat
+  stays home). init's prompt asks the AI to write one where a seed holds your data.
+- **The changelog's draft** is told which files were added, changed and removed, and can
+  read the last release (`release_list_dir`, `release_read_file`, the release laid out as a
+  world). On a terminal the draft opens in `$EDITOR`; with `--draft` and no terminal it is
+  the entry.
+- **A merge** is checked by hpm's code: every line of both files must be in what the AI
+  gives back, or the merge is refused and the file skipped. On a terminal the merged text is
+  shown and written only on yes; in the Packages tab the first Enter has the AI merge (in a
+  thread) and shows the text, the second Enter writes it.
+- **The test install** copies `base_world` (from the store's `config.toml`), installs the
+  release with those of its default extras that are in the store (it says which it leaves
+  out), and runs the copy headless with the program's name as the one line: a boot, the
+  line, and the Ctrl-D a script ends with. Only the line's screen is shown, and the cost.
+- **The store's `config.toml`** has `model`, `effort`, `cap_usd` and `base_world`; an
+  unknown key or a wrong value is an error that names the file.
+- **Each session** writes a line into the world's `.hallux/hallux.log`: the job, done or why
+  not, its cost and model.

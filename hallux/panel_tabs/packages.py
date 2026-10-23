@@ -90,7 +90,7 @@ class PackagesTab(Tab):
         if state == PLANNING:
             return "working it out… · Esc stop"
         if state == ASKING:
-            keys = ["o s k f r on a row", "O overwrite all", "S skip all"] if self._has_questions() else []
+            keys = ["o s k f r m on a row", "O overwrite all", "S skip all"] if self._has_questions() else []
             if self.old_lines:
                 keys.append("y n the old memory line")
             return " · ".join(keys + ["Enter go on", "Esc back"])
@@ -160,7 +160,7 @@ class PackagesTab(Tab):
             self.choices[entry.name] = Choice(
                 entry.name, entry.manifest, ticked=old.ticked if old else False, extras=extras,
                 labels=entry.labels, note=" · ".join(notes), bad=bool(entry.problems),
-                card=list(entry.card))
+                card=list(entry.card), review=list(entry.review))
         self._rebuild()
 
     def _visible(self) -> list[Choice]:
@@ -210,6 +210,8 @@ class PackagesTab(Tab):
         if self.model is None:
             self._read()
         if seen.state == PLANNING:
+            if seen.merging:
+                return [[("bold", " The AI is merging the memory files…")]]
             what = "removing" if seen.doing == "remove" else "installing"
             return [[("bold", f" Working out what {what} would write…")]]
         if seen.state == ASKING:
@@ -282,6 +284,14 @@ class PackagesTab(Tab):
                 mark = [("reverse", "▸")] if i == self.questions.cursor else [("", " ")]
                 lines.append(mark + [("", " ")] + _styled(row))
             lines += [_styled(line) for line in self.questions.tail()]
+        for path, text in seen.merged.items():
+            body = text.splitlines()
+            lines += [[], [("bold", f" merged by the AI: {path}")]]
+            lines += [[("", "   " + line)] for line in body[:12]]
+            if len(body) > 12:
+                lines.append([(NOTE, f"   … and {len(body) - 12} more lines")])
+        for path, why in seen.unmerged.items():
+            lines += [[], [(WARNED, f" {path} can't be merged ({why}): it is skipped")]]
         lines += [[], [(NOTE, " Enter writes it; Esc goes back, and nothing is written.")]]
         return lines
 
@@ -355,7 +365,7 @@ class PackagesTab(Tab):
         kb.add("down", filter=viewing)(to(lambda: self.model._scroll(1)))
 
         for key, answer in (("o", "overwrite"), ("s", "skip"), ("k", "both"), ("f", "fail"),
-                            ("r", "remove")):
+                            ("r", "remove"), ("m", "merge")):
             kb.add(key, filter=asking)(lambda event, answer=answer: self._answer(answer))
         kb.add("O", filter=asking)(to(lambda: self._answer_all("overwrite")))
         kb.add("S", filter=asking)(to(lambda: self._answer_all("skip")))

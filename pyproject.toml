@@ -44,3 +44,4 @@ include = ["hallux*"]
 
 [tool.setuptools.package-data]
 hallux = ["prompt.md", "agent.md", "prompt_jobs.md"]
+"hallux.hpm" = ["prompts/*.md"]          # hpm's AI jobs: init, changelog, merge, review

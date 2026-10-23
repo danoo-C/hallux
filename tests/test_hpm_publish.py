@@ -476,7 +476,7 @@ def test_show_of_a_package_the_store_doesnt_have(store):
 # ---------------------------------------------------------------- the command
 
 def test_the_command_publishes_and_shows(world, store, capsys):
-    q = Script()
+    q = Script(False)                                 # no review of the card by the AI
     assert cli.main(["publish", "kittystory", "--world", str(world), "--version", "1.4",
                      "--changelog", "first"], questions=q, store=store) == 0
     assert q.said == ["published kittystory 1.4: 5 files, 57 bytes",

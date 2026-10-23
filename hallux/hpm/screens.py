@@ -18,7 +18,7 @@ from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 
-from hallux.hpm.engine import BOTH, FAIL, KEEP, OVERWRITE, REMOVE, SKIP, Action, Want
+from hallux.hpm.engine import BOTH, FAIL, KEEP, MERGE, OVERWRITE, REMOVE, SKIP, Action, Want
 from hallux.hpm.manifest import Manifest
 
 STYLE = Style.from_dict({
@@ -160,6 +160,7 @@ class Choice:
     note: str = ""                                           # "needs the web addon ✗", "installed 1.3"
     bad: bool = False                                        # the note says what's missing
     card: list[str] = field(default_factory=list)            # for v
+    review: list[str] = field(default_factory=list)          # the AI's review, made at publish
 
 
 class Checkboxes(Screen):
@@ -291,6 +292,9 @@ class Checkboxes(Screen):
         lines = [f"{m.name} {m.version}: what it puts into the machine's mind", ""]
         lines += ["The card:", ""] + (choice.card or ["(this package has no card)"])
         lines += ["", "The memory line:", f"  {m.memory_line or '(none)'}"]
+        if choice.review:
+            lines += ["", "The review of the card (by the publisher's AI):"] + [
+                f"  {line}" for line in choice.review]
         if m.rules:
             lines += ["", "Rules, which change the whole machine:"] + [f"  {r}" for r in m.rules]
         self.view(lines)
@@ -322,15 +326,16 @@ class Pick(Screen):
 
 WORDS = {"foreign": "different, not hpm's", "changed": "you changed it",
          "in-the-way": "a folder or a link is there"}
-KEYS = {"o": OVERWRITE, "s": SKIP, "k": BOTH, "f": FAIL, "r": REMOVE}   # k: keep both, or keep
+KEYS = {"o": OVERWRITE, "s": SKIP, "k": BOTH, "f": FAIL, "r": REMOVE,   # k: keep both, or keep
+        "m": MERGE}
 SHOWN = {OVERWRITE: "[o]verwrite", SKIP: "[s]kip", BOTH: "[k]eep both", FAIL: "[f]ail it",
-         REMOVE: "[r]emove", KEEP: "[k]eep"}
+         REMOVE: "[r]emove", KEEP: "[k]eep", MERGE: "[m]erge"}
 
 
 class Conflicts(Screen):
     """hpm.md, section 7: the plan's questions, grouped by package and folder."""
 
-    foot = "o s k f r on a row · O overwrite all · S skip all · Enter go on · q cancel"
+    foot = "o s k f r m on a row · O overwrite all · S skip all · Enter go on · q cancel"
 
     def __init__(self, groups: dict[tuple[str, str], list[Action]]) -> None:
         super().__init__()

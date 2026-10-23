@@ -26,7 +26,7 @@ from pathlib import Path
 
 from hallux.disk import Disk
 from hallux.hpm.archive import (
-    CHANGELOG, ArchiveError, listing, pack, read_member, sha256, to_machine, to_member,
+    CHANGELOG, REVIEW, ArchiveError, listing, pack, read_member, sha256, to_machine, to_member,
 )
 from hallux.hpm.manifest import Manifest, ManifestError, Version
 from hallux.hpm.store import Release, Store
@@ -95,9 +95,12 @@ class Questions:
 def publish(world: Path, name: str, store: Store, questions: Questions, *,
             every: bool = False, version: str | None = None, changelog: str | None = None,
             user: str | None = None, private: bool | None = None, suggested: bool = False,
-            today: datetime.date | None = None) -> list[Release]:
+            today: datetime.date | None = None, draft=None, review=None) -> list[Release]:
     """Publish a package from a world into the store; with `every` (--all), its extras too,
-    each that changed since its last release. With `suggested` (--yes), each takes the
+    each that changed since its last release. `draft(name, latest, ours, theirs, version)`
+    may give the AI's draft of the changelog entry, and `review(name, card, manifest)` the
+    AI's review of a card, saved in the release as review.md (hallux/hpm/assist.py). With
+    `suggested` (--yes), each takes the
     version hpm suggests, without asking. Returns what was published."""
     disk = Disk(world)
     today = today or datetime.date.today()
@@ -116,7 +119,8 @@ def publish(world: Path, name: str, store: Store, questions: Questions, *,
     for each in names:
         release = _publish_one(disk, each, store, questions, home, version=version,
                                changelog=changelog, private=private, suggested=suggested,
-                               today=today, unchanged_is_fine=every)
+                               today=today, unchanged_is_fine=every, draft=draft,
+                               review=review)
         if release is not None:
             published.append(release)
     if every and not published:
@@ -152,9 +156,9 @@ def _home(disk: Disk, names: list[str], user: str | None) -> str | None:
 def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | None, *,
                  version: str | None, changelog: str | None, private: bool | None,
                  suggested: bool, today: datetime.date,
-                 unchanged_is_fine: bool) -> Release | None:
+                 unchanged_is_fine: bool, draft=None, review=None) -> Release | None:
     manifest, text = _world_manifest(disk, name)
-    collected = collect(disk, manifest, home)
+    collected = _with_clean_seeds(disk, name, collect(disk, manifest, home))
     migrations = _migrations(disk, name)
 
     problems = [f"{pattern} matches nothing in this world: the app moved something, and the "
@@ -181,7 +185,8 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
     new_text = _with_value(text, "version", f'"{new_version}"')
     new_text = _privacy(name, manifest, collected, new_text, private, q)
     _seeds(collected, theirs, q)
-    entry = _entry(new_version, changelog, today, q)
+    drafted = draft(name, latest, ours, theirs, new_version) if changelog is None and draft else None
+    entry = _entry(new_version, changelog, today, q, drafted)
     world_changelog = f"{MANIFESTS}/{name}/{CHANGELOG}"
     old_changelog = _read_text(disk, world_changelog)
     new_changelog = _put_on_top(old_changelog, entry)
@@ -205,6 +210,11 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
         folder.mkdir(exist_ok=True)
         (folder / "hpm.toml").write_text(new_text, encoding="utf-8")
         (folder / CHANGELOG).write_text(new_changelog, encoding="utf-8")
+        card = collected.files.get(f"/usr/local/bin/{name}")
+        if review is not None and card is not None:
+            said = review(name, card[1].read_text(encoding="utf-8", errors="replace"), new_text)
+            if said:
+                (folder / REVIEW).write_text(said, encoding="utf-8")
         try:
             packed = pack(folder, Path(temp) / "release.hpm")
         except ArchiveError as e:
@@ -221,6 +231,23 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
     size = sum(real.stat().st_size for _, real in collected.files.values())
     q.say(f"published {name} {new_version}: {len(collected.files)} files, {_size(size)}")
     return release
+
+
+def _with_clean_seeds(disk: Disk, name: str, collected):
+    """A seed that hpm init had the AI write clean, at /usr/local/share/hpm/<name>/seed/<path>,
+    is published in place of the world's own, which may hold your chat (sharing.md,
+    section 3)."""
+    files = dict(collected.files)
+    for path, (kind, real) in collected.files.items():
+        if kind != "seed":
+            continue
+        try:
+            clean = disk.real(f"{MANIFESTS}/{name}/seed/{path.lstrip('/')}", follow=False)
+        except OSError:
+            continue
+        if clean.is_file() and not clean.is_symlink():
+            files[path] = (kind, clean)
+    return dataclasses.replace(collected, files=files)
 
 
 def _migrations(disk: Disk, name: str) -> dict[str, Path]:
@@ -277,7 +304,8 @@ def _changed(manifest: Manifest, before: Manifest, ours: dict[str, str],
              theirs: dict[str, tuple[int, str]]) -> bool:
     if dataclasses.replace(manifest, version=before.version) != before:
         return True
-    old = {name: sha for name, (_, sha) in theirs.items() if name not in ("hpm.toml", CHANGELOG)}
+    old = {name: sha for name, (_, sha) in theirs.items()
+           if name not in ("hpm.toml", CHANGELOG, REVIEW)}
     return old != ours
 
 
@@ -378,10 +406,16 @@ def _seeds(collected, theirs: dict[str, tuple[int, str]], q: Questions) -> None:
                   f"its {_size(old)} in the last release; it may hold your own data now")
 
 
-def _entry(version: Version, changelog: str | None, today: datetime.date, q: Questions) -> str:
+def _entry(version: Version, changelog: str | None, today: datetime.date, q: Questions,
+           drafted: str | None = None) -> str:
+    """The changelog's new entry: --changelog, else the AI's draft (to edit, on a terminal),
+    else what you write in $EDITOR."""
     title = f"## {version} ({today.isoformat()})"
+    if changelog is None and drafted and not q.interactive:
+        changelog = drafted
     if changelog is None:
-        written = q.edit(f"{title}\n\n", "--changelog TEXT")
+        written = q.edit(f"{title}\n\n" + (f"{drafted}\n" if drafted else ""),
+                         "--changelog TEXT, or --draft for the AI's")
         lines = written.splitlines()
         if lines and lines[0].startswith("## "):
             title, lines = lines[0].rstrip(), lines[1:]

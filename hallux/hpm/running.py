@@ -45,6 +45,7 @@ class Entry:
     problems: tuple[str, ...] = ()            # missing addons, in words
     labels: dict[str, str] = field(default_factory=dict)    # an extra's key: what it is
     card: tuple[str, ...] = ()
+    review: tuple[str, ...] = ()              # the AI's review of the card, made at publish
 
     @property
     def newer(self) -> bool:
@@ -60,6 +61,9 @@ class Seen:
     progress: tuple[Done, ...] = ()           # in WRITING and DONE
     outcome: Outcome | None = None            # in DONE
     error: str | None = None                  # in FAILED
+    merging: bool = False                     # in PLANNING: the AI merges memory files
+    merged: dict = field(default_factory=dict)          # a path: the AI's merged text
+    unmerged: dict = field(default_factory=dict)        # a path: why it couldn't be merged
 
 
 class Installs:
@@ -79,13 +83,18 @@ class Installs:
         self._threads: list[threading.Thread] = []
         self._notes: tuple[dict, ...] = ()    # for the AI, oldest first
         self._catalog: list[Entry] | None = None
+        self._merged: dict[str, str] = {}     # the plan's files the AI merged
+        self._unmerged: dict[str, str] = {}   # and those it couldn't, with why
+        self._merging = False
+        self.client_factory = None            # the AI's; the tests give a stand-in
 
     # ------------------------------------------------------------------ what the tab is shown
 
     def watch(self) -> Seen:
         with self._lock:
             progress = tuple(self._progress)
-        return Seen(self._state, self._doing, self._plan, progress, self._outcome, self._error)
+        return Seen(self._state, self._doing, self._plan, progress, self._outcome, self._error,
+                    self._merging, dict(self._merged), dict(self._unmerged))
 
     def catalog(self, fresh: bool = False) -> list[Entry]:
         """The store's packages: each app and bundle, with its extras under it (an extra of
@@ -109,9 +118,11 @@ class Installs:
                 found = manifests.get(extra.package)
                 labels[key] = (found[1].summary or extra.package) if found else "(not in the store)"
             card = read_member(release.path, f"files/root/usr/local/bin/{name}") or b""
+            review = read_member(release.path, "review.md") or b""
             entries.append(Entry(name, release, manifest, record.get(name, {}).get("version"),
                                  tuple(engine.addon_problems(manifest, have, gets)), labels,
-                                 tuple(card.decode("utf-8", "replace").splitlines())))
+                                 tuple(card.decode("utf-8", "replace").splitlines()),
+                                 tuple(review.decode("utf-8", "replace").splitlines())))
         self._catalog = entries
         return entries
 
@@ -131,14 +142,26 @@ class Installs:
                     lambda stop: engine.plan_remove(self.disk.root, name, data), self._planned)
 
     def go(self, answers: dict[str, str]) -> None:
-        """Carry the plan out with these answers, in a thread; then DONE."""
+        """Carry the plan out with these answers, in a thread; then DONE. A file answered
+        with merge is first merged by the AI, in a thread, and the plan is asked again with
+        the merged text to see: the next go writes it. One the AI couldn't merge is skipped."""
         plan = self._plan
         if self._state != ASKING or plan is None:
             return
+        pending = [q for q in plan.questions if answers.get(q.path) == engine.MERGE
+                   and q.path not in self._merged and q.path not in self._unmerged]
+        if pending:
+            self._merge(plan, pending)
+            return
+        answers = {path: (engine.SKIP if path in self._unmerged and answer == engine.MERGE
+                          else answer) for path, answer in answers.items()}
+        merged = {path: text for path, text in self._merged.items()
+                  if answers.get(path) == engine.MERGE}
         self._plan = None
 
         def write(stop: threading.Event) -> Outcome:
-            return engine.apply(plan, answers, progress=self._told_progress, stop=stop)
+            return engine.apply(plan, answers, progress=self._told_progress, stop=stop,
+                                merged=merged)
 
         self._begin(self._doing, WRITING, write, self._written)
 
@@ -155,6 +178,7 @@ class Installs:
         if self._plan is not None:
             self._plan.close()
         self._plan, self._outcome, self._error, self._state = None, None, None, LISTING
+        self._merged, self._unmerged = {}, {}
 
     # ------------------------------------------------------------------ what the AI is told
 
@@ -220,6 +244,60 @@ class Installs:
             self._ask(land, outcome)
 
         thread = threading.Thread(target=body, name="hallux-hpm", daemon=True)
+        self._threads = [t for t in self._threads if t.is_alive()] + [thread]
+        thread.start()
+
+    def _merge(self, plan: Plan, pending) -> None:
+        from hallux.hpm import assist
+
+        def work(stop: threading.Event) -> dict:
+            out = {}
+            for q in pending:
+                if stop.is_set():
+                    break
+                ours = self.disk.place(q.path).read_text(encoding="utf-8", errors="replace")
+                theirs = q.source.read_text(encoding="utf-8", errors="replace")
+                text, answer = assist.merge(self.disk.root, self.store, q.path, ours, theirs,
+                                            client_factory=self.client_factory)
+                out[q.path] = (text, answer.why or "the merge failed", answer.cost_usd)
+            return out
+
+        def landed(found: dict) -> None:
+            self._merging, self._state = False, ASKING
+            for path, (text, why, spent) in found.items():
+                log.info("hpm merge of %s: %s, ~$%.4f", path, "done" if text else why, spent)
+                if text is None:
+                    self._unmerged[path] = why
+                else:
+                    self._merged[path] = text
+
+        self._merging = True
+        self._begin_keeping(work, landed)
+
+    def _begin_keeping(self, work, landed) -> None:
+        """_begin for the merges: the plan stays, and so does the progress."""
+        self._loop = asyncio.get_running_loop()
+        stop = threading.Event()
+        self._stop, self._state, self._error = stop, PLANNING, None
+
+        def land(outcome: object) -> None:
+            if isinstance(outcome, BaseException):
+                self._merging, self._state = False, ASKING
+                for q in self._plan.questions if self._plan else []:
+                    self._unmerged.setdefault(q.path, str(outcome))
+            else:
+                landed(outcome)
+            self.changed()
+
+        def body() -> None:
+            try:
+                outcome = work(stop)
+            except Exception as e:
+                log.exception("hpm's merge failed")
+                outcome = HpmError(f"{type(e).__name__}: {e}")
+            self._ask(land, outcome)
+
+        thread = threading.Thread(target=body, name="hallux-hpm-merge", daemon=True)
         self._threads = [t for t in self._threads if t.is_alive()] + [thread]
         thread.start()
 

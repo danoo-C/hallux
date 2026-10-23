@@ -1,0 +1,268 @@
+"""What hpm asks of its AI, around the session of ai.py (docs/hpm/hpm.md, sections 5, 7 and
+11; sharing.md, sections 3 and 4; the plan's step 6): hpm init, the changelog's draft, the
+card's review, a merge of memories, and the test install.
+
+Every one of them costs money, so each asks first: on a terminal a question that names the
+model and the cap, without one only its flag. What the AI gives back is checked by hpm's
+code before anything of it is used.
+"""
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import posixpath
+import shutil
+import tempfile
+from pathlib import Path
+
+from hallux import config
+from hallux.disk import Disk
+from hallux.hpm import ai
+from hallux.hpm import record as rec
+from hallux.hpm.manifest import Manifest, ManifestError
+from hallux.hpm.publish import PRIVATE_NAMES, Questions, _with_value
+from hallux.hpm.store import Release, Store
+from hallux.hpm.world import (
+    MANIFESTS, HpmError, collect, manifest_path, read_world_manifest, world_user,
+)
+
+
+def may_spend(q: Questions, what: str, settings: ai.Settings, world: Path, flag: str,
+              given: bool, default: bool = True) -> bool:
+    """Whether the AI may do `what`: the flag, else a question on the terminal, else no."""
+    if given:
+        return True
+    if not q.interactive:
+        return False
+    return q.confirm(f"{what}, with the AI ({settings.model_for(world)}, effort "
+                     f"{settings.effort}, at most ${settings.cap_usd:.2f})?", default, flag)
+
+
+# ---------------------------------------------------------------------- hpm init
+
+def init(world: Path, store: Store, name: str, q: Questions, *, yes: bool = False,
+         user: str | None = None, client_factory=None) -> list[str]:
+    """Draft a program's manifest, and its extras', with the AI: from its card and the
+    memory's line about it. hpm checks what it wrote, shows the problems to the AI once, and
+    then to you; marks a memories package private if the AI didn't; and on a terminal opens
+    the manifest in $EDITOR before it is kept. Returns the manifests written."""
+    disk = Disk(world)
+    if read_world_manifest(disk, name) is not None:
+        raise HpmError(f"{name} has a manifest already ({manifest_path(name)}): edit it, or "
+                       f"move it away to draft it again")
+    try:
+        card = disk.read_text(f"/usr/local/bin/{name}")
+    except (OSError, ValueError):
+        raise HpmError(f"this world has no card /usr/local/bin/{name} to draft {name} from") \
+            from None
+    settings = ai.settings(store)
+    if not may_spend(q, f"draft {name}'s manifest", settings, world, "--yes", yes):
+        raise HpmError(f"drafting {name}'s manifest needs the AI: pass --yes to let it, or "
+                       f"write {manifest_path(name)} by hand")
+    home = world_user(disk, user)
+    line = rec.untagged_line(disk, name) or next(iter(rec.memory_lines(disk, name)), None)
+    job = ai.init_job(name, card, line)
+
+    def problems_of(answer: ai.Answer) -> str | None:
+        found = _problems(disk, answer.wrote, home)
+        if not found:
+            return None
+        return ("hpm checked what you wrote, and found these problems. Fix them in the same "
+                "files:\n" + "\n".join(f"- {p}" for p in found))
+
+    q.say(f"the AI is drafting {name}'s manifest…")
+    answer = ai.run_job(world, job, settings, client_factory, follow=problems_of)
+    if not answer.ok:
+        raise HpmError(f"the AI's draft didn't end well ({answer.why}; {ai.cost(answer)}); "
+                       f"what it wrote is left as it is: {', '.join(answer.wrote) or 'nothing'}")
+    manifests = sorted(p for p in set(answer.wrote) if p.endswith("/hpm.toml"))
+    if manifest_path(name) not in manifests:
+        raise HpmError(f"the AI wrote no {manifest_path(name)} ({ai.cost(answer)})")
+    for path in manifests:
+        _keep_private(disk, path, home, q)
+    q.say(answer.text.strip())
+    for path in manifests:
+        q.say(f"\n--- {path}\n" + disk.read_text(path).rstrip())
+    if q.interactive and q.confirm(f"edit {manifest_path(name)} before it is kept?", False,
+                                   "--yes"):
+        text = q.edit(disk.read_text(manifest_path(name)), "--yes")
+        disk.write_file(manifest_path(name), text)
+    left = _problems(disk, manifests, home)
+    q.say(f"the AI's part cost {ai.cost(answer)}")
+    if left:
+        raise HpmError("the manifests still have problems; fix them by hand, then hpm publish: "
+                       + "; ".join(left))
+    return manifests
+
+
+def _problems(disk: Disk, wrote: list[str], home: str | None) -> list[str]:
+    out = []
+    for path in sorted(set(p for p in wrote if p.endswith("/hpm.toml"))):
+        try:
+            manifest = Manifest.load(disk.read_text(path))
+        except ManifestError as e:
+            out += [f"{path}: {problem}" for problem in e.problems]
+            continue
+        except (OSError, ValueError) as e:
+            out.append(f"{path} can't be read: {e}")
+            continue
+        if path != manifest_path(manifest.name):
+            out.append(f"{path} holds the manifest of {manifest.name}, which belongs at "
+                       f"{manifest_path(manifest.name)}")
+        found = collect(disk, manifest, home)
+        out += [f"{path}: {pattern} matches nothing on the machine" for pattern in found.empty]
+    return out
+
+
+def _keep_private(disk: Disk, path: str, home: str | None, q: Questions) -> None:
+    """A data package whose files hold memories or a chat is private, whatever the AI wrote
+    (sharing.md, section 3)."""
+    try:
+        text = disk.read_text(path)
+        manifest = Manifest.load(text)
+    except (OSError, ValueError, ManifestError):
+        return
+    if manifest.private or not (manifest.files["data"] or manifest.for_app):
+        return
+    files = collect(disk, manifest, home).files
+    if any(PRIVATE_NAMES.fullmatch(posixpath.basename(p)) for p in files):
+        disk.write_file(path, _with_value(text, "private", "true"))
+        q.say(f"{manifest.name} holds memories or a chat: marked private, so hpm push never "
+              f"sends it")
+
+
+# ---------------------------------------------------------------------- publish's helpers
+
+def changelog_drafter(world: Path, store: Store, q: Questions, *, given: bool,
+                      client_factory=None):
+    """For publish: a function that drafts an entry from what changed, or None if the AI
+    may not."""
+    settings = ai.settings(store)
+
+    def draft(name: str, release: Release | None, ours: dict, theirs: dict, version) -> str | None:
+        if release is None:
+            return None                           # a first release: nothing to compare
+        if not may_spend(q, f"draft the changelog of {name} {version}", settings, world,
+                         "--draft", given):
+            return None
+        added = sorted(m for m in ours if m not in theirs)
+        changed = sorted(m for m in ours if m in theirs and theirs[m][1] != ours[m])
+        removed = sorted(m for m in theirs if m not in ours and m.startswith(("files/", "migrations/")))
+        from hallux.hpm.archive import to_machine, unpack
+        machine = lambda ms: [to_machine(m) if m.startswith("files/") else m for m in ms]  # noqa: E731
+        with tempfile.TemporaryDirectory(prefix="hpm-release-") as temp:
+            unpack(release.path, Path(temp) / "p")
+            old = Path(temp) / "world"
+            try:
+                home = world_user(Disk(world)) or "/home/user"
+            except HpmError:                      # several users: the files under / still read
+                home = "/home/user"
+            _as_world(Path(temp) / "p", old, home)
+            job = ai.changelog_job(name, old, machine(added), machine(changed), machine(removed),
+                                   str(version))
+            q.say(f"the AI is drafting the changelog of {name}…")
+            answer = ai.run_job(world, job, settings, client_factory)
+        q.say(f"the AI's draft cost {ai.cost(answer)}")
+        if not answer.ok:
+            q.say(f"the AI's draft didn't end well ({answer.why}); write the entry yourself")
+            return None
+        return answer.text.strip()
+
+    return draft
+
+
+def _as_world(package: Path, into: Path, home: str) -> None:
+    """An unpacked package laid out as a world: files/root/ at /, files/home/ at the home."""
+    for root, at in (("root", "/"), ("home", home + "/")):
+        source = package / "files" / root
+        if source.is_dir():
+            target = into / at.strip("/")
+            shutil.copytree(source, target, dirs_exist_ok=True)
+    into.mkdir(parents=True, exist_ok=True)
+
+
+def card_reviewer(world: Path, store: Store, q: Questions, *, given: bool, client_factory=None):
+    """For publish: a function that reviews a package's card, or None if the AI may not."""
+    settings = ai.settings(store)
+
+    def review(name: str, card: str, manifest: str) -> str | None:
+        if not may_spend(q, f"have {name}'s card reviewed for what reaches beyond it",
+                         settings, world, "--review", given):
+            return None
+        q.say(f"the AI is reviewing {name}'s card…")
+        answer = ai.run_job(world, ai.review_job(name, card, manifest), settings, client_factory)
+        q.say(f"the review cost {ai.cost(answer)}")
+        if not answer.ok:
+            q.say(f"the review didn't end well ({answer.why}); the release has none")
+            return None
+        text = answer.text.strip()
+        q.say(f"the review of {name}:\n{text}")
+        return text + "\n"
+
+    return review
+
+
+# ---------------------------------------------------------------------- merging memories
+
+def merge(world: Path, store: Store, path: str, ours: str, theirs: str,
+          client_factory=None) -> tuple[str | None, ai.Answer]:
+    """Two memory files merged by the AI. Hallux's own check after it: every line of both is
+    in the result, or the merge is refused (None)."""
+    settings = ai.settings(store)
+    answer = ai.run_job(world, ai.merge_job(path, ours, theirs), settings, client_factory)
+    if not answer.ok:
+        return None, answer
+    merged = ai.bare(answer.text)
+    have = set(line.strip() for line in merged.splitlines())
+    lost = [line for line in (ours + "\n" + theirs).splitlines()
+            if line.strip() and line.strip() not in have]
+    if lost:
+        answer.why = f"the merge left out {len(lost)} line(s), such as {lost[0][:60]!r}"
+        return None, answer
+    return merged, answer
+
+
+# ---------------------------------------------------------------------- the test install
+
+def test_install(store: Store, release: Release, q: Questions, client_factory=None) -> None:
+    """Install the release into a copy of the base world, boot it and type the program's name
+    once, with the model, effort and cap of the store's config.toml. The copy is removed."""
+    from hallux.hpm.engine import OVERWRITE, Want, apply, plan_install
+    from hallux.script import run_script
+    settings = ai.settings(store)
+    if not settings.base_world:
+        raise HpmError(f"the test install needs a base world: set base_world in "
+                       f"{settings.path} to a world to copy")
+    base = Path(settings.base_world).expanduser()
+    if not (base / ".hallux").is_dir():
+        raise HpmError(f"base_world {base} is no Hallux world")
+    with tempfile.TemporaryDirectory(prefix="hpm-test-") as temp:
+        copy = Path(temp) / base.name
+        shutil.copytree(base, copy, symlinks=True)
+        (copy / ".hallux" / "running").unlink(missing_ok=True)
+        manifest = release.manifest()
+        extras = [k for k, e in manifest.extras.items() if e.default and store.find(e.package)]
+        missing = [e.package for k, e in manifest.extras.items()
+                   if e.default and k not in extras]
+        if missing:
+            q.say(f"the test install leaves out {', '.join(missing)}: not in the store yet")
+        plan = plan_install(copy, store, [Want(release.name, extras=tuple(extras),
+                                               version=str(release.version))])
+        answers = {a.path: (OVERWRITE if OVERWRITE in a.choices else a.default)
+                   for a in plan.questions}
+        outcome = apply(plan, answers)
+        q.say(f"test install into a copy of {base.name}: {outcome.summary()}")
+        hardware = config.load(copy)
+        model = settings.model_for(base)
+        hardware = dataclasses.replace(hardware, model=model, max_budget_usd=settings.cap_usd,
+                                       effort=None if "haiku" in model else settings.effort)
+        more = {"client_factory": client_factory} if client_factory else {}
+        records, _ = asyncio.run(run_script(copy, hardware, [release.name], **more))
+        spent = sum(r.cost for r in records)              # the boot, the line, the Ctrl-D
+        for record in records:
+            if record.typed == "(boot)" and record.error:
+                q.say(f"the copy didn't boot: {record.error}")
+            elif record.typed == release.name:
+                q.say(f"$ {record.typed}\n{record.output.rstrip()}" + (
+                    f"\n(error: {record.error})" if record.error else ""))
+        q.say(f"the test install cost ~${spent:.4f}; its copy is removed")

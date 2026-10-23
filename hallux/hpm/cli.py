@@ -8,7 +8,9 @@
     hpm adopt NAME [--version V] [--old-line …] [--user U] [--yes] [--world W]
     hpm list [--world W]
     hpm publish NAME [--all] [--version V | --yes] [--changelog TEXT] [--user U]
-                     [--private yes|no] [--old-line replace|keep] [--world W]
+                     [--private yes|no] [--old-line replace|keep] [--draft] [--review]
+                     [--test] [--world W]
+    hpm init NAME [--yes] [--user U] [--world W]          the AI drafts the manifest
     hpm show NAME
     hpm search WORD
     hpm backups --clean [--yes] [--world W]
@@ -124,6 +126,18 @@ def parser() -> argparse.ArgumentParser:
                    help="the answer, if hpm asks whether to mark a package private")
     p.add_argument("--old-line", choices=("replace", "keep"), dest="old_line",
                    help="the machine's own memory line about the program, in this world")
+    p.add_argument("--draft", action="store_true",
+                   help="the AI drafts the changelog entry (on a terminal hpm asks)")
+    p.add_argument("--review", action="store_true",
+                   help="the AI reviews the card (on a terminal hpm asks)")
+    p.add_argument("--test", action="store_true",
+                   help="install it into a copy of the base world and try it once (it asks)")
+    world(p)
+
+    p = commands.add_parser("init", help="the AI drafts a program's manifest, and its extras'")
+    p.add_argument("name", metavar="NAME")
+    p.add_argument("--yes", action="store_true", help="let the AI, without the question")
+    p.add_argument("--user", metavar="U", help="whose home ~ is, in a world with several")
     world(p)
 
     p = commands.add_parser("show", help="a package in the store: versions, files, changelog")
@@ -140,9 +154,10 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, questions: Questions | None = None,
-         store: Store | None = None, screens=None) -> int:
+         store: Store | None = None, screens=None, client_factory=None) -> int:
     flags = parser().parse_args(argv)
-    run = Run(flags, questions or Questions(), store or Store(), screens or TerminalScreens())
+    run = Run(flags, questions or Questions(), store or Store(), screens or TerminalScreens(),
+              client_factory)
     try:
         return getattr(run, flags.command)()
     except HpmError as e:
@@ -156,8 +171,10 @@ def main(argv: list[str] | None = None, questions: Questions | None = None,
 class Run:
     """One command: its flags, where it asks, and the store."""
 
-    def __init__(self, flags, questions: Questions, store: Store, screens) -> None:
+    def __init__(self, flags, questions: Questions, store: Store, screens,
+                 client_factory=None) -> None:
         self.flags, self.q, self.store, self.screens = flags, questions, store, screens
+        self.client_factory = client_factory          # the AI's; the tests give a stand-in
 
     @property
     def interactive(self) -> bool:
@@ -269,11 +286,13 @@ class Run:
                 labels[key] = (other.manifest().summary or extra.package) if other else \
                     "(not in the store)"
             card = read_member(release.path, f"files/root/usr/local/bin/{want.name}")
+            review = (read_member(release.path, "review.md") or b"").decode("utf-8", "replace")
             extras = ({k: k in want.extras for k in manifest.extras} if want.extras is not None
                       else {})
             choices.append(Choice(want.name, manifest, extras=extras, labels=labels,
                                   note=" · ".join(notes), bad=bool(problems),
-                                  card=(card or b"").decode("utf-8", "replace").splitlines()))
+                                  card=(card or b"").decode("utf-8", "replace").splitlines(),
+                                  review=review.splitlines()))
         return self.screens.checkboxes(choices, title)
 
     def _user(self, world: Path) -> str | None:
@@ -304,13 +323,14 @@ class Run:
             for item in plan.items:
                 if item.blocked:
                     self.say(f"✗ {item.name}: {item.blocked}")
-            answers = self._memory_answers(plan)
+            answers, merged = self._memory_answers(plan), {}
             if answer_files and plan.questions:
                 files = self._file_answers(plan)
                 if files is None:
                     return self._cancelled()
+                merged = self._merges(plan, files)
                 answers |= files
-            outcome = engine.apply(plan, answers, progress=self._progress)
+            outcome = engine.apply(plan, answers, progress=self._progress, merged=merged)
         finally:
             plan.close()
         self.say(outcome.summary() + (f"  (backup: {outcome.backup})" if outcome.backup else ""))
@@ -346,6 +366,32 @@ class Run:
             raise HpmError(f"{len(plan.questions)} file(s) are in the way, and there is no "
                            f"terminal to ask about them; pass --overwrite all or none")
         return self.screens.conflicts(plan.grouped())
+
+    def _merges(self, plan: Plan, answers: dict[str, str]) -> dict[str, str]:
+        """Each file answered with merge, merged by the AI and shown; written only on yes.
+        A merge that fails, or isn't wanted after all, is skipped."""
+        from hallux.hpm import assist
+        merged = {}
+        for q in plan.questions:
+            if answers.get(q.path) != engine.MERGE:
+                continue
+            ours = Disk(plan.disk.root).place(q.path).read_text(encoding="utf-8", errors="replace")
+            theirs = q.source.read_text(encoding="utf-8", errors="replace")
+            self.say(f"the AI is merging {q.path}…")
+            text, answer = assist.merge(plan.disk.root, self.store, q.path, ours, theirs,
+                                        client_factory=self.client_factory)
+            self.say(f"the merge cost ~${answer.cost_usd:.4f}")
+            if text is None:
+                self.say(f"{q.path} is skipped: {answer.why or 'the merge failed'}")
+                answers[q.path] = SKIP
+                continue
+            self.say(f"--- {q.path}, merged\n{text.rstrip()}\n---")
+            if self.q.confirm(f"write the merged {q.path.rsplit('/', 1)[-1]}?", True,
+                              "a terminal: merge is chosen on the screen"):
+                merged[q.path] = text
+            else:
+                answers[q.path] = SKIP
+        return merged
 
     def _progress(self, done) -> None:
         sign = {"installed": "✓", "updated": "✓", "removed": "✓", "adopted": "✓",
@@ -414,11 +460,25 @@ class Run:
                      f"(hpm backups --clean removes them)")
         return 0
 
-    def publish(self) -> int:
+    def init(self) -> int:
+        from hallux.hpm import assist
         world = self.world()
+        written = assist.init(world, self.store, self.flags.name, self.q, yes=self.flags.yes,
+                              user=self.flags.user, client_factory=self.client_factory)
+        self.say(f"kept: {', '.join(written)}. Next: hpm publish {self.flags.name} --all")
+        return 0
+
+    def publish(self) -> int:
+        from hallux.hpm import assist
+        world = self.world()
+        draft = assist.changelog_drafter(world, self.store, self.q, given=self.flags.draft,
+                                         client_factory=self.client_factory)
+        review = assist.card_reviewer(world, self.store, self.q, given=self.flags.review,
+                                      client_factory=self.client_factory)
         released = publish(world, self.flags.name, self.store, self.q, every=self.flags.all,
                            version=self.flags.version, changelog=self.flags.changelog,
-                           user=self.flags.user, suggested=self.flags.yes,
+                           user=self.flags.user, suggested=self.flags.yes, draft=draft,
+                           review=review,
                            private=None if self.flags.private is None else self.flags.private == "yes")
         for release in released:                  # the world it came from has it now
             plan = engine.plan_adopt(world, release, user=self.flags.user)
@@ -428,6 +488,11 @@ class Run:
                 self.say(f"note: the machine's own line about {release.name} stays beside "
                          f"hpm's; hpm adopt {release.name} --old-line replace takes it out")
             self._carry_out(plan, answer_files=False)
+        app = next((r for r in released if r.name == self.flags.name), None)
+        if app is not None and (self.flags.test or (self.interactive and self.q.confirm(
+                f"try {app.name} {app.version} in a copy of the base world (a boot and one "
+                f"line, with the AI)?", False, "--test"))):
+            assist.test_install(self.store, app, self.q, client_factory=self.client_factory)
         return 0
 
     def show(self) -> int:
