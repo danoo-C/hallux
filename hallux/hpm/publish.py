@@ -69,6 +69,14 @@ class Questions:
             if answer in ("y", "yes", "n", "no"):
                 return answer.startswith("y")
 
+    def choose(self, question: str, keys: str, flag: str) -> str:
+        """One of the letters of `keys`, or "" for Enter."""
+        self._needs_terminal(question, flag)
+        while True:
+            answer = input(f"{question}: ").strip().lower()
+            if answer == "" or (len(answer) == 1 and answer in keys):
+                return answer
+
     def edit(self, template: str, flag: str) -> str:
         """The text you write, starting from `template`, in $VISUAL or $EDITOR."""
         self._needs_terminal("the changelog entry", flag)
@@ -95,13 +103,15 @@ class Questions:
 def publish(world: Path, name: str, store: Store, questions: Questions, *,
             every: bool = False, version: str | None = None, changelog: str | None = None,
             user: str | None = None, private: bool | None = None, suggested: bool = False,
-            today: datetime.date | None = None, draft=None, review=None) -> list[Release]:
+            today: datetime.date | None = None, draft=None, review=None,
+            write_note=None) -> list[Release]:
     """Publish a package from a world into the store; with `every` (--all), its extras too,
     each that changed since its last release. `draft(name, latest, ours, theirs, version)`
     may give the AI's draft of the changelog entry, and `review(name, card, manifest)` the
-    AI's review of a card, saved in the release as review.md (hallux/hpm/assist.py). With
-    `suggested` (--yes), each takes the
-    version hpm suggests, without asking. Returns what was published."""
+    AI's review of a card, saved in the release as review.md (hallux/hpm/assist.py), and
+    `write_note(name, latest, before, after, old, new)` has the AI write the migration note
+    when the data moved without one. With `suggested` (--yes), each takes the version hpm
+    suggests, without asking. Returns what was published."""
     disk = Disk(world)
     today = today or datetime.date.today()
     first = _world_manifest(disk, name)[0]
@@ -120,7 +130,7 @@ def publish(world: Path, name: str, store: Store, questions: Questions, *,
         release = _publish_one(disk, each, store, questions, home, version=version,
                                changelog=changelog, private=private, suggested=suggested,
                                today=today, unchanged_is_fine=every, draft=draft,
-                               review=review)
+                               review=review, write_note=write_note)
         if release is not None:
             published.append(release)
     if every and not published:
@@ -156,7 +166,8 @@ def _home(disk: Disk, names: list[str], user: str | None) -> str | None:
 def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | None, *,
                  version: str | None, changelog: str | None, private: bool | None,
                  suggested: bool, today: datetime.date,
-                 unchanged_is_fine: bool, draft=None, review=None) -> Release | None:
+                 unchanged_is_fine: bool, draft=None, review=None,
+                 write_note=None) -> Release | None:
     manifest, text = _world_manifest(disk, name)
     collected = _with_clean_seeds(disk, name, collect(disk, manifest, home))
     migrations = _migrations(disk, name)
@@ -168,10 +179,20 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
     if problems:
         raise HpmError(f"{name} can't be published: " + "; ".join(problems))
 
-    ours = {to_member(path): sha256(real) for path, (_, real) in collected.files.items()}
-    ours |= {member: sha256(real) for member, real in migrations.items()}
     latest = store.latest(name)
     before = latest.manifest() if latest else None
+    step = _note_needed(manifest, before, migrations) if before is not None else None
+    if step is not None and write_note is not None \
+            and write_note(name, latest, before, manifest, *step):
+        if manifest.data_format != step[1]:
+            text = _with_value(text, "data_format", str(step[1]))
+            disk.write_file(manifest_path(name), text, parents=True)
+            q.say(f"{manifest_path(name)}: data_format is {step[1]} now")
+        manifest, text = _world_manifest(disk, name)
+        migrations = _migrations(disk, name)
+
+    ours = {to_member(path): sha256(real) for path, (_, real) in collected.files.items()}
+    ours |= {member: sha256(real) for member, real in migrations.items()}
     theirs = {} if latest is None else listing(latest.path)
     if latest is not None and not _changed(manifest, before, ours, theirs):
         if unchanged_is_fine:
@@ -180,6 +201,7 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
         raise HpmError(f"{name}: nothing changed since {latest.version}; nothing to publish")
     if before is not None:
         _check_data(name, manifest, before, latest)
+    _check_notes(name, manifest, migrations, store)
 
     new_version = _version(name, manifest, before, latest, version, suggested, q)
     new_text = _with_value(text, "version", f'"{new_version}"')
@@ -319,7 +341,36 @@ def _check_data(name: str, manifest: Manifest, before: Manifest, latest: Release
             f"{name}: the data moved since {latest.version} (files.data was "
             f"{list(before.files['data'])}, now {list(manifest.files['data'])}), but "
             f"data_format is still {manifest.data_format}: an update would leave the data "
-            f"behind. Raise data_format, and write a migration for it (docs/hpm/migrations.md)")
+            f"behind. Raise data_format, and write a migration for it (hpm publish "
+            f"--write-migration has the AI write it; docs/hpm/migrations.md)")
+
+
+def _note_needed(manifest: Manifest, before: Manifest, migrations: dict[str, Path]):
+    """The step from the last release's format that needs a note the world doesn't have:
+    (old, new), or None. The data moved without a new format: the next one."""
+    moved = set(manifest.files["data"]) != set(before.files["data"])
+    old = before.data_format
+    if manifest.data_format < old or not (moved or manifest.data_format > old):
+        return None
+    new = manifest.data_format if manifest.data_format > old else old + 1
+    return None if f"migrations/{old}-to-{new}.md" in migrations else (old, new)
+
+
+def _check_notes(name: str, manifest: Manifest, migrations: dict[str, Path], store: Store) -> None:
+    """Every note reads, and a world with data in the format of any earlier release can come
+    to this one: the chain of notes has no hole (migrations.md, section 3)."""
+    from hallux.hpm.migrate import chain, read_note
+    notes = [read_note(member.split("/", 1)[1], real.read_text(encoding="utf-8", errors="replace"))
+             for member, real in migrations.items()]
+    formats = sorted({r.manifest().data_format for r in store.releases(name)})
+    for start in formats:
+        if start < manifest.data_format:
+            try:
+                chain(notes, start, manifest.data_format, name)
+            except HpmError as e:
+                raise HpmError(f"{name} can't be published: {e}. Write it at "
+                               f"{MANIFESTS}/{name}/migrations/ (hpm publish --write-migration "
+                               f"has the AI write the last step)") from None
 
 
 def bump(version: Version, major: bool) -> Version:

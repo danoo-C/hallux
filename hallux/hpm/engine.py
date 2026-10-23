@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from hallux.disk import BOOT_FILES, Disk, copy_whole, write_whole
+from hallux.hpm import migrate as mig
 from hallux.hpm import record as rec
 from hallux.hpm.archive import ArchiveError, package_files, sha256, unpack
 from hallux.hpm.manifest import Manifest, Version, place
@@ -60,6 +61,14 @@ class Action:
     owner: str | None = None              # another package whose record holds the path
 
 
+@dataclass(frozen=True)
+class Pending:
+    """A migration a package waits for (migrations.md): the notes from the format its data is
+    in, and the manifest whose data patterns the new layout has."""
+    notes: tuple
+    layout: Manifest
+
+
 @dataclass
 class Item:
     """One package of a plan."""
@@ -73,6 +82,14 @@ class Item:
     actions: list[Action] = field(default_factory=list)
     old_line: str | None = None           # an untagged memory line about it (section 7a)
     home: str | None = None
+    migrate: Pending | None = None        # the world's data must be migrated first
+    incoming: Pending | None = None       # its own data must be, before it comes in
+    skip: str | None = None               # why it is left out: its migration was cancelled
+    migrated: dict | None = None          # its data's migration that landed, for the machine
+
+    @property
+    def live(self) -> bool:
+        return not self.blocked and not self.skip
 
 
 @dataclass
@@ -89,10 +106,18 @@ class Plan:
 
     @property
     def questions(self) -> list[Action]:
-        return [a for item in self.items if not item.blocked for a in item.actions if a.op == "ask"]
+        return [a for item in self.items if item.live for a in item.actions if a.op == "ask"]
 
     def memory_questions(self) -> list[Item]:
-        return [item for item in self.items if item.old_line and not item.blocked]
+        return [item for item in self.items if item.old_line and item.live]
+
+    def migrations(self) -> list[Item]:
+        """The packages whose data in the world waits for a migration."""
+        return [item for item in self.items if item.migrate and item.live]
+
+    def incomings(self) -> list[Item]:
+        """The data packages whose own data waits for one, before it comes in."""
+        return [item for item in self.items if item.incoming and item.live]
 
     def grouped(self) -> dict[tuple[str, str], list[Action]]:
         """The questions by package and folder: "3 packs are already installed here"."""
@@ -119,6 +144,7 @@ class Done:
     written: int = 0
     removed: int = 0
     places: tuple[str, ...] = ()          # the folders it wrote into, for the machine's note
+    migrated: dict | None = None          # {"from", "to", "gone", "into"}: its data moved
 
 
 @dataclass
@@ -133,7 +159,8 @@ class Outcome:
     def notes(self) -> list[dict]:
         """For the machine's <installed> (step 5): what was written or removed."""
         return [{"name": d.name, "version": d.version, "was": d.was, "files": d.written,
-                 "places": list(d.places), **({"removed": True} if d.status == "removed" else {})}
+                 "places": list(d.places), **({"removed": True} if d.status == "removed" else {}),
+                 **({"data_migrated": d.migrated} if d.migrated else {})}
                 for d in self.done if d.status in ("installed", "updated", "removed",
                                                    "rolled back")]
 
@@ -275,7 +302,7 @@ def plan_install(world: Path | str, store: Store, wants: list[Want], user: str |
         _check_addons(plan, addons_folder)
         for item in ordered:
             item.home = plan.home
-            _check_format(item, items, record)
+            _check_format(item, items, record, store, disk)
             if item.blocked:
                 continue
             folder = Path(plan.temp.name) / item.name
@@ -366,31 +393,65 @@ def _check_addons(plan: Plan, folder: Path | None) -> None:
                               f"work{there}")
 
 
-def _check_format(item: Item, items: dict[str, Item], record: dict) -> None:
-    """The data formats (migrations.md, section 2). An older format in the world, or older
-    incoming data, needs a migration, which comes in step 7; a newer one in the world is
-    refused."""
+def _check_format(item: Item, items: dict[str, Item], record: dict, store: Store,
+                  disk: Disk) -> None:
+    """The data formats (migrations.md, section 2). The world's data in an older format waits
+    for the package's notes; incoming data in an older format than its app, for the app's;
+    a newer format in the world is refused, and so is data newer than its app."""
     fmt = item.manifest.data_format
     there = record.get(item.name, {}).get("data_format")
     if there is not None and there > fmt:
         item.blocked = (f"the world's data is in format {there}, newer than {fmt} of "
                         f"{item.name} {item.release.version}: an older app on newer data")
-    elif there is not None and there < fmt:
-        item.blocked = (f"the world's data is in format {there} and {item.name} "
-                        f"{item.release.version} needs {fmt}: it needs a migration, which hpm "
-                        f"can't do yet")
-    app = item.manifest.for_app
-    if item.blocked or not app:
         return
-    app_format = (items[app].manifest.data_format if app in items
-                  else record.get(app, {}).get("data_format"))
-    if app_format is not None and fmt < app_format:
-        item.blocked = (f"{item.name} {item.release.version} has data in format {fmt}, and "
-                        f"{app} here has {app_format}: it needs a migration, which hpm can't "
-                        f"do yet")
-    elif app_format is not None and fmt > app_format:
+    if there is not None and there < fmt:
+        try:
+            notes = mig.chain(mig.release_notes(item.release), there, fmt,
+                              f"{item.name} {item.release.version}")
+        except HpmError as e:
+            item.blocked = str(e)
+            return
+        item.migrate = Pending(tuple(notes), item.manifest)
+    app = item.manifest.for_app
+    if not app:
+        return
+    if app in items:
+        app_format, layout = items[app].manifest.data_format, items[app].manifest
+    else:
+        app_format = record.get(app, {}).get("data_format")
+        layout = None
+    if app_format is None or fmt == app_format:
+        return
+    if fmt > app_format:
         item.blocked = (f"{item.name} {item.release.version} has data in format {fmt}, newer "
                         f"than {app_format} of {app} here; update {app} first")
+        return
+    try:                       # the app's notes: the release coming, else the world's, else the store's
+        if app in items:
+            notes = mig.release_notes(items[app].release)
+        else:
+            notes = mig.world_notes(disk, app)
+            got = None
+            try:
+                from hallux.hpm.world import read_world_manifest
+                got = read_world_manifest(disk, app)
+            except ValueError:
+                pass
+            layout = got[0] if got else None
+            if not notes or layout is None:
+                found = store.find(app)
+                if found is not None and found.manifest().data_format >= app_format:
+                    notes = notes or mig.release_notes(found)
+                    layout = layout or found.manifest()
+        if layout is None:
+            raise HpmError(f"{app}'s manifest isn't in this world or the store, so the new "
+                           f"layout of its data isn't known")
+        chained = mig.chain(notes, fmt, app_format, app)
+    except HpmError as e:
+        item.blocked = (f"{item.name} {item.release.version} has data in format {fmt}, and "
+                        f"{app} here has {app_format}: {e}")
+        return
+    item.incoming = Pending(tuple(chained), layout)
 
 
 def _meta_files(folder: Path, name: str) -> dict[str, Path]:
@@ -494,6 +555,17 @@ def _loud(plan: Plan, item: Item, path: str, kind: str) -> None:
                           "package's own"))
 
 
+def rewalk(plan: Plan, item: Item, folder: Path | None = None,
+           manifest: Manifest | None = None) -> None:
+    """Mark a package's files again, after its migration changed the world (or, for data
+    coming in, the package itself: `folder` and `manifest` are its migrated form)."""
+    if manifest is not None:
+        item.manifest = manifest
+    item.actions = []
+    plan.loud = [entry for entry in plan.loud if entry[0] != item.name]
+    _walk(plan, item, folder or Path(plan.temp.name) / item.name, rec.load(plan.disk))
+
+
 # ---------------------------------------------------------------------- planning a remove
 
 def plan_remove(world: Path | str, name: str, data: bool = False) -> Plan:
@@ -562,13 +634,21 @@ def plan_adopt(world: Path | str, release: Release, user: str | None = None) -> 
 # ---------------------------------------------------------------------- carrying it out
 
 def apply(plan: Plan, answers: dict[str, str] | None = None, all_files: str | None = None,
-          progress=None, stop=None, merged: dict[str, str] | None = None) -> Outcome:
+          progress=None, stop=None, merged: dict[str, str] | None = None,
+          backup: rec.Backup | None = None) -> Outcome:
     """Carry the plan out. `answers` answers its questions: a placed path to one of the
     question's choices, and "memory:<name>" to REPLACE or KEEP for an old memory line.
     `all_files` answers every file question that `answers` doesn't, if it is one of that
     question's choices. A question left without an answer is an error before anything is
     written. `progress(done)` is told after each package. `stop`, a threading.Event, ends
-    the write between two packages, never in the middle of one: the rest are skipped."""
+    the write between two packages, never in the middle of one: the rest are skipped.
+    `backup` is the update's backup that its migrations made (hallux/hpm/migrate.py): the
+    install adds to it, so one rollback undoes both. A migration still waiting is an error."""
+    waiting = [item.name for item in plan.migrations() + plan.incomings()]
+    if waiting:
+        plan.close()
+        raise HpmError(f"the data of {', '.join(waiting)} has to be migrated first: hpm runs "
+                       f"the migration before it writes")
     answers = dict(answers or {})
     for action in plan.questions:
         answer = answers.get(action.path)
@@ -587,7 +667,7 @@ def apply(plan: Plan, answers: dict[str, str] | None = None, all_files: str | No
         if plan.kind == "remove":
             return _apply_remove(plan, answers, progress)
         plan.merged = dict(merged or {})
-        return _apply_install(plan, answers, progress, stop)
+        return _apply_install(plan, answers, progress, stop, backup)
     finally:
         plan.close()
 
@@ -601,20 +681,25 @@ def _resolved(action: Action, answers: dict[str, str]) -> str:
             KEEP: "keep", MERGE: "merge"}[answer]
 
 
-def _apply_install(plan: Plan, answers: dict[str, str], progress, stop=None) -> Outcome:
+def _apply_install(plan: Plan, answers: dict[str, str], progress, stop=None,
+                   backup: rec.Backup | None = None) -> Outcome:
     disk = plan.disk
     record = rec.load(disk)
-    live = [item for item in plan.items if not item.blocked]
+    live = [item for item in plan.items if item.live]
     touched = {a.path: a.package for item in live for a in item.actions
                if _resolved(a, answers) in ("write", "remove", "merge")}
     touched |= {_beside(a.path): a.package for item in live for a in item.actions
                 if _resolved(a, answers) == "both"}
-    backup = None
     if plan.kind == "install" and live:
-        backup = rec.make_backup(
-            disk, live[0].name, touched, {item.name: record.get(item.name) for item in live},
-            {item.name: {"untagged": item.old_line if answers.get(f"memory:{item.name}") == REPLACE
-                         else None} for item in live})
+        entries = {item.name: record.get(item.name) for item in live}
+        memory = {item.name: {"untagged": item.old_line if answers.get(f"memory:{item.name}") == REPLACE
+                              else None} for item in live}
+        if backup is not None:
+            rec.extend_backup(disk, backup, touched, entries, memory)
+        else:
+            backup = rec.make_backup(disk, live[0].name, touched, entries, memory)
+    elif plan.kind != "install":
+        backup = None
     done: list[Done] = []
     failed: set[str] = set()
     full = None
@@ -623,6 +708,9 @@ def _apply_install(plan: Plan, answers: dict[str, str], progress, stop=None) -> 
         if item.blocked:
             done.append(Done(item.name, version, item.was, "failed", item.blocked))
             failed.add(item.name)
+        elif item.skip:
+            done.append(Done(item.name, version, item.was, "skipped", item.skip))
+            failed.add(item.name)                 # what needs it can't go either
         elif full is not None:
             done.append(Done(item.name, version, item.was, "skipped", full))
         elif stop is not None and stop.is_set():
@@ -714,7 +802,8 @@ def _install_item(plan: Plan, item: Item, answers: dict[str, str], record: dict)
         rec.set_memory(disk, item.name, version, item.manifest.memory_line, item.manifest.rules,
                        replace)
     status = "adopted" if adopting else ("updated" if item.was else "installed")
-    return Done(item.name, version, item.was, status, "", written, removed, tuple(sorted(places)))
+    return Done(item.name, version, item.was, status, "", written, removed, tuple(sorted(places)),
+                item.migrated)
 
 
 def _place_of(path: str) -> str:

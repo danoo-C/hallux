@@ -241,6 +241,56 @@ def make_backup(disk: Disk, label: str, files: dict[str, str], entries: dict[str
     return Backup(folder, data)
 
 
+def _write_backup(backup: Backup) -> None:
+    write_whole(backup.folder / "backup.json", json.dumps(backup.data, indent=1, sort_keys=True)
+                + "\n")
+
+
+def extend_backup(disk: Disk, backup: Backup, files: dict[str, str],
+                  entries: dict[str, dict | None], memory: dict[str, dict]) -> None:
+    """More for a backup that was made earlier in the same update: a migration's backup, which
+    the install after it adds to (migrations.md, section 5: one rollback brings back the data
+    and the old version together). A path it lists already, a package's entry and its memory
+    stay as they were then: that is what a rollback must bring back."""
+    listed = backup.data["files"]
+    for path, package in sorted(files.items()):
+        if path in listed:
+            continue
+        real = disk.root / path.lstrip("/")
+        if real.is_file() and not real.is_symlink():
+            target = backup.folder / "files" / path.lstrip("/")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            copy_whole(real, target)
+            listed[path] = {"package": package, "was": "there"}
+        else:
+            listed[path] = {"package": package, "was": "missing"}
+    for name, entry in entries.items():
+        if name not in backup.data["entries"]:
+            backup.data["entries"][name] = entry
+            backup.data["packages"] = sorted(set(backup.data["packages"]) | {name})
+    for name, value in memory.items():
+        kept = backup.data["memory"].get(name)
+        if kept is None or (not kept.get("untagged") and value.get("untagged")):
+            backup.data["memory"][name] = value
+    _write_backup(backup)
+
+
+def drop_from_backup(backup: Backup, name: str) -> None:
+    """Take a package out of a backup again: its migration was rolled back before anything
+    of it was written. A backup left with no package is removed."""
+    for path, info in list(backup.data["files"].items()):
+        if info["package"] == name:
+            (backup.folder / "files" / path.lstrip("/")).unlink(missing_ok=True)
+            del backup.data["files"][path]
+    backup.data["packages"] = [p for p in backup.data["packages"] if p != name]
+    backup.data["entries"].pop(name, None)
+    backup.data["memory"].pop(name, None)
+    if not backup.data["packages"]:
+        shutil.rmtree(backup.folder, ignore_errors=True)
+        return
+    _write_backup(backup)
+
+
 def backups(disk: Disk) -> list[Backup]:
     """Every backup of the world, oldest first."""
     base = hpm_folder(disk) / BACKUPS
@@ -263,7 +313,7 @@ def backups_size(disk: Disk) -> int:
 
 def mark_rolled_back(backup: Backup, package: str) -> None:
     backup.data.setdefault("rolled_back", []).append(package)
-    write_whole(backup.folder / "backup.json", json.dumps(backup.data, indent=1, sort_keys=True) + "\n")
+    _write_backup(backup)
 
 
 def clean_backups(disk: Disk) -> int:

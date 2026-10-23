@@ -1586,8 +1586,8 @@ def test_the_app_tells_the_machine_which_settings_came_from_flags(tmp_path, monk
                                                   for _ in range(6))
 
     class Installing:
-        watch, catalog, installed, plan_install, plan_remove, go, stop, back = (
-            staticmethod(lambda *args: None) for _ in range(8))
+        (watch, catalog, installed, plan_install, plan_remove, go, stop, back, migration_go,
+         migration_cancel) = (staticmethod(lambda *args: None) for _ in range(10))
 
     class Recorded:
         view = change = save = refill = staticmethod(lambda *args: None)

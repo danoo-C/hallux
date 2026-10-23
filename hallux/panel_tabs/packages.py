@@ -11,9 +11,14 @@ package ticks and its conflicts are answered the same way in both.
 Its key is g (Packa_g_es): p is the Files tab's path row. No key of its own is a tab's
 letter (a d f g c) while the list is shown; while a plan's questions are asked the tab
 counts as typing, so o s k f r are its answers there.
+
+A migration (docs/hpm/migrations.md, section 4) waits on the tab as in the terminal: Enter
+lets the AI start, Enter migrates after its plan, Enter accepts after the checks; q cancels,
+r rolls back, l looks at the staged files first. The tab counts as typing then too.
 """
 from __future__ import annotations
 
+import textwrap
 from typing import Callable
 
 from prompt_toolkit.application import get_app
@@ -26,7 +31,10 @@ from prompt_toolkit.layout import ConditionalContainer, HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 
 from hallux.hpm.engine import KEEP, REPLACE
-from hallux.hpm.running import ASKING, DONE, FAILED, LISTING, PLANNING, WRITING, Entry, Seen
+from hallux.hpm.running import (
+    ASKING, CHECKED, DONE, FAILED, LET, LISTING, MIGRATING, MIGRATION, PLAN, PLANNING, WRITING,
+    Entry, Seen,
+)
 from hallux.hpm.screens import Checkboxes, Choice, Conflicts
 from hallux.panel import Tab
 from hallux.statusbar import GRAY, RED, YELLOW_NOTE
@@ -49,10 +57,14 @@ class PackagesTab(Tab):
     def __init__(self, watch: Callable[[], Seen], catalog: Callable[..., list[Entry]],
                  installed: Callable[[], dict], plan_install: Callable, plan_remove: Callable,
                  go: Callable[[dict], None], stop: Callable[[], None],
-                 back: Callable[[], None]) -> None:
+                 back: Callable[[], None], migration_go: Callable[[], None] = lambda: None,
+                 migration_cancel: Callable[[], None] = lambda: None) -> None:
         self.watch, self.catalog, self.installed = watch, catalog, installed
         self.plan_install, self.plan_remove = plan_install, plan_remove
         self.go, self.stop, self.back = go, stop, back
+        self.migration_go, self.migration_cancel = migration_go, migration_cancel
+        self.looking = False                             # l: the staged files, at the checks
+        self.scrolled = 0                                # ↑ ↓ on a migration's screens
         self.view = STORE
         self.word = ""                                   # the filter's word
         self.row: Buffer | None = None                   # the filter's row, while it is open
@@ -60,7 +72,8 @@ class PackagesTab(Tab):
         self.entries: list[Entry] = []
         self.model: Checkboxes | None = None
         self.questions: Conflicts | None = None          # the plan's, in ASKING
-        self.asked_plan = None                           # the plan they belong to
+        self.asked_plan = None                           # the plan they belong to, and
+                                                         # how often it was asked
         self.old_lines: dict[str, str] = {}              # "memory:<name>": replace or keep
         self.problem: str | None = None                  # the store couldn't be read
         self.top = 0
@@ -79,7 +92,7 @@ class PackagesTab(Tab):
 
     @property
     def typing(self) -> bool:
-        return self.row is not None or self.watch().state == ASKING
+        return self.row is not None or self.watch().state in (ASKING, MIGRATING, MIGRATION)
 
     def hint(self) -> str:
         state = self.watch().state
@@ -89,6 +102,15 @@ class PackagesTab(Tab):
             return "↑ ↓ scroll · Esc back"
         if state == PLANNING:
             return "working it out… · Esc stop"
+        if state == MIGRATING:
+            return "the AI works · Esc cancels this migration once it is done"
+        if state == MIGRATION:
+            phase = self.watch().phase
+            if phase == CHECKED:
+                return ("↑ ↓ scroll · l back to the checks" if self.looking else
+                        "Enter accept · r roll back · l look first · ↑ ↓ scroll")
+            return ("Enter migrate · q cancel · ↑ ↓ scroll" if phase == PLAN
+                    else "Enter let the AI · q leave it out")
         if state == ASKING:
             keys = ["o s k f r m on a row", "O overwrite all", "S skip all"] if self._has_questions() else []
             if self.old_lines:
@@ -105,7 +127,10 @@ class PackagesTab(Tab):
         """What Esc does here, for the panel's foot."""
         if self.model is not None and self.model.viewing is not None:
             return "back"
-        return "stop" if self.watch().state in (PLANNING, WRITING) else "close"
+        state = self.watch().state
+        if state == MIGRATION:
+            return "cancel"
+        return "stop" if state in (PLANNING, WRITING, MIGRATING) else "close"
 
     def leave(self) -> bool:
         state = self.watch().state
@@ -113,8 +138,14 @@ class PackagesTab(Tab):
             self._close_row()
         elif self.model is not None and self.model.viewing is not None:
             self.model.viewing = None
-        elif state in (PLANNING, WRITING):
+        elif state in (PLANNING, WRITING, MIGRATING):
             self.stop()
+        elif state == MIGRATION:
+            self.looking = False
+            self.migration_cancel()
+        elif state == ASKING and self.watch().landed:
+            self.host.say("a migration has landed: its data is in the new format, so Enter "
+                          "installs the new version now")
         elif state == ASKING:
             self._back()                                 # the questions: back to the list
         else:
@@ -193,11 +224,12 @@ class PackagesTab(Tab):
 
     def _text(self) -> list:
         seen = self.watch()
-        if self.questions is not None and (seen.state != ASKING or seen.plan is not self.asked_plan):
+        asked = (seen.plan, seen.asked)
+        if self.questions is not None and (seen.state != ASKING or self.asked_plan != asked):
             self.questions, self.asked_plan = None, None
         if seen.state == ASKING and self.questions is None:
             self.questions = Conflicts(seen.plan.grouped())
-            self.asked_plan = seen.plan
+            self.asked_plan = asked
             self.old_lines = {f"memory:{i.name}": REPLACE for i in seen.plan.memory_questions()}
         lines = self._lines(seen)
         self.lines_drawn = len(lines)
@@ -214,6 +246,13 @@ class PackagesTab(Tab):
                 return [[("bold", " The AI is merging the memory files…")]]
             what = "removing" if seen.doing == "remove" else "installing"
             return [[("bold", f" Working out what {what} would write…")]]
+        if seen.state == MIGRATING:
+            return [[("bold", f" {seen.busy}")], [],
+                    [(NOTE, " Nothing in the world changes until you accept.")]]
+        if seen.state == MIGRATION:
+            lines = self._migration(seen)
+            self.scrolled = max(0, min(self.scrolled, len(lines) - 3))
+            return lines[self.scrolled:]
         if seen.state == ASKING:
             return self._asking(seen)
         if seen.state in (WRITING, DONE):
@@ -246,12 +285,55 @@ class PackagesTab(Tab):
         lines += [_styled(line) for line in self.model.tail()]
         return lines
 
+    def _wrapped(self, style: str, text: str) -> list[list]:
+        """A line of a migration's screens, folded at the tab's width: a check or a note of
+        the AI's can be long, and nothing of it may be cut off."""
+        indent = " " * (len(text) - len(text.lstrip()) + 2)
+        folded = textwrap.wrap(text, max(30, self._width() - 2), subsequent_indent=indent,
+                               break_on_hyphens=False) or [""]
+        return [[(style, " " + line)] for line in folded]
+
+    def _migration(self, seen: Seen) -> list[list]:
+        item, m = seen.item, seen.migration
+        lines = [row for line in seen.said for row in self._wrapped(NOTE, line)]
+        lines += [[]] if seen.said else []
+        if seen.phase == LET:
+            pending = item.incoming if seen.incoming else item.migrate
+            start, end = pending.notes[0].old, pending.notes[-1].new
+            what = f"{item.name}'s data" + (" coming in" if seen.incoming else "")
+            lines += self._wrapped("bold", f"{what} is in format {start}; {item.name} "
+                                           f"{item.release.version} needs {end}.")
+            lines += self._wrapped("", "The AI migrates it first, into a staging folder: "
+                                       "nothing in the world changes until you accept.")
+            lines += self._wrapped(NOTE, f"Its notes: {', '.join(n.name for n in pending.notes)}; "
+                                         f"for each, a plan and a migration, each a session of "
+                                         f"the AI at most at the cap of hpm's config.toml.")
+            lines += [[]] + self._wrapped(NOTE, f"Enter lets the AI start · q leaves {item.name} "
+                                                f"out, and nothing of it is written")
+            return lines
+        if seen.phase == PLAN:
+            for i, line in enumerate(m.plan_lines()):
+                lines += self._wrapped("bold" if i == 0 else "", line)
+            return lines + [[], [(NOTE, " Enter migrate · q cancel (nothing changes)")]]
+        if self.looking:
+            return lines + [row for line in m.look_lines() for row in self._wrapped("", line)] + [
+                [], [(NOTE, " l back to the checks")]]
+        for i, line in enumerate(m.checked_lines()):
+            style = "bold" if i == 0 else LOUD if line.lstrip().startswith("✗") else ""
+            lines += self._wrapped(style, line)
+        return lines + [[], [(NOTE, " Enter accept (the old paths go, the backup stays) · "
+                                    "r roll back · l look first")]]
+
     def _asking(self, seen: Seen) -> list[list]:
         plan = seen.plan
-        lines = []
+        lines = [row for line in seen.said for row in self._wrapped(NOTE, line)]
+        lines += [[]] if seen.said else []
         for item in plan.items:
             if item.blocked:
                 lines.append([(LOUD, f" ✗ {item.name}: {item.blocked}")])
+                continue
+            if item.skip:
+                lines.append([(NOTE, f" – {item.name}: {item.skip}")])
                 continue
             if seen.doing == "remove":
                 gone = sum(1 for a in item.actions if a.op == "remove")
@@ -266,6 +348,9 @@ class PackagesTab(Tab):
             was = f" (installed {item.was})" if item.was else ""
             lines.append([("bold", f" {item.name} {item.release.version}{was}"),
                           ("", ": " + " · ".join(parts))])
+            if item.migrate:
+                lines.append([(WARNED, f"   its data migrates {item.migrate.notes[0].old} → "
+                                       f"{item.migrate.notes[-1].new} first, with the AI")])
         for note in plan.notes:
             lines.append([(WARNED, f" note: {note}")])
         for name, path, why in plan.loud:
@@ -292,11 +377,19 @@ class PackagesTab(Tab):
                 lines.append([(NOTE, f"   … and {len(body) - 12} more lines")])
         for path, why in seen.unmerged.items():
             lines += [[], [(WARNED, f" {path} can't be merged ({why}): it is skipped")]]
-        lines += [[], [(NOTE, " Enter writes it; Esc goes back, and nothing is written.")]]
+        if plan.migrations():
+            lines += [[], [(NOTE, " Enter goes on to the migrations; Esc goes back, and nothing "
+                                  "is written.")]]
+        elif seen.landed:
+            lines += [[], [(NOTE, " Enter writes it (its data is migrated already).")]]
+        else:
+            lines += [[], [(NOTE, " Enter writes it; Esc goes back, and nothing is written.")]]
         return lines
 
     def _progress(self, seen: Seen) -> list[list]:
-        lines = [[("bold", " Removing…" if seen.doing == "remove" else " Installing…")]] \
+        lines = [row for line in seen.said for row in self._wrapped(NOTE, line)]
+        lines += [[]] if seen.said else []
+        lines += [[("bold", " Removing…" if seen.doing == "remove" else " Installing…")]] \
             if seen.state == WRITING else []
         for done in seen.progress:
             sign = {"failed": "✗", "skipped": "–"}.get(done.status, "✓")
@@ -307,8 +400,8 @@ class PackagesTab(Tab):
         if seen.state == DONE and seen.outcome is not None:
             lines += [[], [("bold", " " + seen.outcome.summary())]]
             if seen.outcome.backup:
-                lines.append([(NOTE, f" backup: {seen.outcome.backup} (hpm rollback in your "
-                                     f"terminal, once the world is stopped)")])
+                lines += self._wrapped(NOTE, f"backup: {seen.outcome.backup} (hpm rollback in "
+                                             f"your terminal, once the world is stopped)")
             if seen.outcome.notes:
                 lines.append([(NOTE, " The machine is told with your next line.")])
         return lines
@@ -340,6 +433,8 @@ class PackagesTab(Tab):
         viewing = Condition(lambda: self.model is not None and self.model.viewing is not None)
         asking = Condition(lambda: self.watch().state == ASKING)
         ended = Condition(lambda: self.watch().state in (DONE, FAILED))
+        migration = Condition(lambda: self.watch().state == MIGRATION)
+        migrating = Condition(lambda: self.watch().state == MIGRATING)
         in_row = Condition(lambda: self.row is not None)
 
         def to(handler):
@@ -376,11 +471,37 @@ class PackagesTab(Tab):
         kb.add("enter", filter=asking)(to(self._go))
         kb.add(Keys.Any, filter=asking)(lambda event: None)  # nothing else, while asked
         kb.add("enter", filter=ended)(to(self._back))
+        kb.add("enter", filter=migration)(to(self._migration_go))
+        kb.add("q", filter=migration)(to(lambda: self._migration_key("q")))
+        kb.add("r", filter=migration)(to(lambda: self._migration_key("r")))
+        kb.add("l", filter=migration)(to(lambda: self._migration_key("l")))
+        kb.add("up", filter=migration)(to(lambda: self._scroll_migration(-1)))
+        kb.add("down", filter=migration)(to(lambda: self._scroll_migration(1)))
+        kb.add(Keys.Any, filter=migration)(lambda event: None)
+        kb.add(Keys.Any, filter=migrating)(lambda event: None)
 
         kb.add(Keys.Any, filter=in_row)(lambda event: self._type(event.data))
         kb.add("backspace", filter=in_row)(to(self._erase))
         kb.add("enter", filter=in_row)(to(self._close_row))
         return kb
+
+    def _migration_go(self) -> None:
+        if self.looking:
+            return
+        self.scrolled = 0
+        self.migration_go()
+
+    def _scroll_migration(self, by: int) -> None:
+        self.scrolled = max(0, self.scrolled + by)
+
+    def _migration_key(self, key: str) -> None:
+        """q at the start and at the plan, r and l at the checks."""
+        phase = self.watch().phase
+        if key == "l" and phase == CHECKED:
+            self.looking, self.scrolled = not self.looking, 0
+        elif (key == "q" and phase in (LET, PLAN)) or (key == "r" and phase == CHECKED):
+            self.looking, self.scrolled = False, 0
+            self.migration_cancel()
 
     def _switch(self, view: str) -> None:
         self.view = STORE if self.view == view else view

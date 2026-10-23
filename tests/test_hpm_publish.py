@@ -206,7 +206,7 @@ def test_a_manifest_of_another_name(world, store):
 def test_migration_notes_go_with_the_release(world, store):
     notes = world / "usr/local/share/hpm/kittystory/migrations"
     notes.mkdir()
-    (notes / "1-to-2.md").write_text("# kittystory data format 1 → 2\n")
+    (notes / "1-to-2.md").write_text("# kittystory data format 1 → 2\n\nOld paths: none\n")
     [release] = go(world, store)
     assert "migrations/1-to-2.md" in members(release)
     (notes / "run.sh").write_text("#!/bin/sh\n")
@@ -245,6 +245,11 @@ def test_a_new_data_format_suggests_the_first_number_up(world, store):
     text = (world / "usr/local/share/hpm/kittystory-chars/hpm.toml").read_text()
     (world / "usr/local/share/hpm/kittystory-chars/hpm.toml").write_text(
         text.replace('for = "kittystory"', 'for = "kittystory"\ndata_format = 2'))
+    with pytest.raises(HpmError, match="no migration from data format 1"):
+        go(world, store, "kittystory-chars")              # a new format needs its note
+    notes = world / "usr/local/share/hpm/kittystory-chars/migrations"
+    notes.mkdir()
+    (notes / "1-to-2.md").write_text("# 1 → 2\n\nOld paths: none\n")
     [release] = go(world, store, "kittystory-chars")
     assert str(release.version) == "2.0"
 
@@ -332,6 +337,9 @@ def test_data_that_moved_without_a_new_format_stops_it(world, store):
         go(world, store, "kittystory-chars")
     path.write_text(path.read_text().replace('for = "kittystory"',
                                              'for = "kittystory"\ndata_format = 2'))
+    notes = world / "usr/local/share/hpm/kittystory-chars/migrations"
+    notes.mkdir()
+    (notes / "1-to-2.md").write_text("# 1 → 2\n\nOld paths: ~/.kittystory/scene.md\n")
     assert str(go(world, store, "kittystory-chars")[0].version) == "2.0"
 
 

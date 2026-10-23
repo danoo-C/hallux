@@ -84,3 +84,107 @@ With a stand-in AI that follows a fixed note.
 kittystory 2.0, with characters in the new layout of migrations.md section 1 and its note,
 updates a copy of `test-hallux` in format 1: Emma, Lucy and Emilly come through with every
 memory line, and a rollback brings back 1.x as it was. One paid run, after the user says go.
+
+## As built
+
+Built 2026-10-23, **without the paid run** (it waits for the user's go):
+`hallux/hpm/migrate.py` (the notes, `StagingDisk`, one package's `Migration`, the note at
+publish), `hallux/hpm/prompts/{migrate,write-migration}.md`; the engine (a package can
+wait for a migration, `rewalk`, a backup that grows), `record.py` (`extend_backup`,
+`drop_from_backup`), `ai.py` (a job's own disk, the `copy` tool, a job without
+`write_file`), `assist.py` (the note writer, the test install's migrations), `cli.py`,
+`publish.py`, `running.py` and the Packages tab; `tests/test_hpm_migrate.py` (28 tests).
+Four tests of steps 2 and 3 now expect step 7's rules (a note needs an "Old paths" line; a
+new format needs its note). The whole suite: 2274 passed with the sandbox test left out as
+before; two web addon tests fail now and then, on their own too
+(`test_the_manuals_example_works_as_it_says` failed once in four runs alone; it waits
+20 ms at a time for a Qt page), and step 7 changes nothing of the web addon.
+
+**Checked on a real terminal** (tmux, 80 and 100 columns): Hallux on a fresh copy of the
+step 5 world (`test-hallux` with kittystory 1.1 and the packs), a kittystory 2.0 built
+from 1.1 with the layout of migrations.md section 1 and its note, the machine on the tests'
+pretend model and hpm's AI a stand-in that follows the note on the real files. Ctrl+F12,
+`g`, `u`, space, Enter: "its data migrates 1 → 2 first, with the AI"; Enter: the wait
+before the AI starts; Enter: the plan (Emma, Lucy, emilly); Enter: the checks, 6 of 6;
+`l`: the staged files; Enter: accepted and written. Emma, Lucy and Emilly came through,
+each `memories/<name>.md` byte for byte the original `memory.md`, `chars/` gone, no staging
+folder left, and the machine's next message had `"data_migrated": {"from": 1, "to": 2,
+"gone": ["~/.kittystory/chars/"], "into": [...]}`. Then `hpm rollback kittystory` in the
+terminal: `~/.kittystory` as it was (`diff -r`), the 1.1 card back. Long lines were cut at
+the tab's edge on the first try; they are folded now.
+
+**The paid run, still to do** (after the user says go): the same update, with the AI
+following the note itself, on a copy of `test-hallux`; Emma, Lucy and Emilly with every
+memory line, a rollback to 1.x as it was, and the cost noted here. The pieces for it are in
+the session's scratchpad (`run7/setup.py` builds the 2.0); a run with the model needs
+`fake_hallux.py` without its stand-in for hpm's AI.
+
+What the code does that the step above didn't say, or says differently:
+
+- **One backup for an update and its migrations.** The first migration takes it (every
+  file under the old and the new data paths, and the record's entry as it was); the next
+  ones and the install after them add to it, and a path or an entry it has already stays
+  as it was then. So `hpm rollback kittystory` brings back the 1.x data and 1.x together,
+  as migrations.md section 5 wants. A cancelled migration takes its package out of the
+  backup again, and a backup left with nothing is removed.
+- **The order.** Data coming in is migrated first (in the plan's temporary folder, nothing
+  in the world), then every question of the install is asked, then the world's data is
+  migrated, and only then is anything installed. So you answer everything before the AI
+  starts, and nothing is installed over data in the old format. A migrated package is
+  walked again, and a question that brings is asked then. Cancelling there says that the
+  data is migrated, and how to go on (`hpm update`) or back (`hpm rollback`); the tab
+  doesn't let Esc go back there at all.
+- **A package whose migration doesn't land is skipped, not failed:** q at the plan, r at
+  the end, a failed session, or `--accept-migration` with a check that didn't hold. What
+  needs it is skipped too. Nothing of it was written.
+- **Without a terminal:** `--accept-migration` lets the AI run and accepts only if every
+  check held; without it hpm stops before anything is written and names the flag. On a
+  terminal hpm asks first (the model and the cap), then shows the plan (Enter, q) and the
+  checks (Enter, r, l).
+- **The AI's two parts are two sessions per note,** the plan (no `write_file`, no `copy`)
+  and the migration, each with the cap of the store's `config.toml`. Each must end with JSON
+  (`{"rows": …}`, `{"checks": …}`); an answer without it is shown to the AI once more, then
+  the migration fails. A row whose new path is outside the data paths is a problem too.
+- **The staging disk** reads `~/…` as the user's home, as the notes write paths, refuses
+  every write outside the new layout's data paths (and anything the world's Disk refuses),
+  and holds at most 10,000 files and 512 MB. `copy` copies a staged file or the world's;
+  Hallux's check compares each copy with its source at the end.
+- **Hallux's checks:** every file the plan named is staged; the world's files under the
+  old and new data paths are as the backup has them (none new, none changed, none gone);
+  every copy is its source byte for byte. Then the note's checks as the AI reports them; a
+  check it didn't report counts as not held.
+- **At accept** the staged files land, the files under the old paths go (not one another
+  package's record holds: those stay, and the checks screen says so), the record's entry
+  gets the new files and the new format. With several notes, a file staged by one note
+  under a later note's old paths was a step on the way and doesn't land.
+- **The machine is told** in `<installed>`: `"data_migrated": {"from", "to", "gone",
+  "into"}` beside the package, so its AI knows where the characters are now. (Step 9 puts a
+  line about it into `prompt.md`.)
+- **Incoming data** takes the notes of the app coming in the same plan, else the world's
+  copy (`/usr/local/share/hpm/<app>/migrations/`), else the app's release in the store; the
+  new layout is that app's manifest. After accept the data package is made again from its
+  migrated folder, its manifest given the app's data patterns and the new format, and walked
+  again. Its own `hpm.toml` in `/usr/local/share/hpm/<name>/` is the one it was published
+  with (format 1): the record has the format.
+- **A note** must have the line `Old paths…:` (its value may be `none`); each old path is
+  a machine path or pattern, not `~/` or `/` themselves, not a whole top folder (`/usr`),
+  nothing under `/.hallux`. "Checks:" is the list under that line. Its name is
+  `<from>-to-<to>.md`; a note may skip formats (`1-to-3.md`), and the chain takes the one
+  that goes furthest.
+- **Publish** refuses a hole: for the format of every earlier release in the store, the
+  notes must lead to the new one. When the data moved without a new format, or the format
+  went up without the note, publish offers the `write-migration` job (`--write-migration`
+  without a terminal): the AI reads the last release laid out as a world and the world,
+  writes `/usr/local/share/hpm/<name>/migrations/<old>-to-<new>.md`, hpm checks the note
+  (once back to the AI if it doesn't read), raises `data_format` in the world's manifest if
+  it has to, and says the note never ran on real data. The test install (`--test`) runs a
+  migration on its copy and accepts it whatever the checks say (the copy goes after),
+  showing the plan and the checks.
+- **The Packages tab** waits three times for each migration, as the terminal: Enter lets
+  the AI start (q leaves the package out), Enter migrates after the plan (q cancels),
+  Enter accepts after the checks (r rolls back, l shows the staged files, ↑ ↓ scroll).
+  Esc cancels the migration on the screen; while the AI works it cancels once its step is
+  done. The tab counts as typing there, so no letter is a tab's.
+
+**Not built:** `--force` for an older app on newer data (migrations.md, decision 2). No step
+of the plan names it; a world with newer data is refused, as the step's tests say.

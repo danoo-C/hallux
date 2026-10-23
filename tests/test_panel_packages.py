@@ -76,7 +76,8 @@ def world(tmp_path):
 def tab_of(installs):
     return PackagesTab(installs.watch, installs.catalog, installs.installed,
                        installs.plan_install, installs.plan_remove, installs.go,
-                       installs.stop, installs.back)
+                       installs.stop, installs.back, installs.migration_go,
+                       installs.migration_cancel)
 
 
 def panel_of(installs, *more):

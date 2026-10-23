@@ -1,15 +1,16 @@
 """The hpm command (docs/hpm/hpm.md; the plan's steps 2 and 4).
 
     hpm install NAME… [--extras K,K|none] [--overwrite all|none] [--old-line replace|keep]
-                      [--user U] [--yes] [--world W]
-    hpm update [NAME…] [--overwrite …] [--old-line …] [--user U] [--yes] [--world W]
+                      [--user U] [--yes] [--accept-migration] [--world W]
+    hpm update [NAME…] [--overwrite …] [--old-line …] [--user U] [--yes]
+                       [--accept-migration] [--world W]
     hpm remove NAME [--data] [--overwrite all|none] [--world W]
     hpm rollback NAME [--world W]
     hpm adopt NAME [--version V] [--old-line …] [--user U] [--yes] [--world W]
     hpm list [--world W]
     hpm publish NAME [--all] [--version V | --yes] [--changelog TEXT] [--user U]
                      [--private yes|no] [--old-line replace|keep] [--draft] [--review]
-                     [--test] [--world W]
+                     [--write-migration] [--test] [--world W]
     hpm init NAME [--yes] [--user U] [--world W]          the AI drafts the manifest
     hpm show NAME
     hpm search WORD
@@ -20,6 +21,11 @@ A NAME is a package (kittystory), a package of a store (local/kittystory), a who
 Without --world, hpm works on the world you are in. Every question has a flag; without a
 terminal a question whose flag is missing is an error that names it. install, update,
 remove and rollback refuse a world that is running: use its Packages tab then.
+
+Data in an older format is migrated before the new version is installed
+(docs/hpm/migrations.md): the AI's plan, then its migration into a staging folder, then the
+checks, and you accept. Without a terminal, --accept-migration lets it run and accepts it
+only if every check held.
 """
 from __future__ import annotations
 
@@ -80,6 +86,9 @@ def parser() -> argparse.ArgumentParser:
         p.add_argument("--user", metavar="U", help="whose home ~ is, in a world with several")
         p.add_argument("--yes", action="store_true",
                        help="the defaults, without the checkboxes; replace the old memory line")
+        p.add_argument("--accept-migration", action="store_true", dest="accept_migration",
+                       help="data in an older format: let the AI migrate it, and accept the "
+                            "migration if every check held (on a terminal hpm asks)")
         world(p)
 
     p = commands.add_parser("install", help="install packages into a world")
@@ -130,6 +139,9 @@ def parser() -> argparse.ArgumentParser:
                    help="the AI drafts the changelog entry (on a terminal hpm asks)")
     p.add_argument("--review", action="store_true",
                    help="the AI reviews the card (on a terminal hpm asks)")
+    p.add_argument("--write-migration", action="store_true", dest="write_migration",
+                   help="the data moved: the AI writes the migration note (on a terminal hpm "
+                        "asks)")
     p.add_argument("--test", action="store_true",
                    help="install it into a copy of the base world and try it once (it asks)")
     world(p)
@@ -276,6 +288,9 @@ class Run:
                 old = record[want.name]["version"]
                 notes.append(f"installed {old} → {manifest.version}"
                              if Version(old) != manifest.version else "installed ✓")
+                there = record[want.name].get("data_format")
+                if there is not None and there < manifest.data_format:
+                    notes.append(f"data {there} → {manifest.data_format}, with the AI")
             notes += [f"needs the {a} addon ✗" for a in manifest.requires_addons
                       if any(f"the {a} addon" in p for p in problems)]
             notes += [f"needs the {a} addon ✓" for a in manifest.requires_addons
@@ -315,6 +330,11 @@ class Run:
     # ------------------------------------------------------------------ carrying a plan out
 
     def _carry_out(self, plan: Plan, answer_files: bool = True) -> int:
+        """The plan's questions, its migrations and the write: data coming in is migrated
+        first (in a temporary folder), then every question is asked, then the world's data
+        is migrated, and only then is anything installed."""
+        from hallux.hpm.migrate import Shared
+        shared = Shared()
         try:
             for note in plan.notes:
                 self.say(f"note: {note}")
@@ -323,6 +343,8 @@ class Run:
             for item in plan.items:
                 if item.blocked:
                     self.say(f"✗ {item.name}: {item.blocked}")
+            for item in plan.incomings():
+                self._migrate(plan, item, shared, incoming=True)
             answers, merged = self._memory_answers(plan), {}
             if answer_files and plan.questions:
                 files = self._file_answers(plan)
@@ -330,7 +352,20 @@ class Run:
                     return self._cancelled()
                 merged = self._merges(plan, files)
                 answers |= files
-            outcome = engine.apply(plan, answers, progress=self._progress, merged=merged)
+            if plan.migrations():
+                for item in plan.migrations():
+                    self._migrate(plan, item, shared)
+                more = [q for q in plan.questions if q.path not in answers]
+                if more and answer_files:         # a migrated package walked again
+                    files = self._file_answers(plan, more)
+                    if files is None:
+                        self.say("!! cancelled after the migration: the data is in its new "
+                                 "format and the old version is still installed; hpm update "
+                                 "installs the new one, hpm rollback puts the data back")
+                        return 1
+                    answers |= files
+            outcome = engine.apply(plan, answers, progress=self._progress, merged=merged,
+                                   backup=shared.backup)
         finally:
             plan.close()
         self.say(outcome.summary() + (f"  (backup: {outcome.backup})" if outcome.backup else ""))
@@ -356,16 +391,89 @@ class Run:
                                f"--old-line replace or keep, or --yes")
         return answers
 
-    def _file_answers(self, plan: Plan) -> dict[str, str] | None:
+    def _file_answers(self, plan: Plan, only=None) -> dict[str, str] | None:
+        questions = plan.questions if only is None else only
         overwrite = getattr(self.flags, "overwrite", None)
         if overwrite is not None:
             wanted = (OVERWRITE, REMOVE) if overwrite == "all" else (SKIP, KEEP)
             return {q.path: next((c for c in wanted if c in q.choices), q.default)
-                    for q in plan.questions}
+                    for q in questions}
         if not self.interactive:
-            raise HpmError(f"{len(plan.questions)} file(s) are in the way, and there is no "
+            raise HpmError(f"{len(questions)} file(s) are in the way, and there is no "
                            f"terminal to ask about them; pass --overwrite all or none")
-        return self.screens.conflicts(plan.grouped())
+        groups = plan.grouped()
+        if only is not None:
+            paths = {q.path for q in only}
+            groups = {k: [q for q in qs if q.path in paths] for k, qs in groups.items()}
+            groups = {k: qs for k, qs in groups.items() if qs}
+        return self.screens.conflicts(groups)
+
+    def _migrate(self, plan: Plan, item, shared, incoming: bool = False) -> None:
+        """One package's migration, on the terminal: the AI's plan of each note (Enter goes
+        on, q cancels), its migration into the staging folder, the checks, and then Enter
+        accepts, r rolls back, l looks first. A package whose migration doesn't land is left
+        out of the install, and what needs it too."""
+        from hallux.hpm import ai, assist, migrate
+        pending = item.incoming if incoming else item.migrate
+        start, end = pending.notes[0].old, pending.notes[-1].new
+        what = f"{item.name}'s data" + (" coming in" if incoming else "")
+        given = getattr(self.flags, "accept_migration", False)
+        self.say(f"{what} is in format {start}, and {item.name} {item.release.version} needs "
+                 f"{end}: it is migrated first ({', '.join(n.name for n in pending.notes)})")
+        settings = ai.settings(self.store)
+        if not assist.may_spend(self.q, f"migrate {what} {start} → {end}", settings,
+                                plan.disk.root, "--accept-migration", given):
+            if not self.interactive:
+                raise HpmError(f"{what} has to be migrated {start} → {end} by the AI, and there "
+                               f"is no terminal to ask; pass --accept-migration (it accepts "
+                               f"only if every check holds). Nothing was written")
+            item.skip = "its data wasn't migrated, so nothing of it was written"
+            return
+        ask = self.interactive and not given
+        m = migrate.Migration(plan, item, self.store, incoming=incoming, shared=shared,
+                              client_factory=self.client_factory)
+        try:
+            while m.state == migrate.PLANNING:
+                self.say(f"the AI plans the migration ({m.note.name})…")
+                m.plan_rows()
+                self.say("\n".join(m.plan_lines()))
+                if ask and self.q.choose("Enter migrate · q cancel (nothing changes)", "q",
+                                         "--accept-migration") == "q":
+                    m.cancel()
+                    item.skip = "you cancelled its migration; nothing of it was written"
+                    return
+                self.say("the AI migrates, into a staging folder…")
+                m.migrate()
+            self.say("\n".join(m.checked_lines()))
+            if ask:
+                while True:
+                    answer = self.q.choose("Enter accept (the old paths go, the backup stays) "
+                                           "· r roll back · l look first", "rl",
+                                           "--accept-migration")
+                    if answer != "l":
+                        break
+                    self.say("\n".join(m.look_lines()))
+                if answer == "r":
+                    m.cancel()
+                    item.skip = "you rolled its migration back; nothing of it was written"
+                    return
+            elif not m.held:
+                m.cancel()
+                item.skip = ("a check of its migration didn't hold, and --accept-migration "
+                             "accepts only when every one does; nothing of it was written")
+                return
+            m.accept()
+            self.say(f"✓ {what}: {m.landed} files in, {m.removed} old ones out; format {end} "
+                     f"(the AI's part ~${m.spent:.4f})")
+        except HpmError as e:
+            if m.state not in (migrate.ACCEPTED, migrate.CANCELLED) and not m.landed:
+                m.cancel()
+            item.skip = f"its migration failed: {e}"
+            self.say(f"✗ {item.name}: {e} (the AI's part ~${m.spent:.4f})")
+        except BaseException:
+            if m.state not in (migrate.ACCEPTED, migrate.CANCELLED) and not m.landed:
+                m.cancel()
+            raise
 
     def _merges(self, plan: Plan, answers: dict[str, str]) -> dict[str, str]:
         """Each file answered with merge, merged by the AI and shown; written only on yes.
@@ -475,10 +583,13 @@ class Run:
                                          client_factory=self.client_factory)
         review = assist.card_reviewer(world, self.store, self.q, given=self.flags.review,
                                       client_factory=self.client_factory)
+        write_note = assist.note_writer(world, self.store, self.q,
+                                        given=self.flags.write_migration,
+                                        client_factory=self.client_factory)
         released = publish(world, self.flags.name, self.store, self.q, every=self.flags.all,
                            version=self.flags.version, changelog=self.flags.changelog,
                            user=self.flags.user, suggested=self.flags.yes, draft=draft,
-                           review=review,
+                           review=review, write_note=write_note,
                            private=None if self.flags.private is None else self.flags.private == "yes")
         for release in released:                  # the world it came from has it now
             plan = engine.plan_adopt(world, release, user=self.flags.user)

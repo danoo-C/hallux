@@ -235,7 +235,7 @@ def test_an_older_data_format_needs_a_migration(world, store, tmp_path):
     install(world, store, [Want("kittystory", extras=())])
     put(store, tmp_path, APP, APP_FILES, version="2.0", fmt=2)
     plan = plan_install(world, store, [Want("kittystory", extras=())])
-    assert "needs a migration" in plan.items[0].blocked
+    assert "has no migration from data format 1" in plan.items[0].blocked   # no note
     outcome = apply(plan)
     assert outcome.done[0].status == "failed" and "migration" in outcome.done[0].why
     assert rec.load(Disk(world))["kittystory"]["version"] == "1.4"

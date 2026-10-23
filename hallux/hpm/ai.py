@@ -10,7 +10,9 @@ the cap of the store's config.toml as the SDK's max_budget_usd.
 
 The tools are the world's Disk, read-only (list_dir, stat, read_file, find), and a
 write_file that reaches only the paths the job may write. There is no remove, no
-memory_edit and no shell.
+memory_edit and no shell. A migration (hallux/hpm/migrate.py) gives its own disk instead,
+a staging disk: the world read as it is, and written only into a folder beside it; and a
+copy tool, with which Hallux copies a file's bytes, so the model never types them out.
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ from typing import Any, Callable
 
 from hallux import config
 from hallux.addons import EFFORTS
-from hallux.disk import HIDDEN_NAME, Disk
+from hallux.disk import Disk
 from hallux.hpm.store import Store
 from hallux.hpm.world import HpmError
 
@@ -89,11 +91,14 @@ def settings(store: Store) -> Settings:
 @dataclass
 class Job:
     """What one session is for."""
-    name: str                             # init, changelog, merge, review
+    name: str                             # init, changelog, merge, review, migrate, …
     message: str                          # the one message it is sent
     may_write: Callable[[str], bool] = lambda path: False     # a machine path it may write
     release: Path | None = None           # a last release, unpacked, to read (changelog)
     tools: bool = True                    # False: the message holds all it needs
+    disk: Any = None                      # what the tools read and write; None: the world's
+    writes: bool = True                   # False: no write_file (a migration's plan)
+    copy: bool = False                    # the copy tool (a migration)
 
 
 @dataclass
@@ -126,7 +131,8 @@ class Session:
 
     def __init__(self, world: Path | str, job: Job, ai: Settings, client_factory=None) -> None:
         self.world = Path(world)
-        self.disk = Disk(self.world)
+        self.hidden = Disk(self.world).hidden
+        self.disk = job.disk if job.disk is not None else Disk(self.world)
         self.job, self.ai = job, ai
         self.client_factory = client_factory or real_client()
         self.wrote: list[str] = []
@@ -158,9 +164,15 @@ class Session:
             make("find", "Find entries under a directory whose names match a glob pattern "
                  "(at most 1000).", schema({"path": path}, {"pattern": {"type": "string"}}),
                  disk.find, READS)
-            make("write_file", "Write a whole file, as text. Only the files your instructions "
-                 "name may be written; anything else is refused with EACCES.",
-                 schema({"path": path, "content": {"type": "string"}}), self._write)
+            if self.job.writes:
+                make("write_file", "Write a whole file, as text. Only the files your "
+                     "instructions name may be written; anything else is refused with EACCES.",
+                     schema({"path": path, "content": {"type": "string"}}), self._write)
+            if self.job.copy:
+                make("copy", "Copy a file byte for byte, by the machine's paths: Hallux copies "
+                     "it, so you never type it out. The same rules as write_file for `to`.",
+                     schema({"from": path, "to": path}),
+                     lambda **paths: self._copy(paths["from"], paths["to"]))
             if self.job.release is not None:
                 old = Disk(self.job.release)
                 make("release_list_dir", "List a directory of the last release, by the "
@@ -183,6 +195,15 @@ class Session:
         self.wrote.append(virtual)
         return result
 
+    def _copy(self, source: str, target: str) -> dict:
+        import errno
+        virtual = self.disk.virtual(target)
+        if not self.job.may_write(virtual):
+            raise OSError(errno.EACCES, f"{virtual} isn't yours to write")
+        result = self.disk.copy(source, virtual)
+        self.wrote.append(virtual)
+        return result
+
     # the session
     def options(self):
         from claude_agent_sdk import ClaudeAgentOptions
@@ -196,7 +217,7 @@ class Session:
         return ClaudeAgentOptions(
             system_prompt=prompt(self.job.name), model=model, effort=effort,
             max_turns=MAX_TURNS, max_budget_usd=self.ai.cap_usd, mcp_servers=self.servers,
-            allowed_tools=list(self.tools), **shared_options(hardware, self.disk.hidden))
+            allowed_tools=list(self.tools), **shared_options(hardware, self.hidden))
 
     async def ask(self, follow: Callable[[Answer], str | None] | None = None) -> Answer:
         """Send the job's message, and read the session to its result. `follow(answer)` may
@@ -244,7 +265,7 @@ class Session:
                 f"{'done' if answer.ok else 'failed: ' + answer.why}, ~${answer.cost_usd:.4f}, "
                 f"model {self.ai.model_for(self.world)}\n")
         try:
-            with open(self.world / HIDDEN_NAME / "hallux.log", "a", encoding="utf-8") as f:
+            with open(self.hidden / "hallux.log", "a", encoding="utf-8") as f:
                 f.write(line)
         except OSError:
             pass

@@ -1,6 +1,7 @@
 """What hpm asks of its AI, around the session of ai.py (docs/hpm/hpm.md, sections 5, 7 and
-11; sharing.md, sections 3 and 4; the plan's step 6): hpm init, the changelog's draft, the
-card's review, a merge of memories, and the test install.
+11; sharing.md, sections 3 and 4; migrations.md, section 3; the plan's steps 6 and 7): hpm
+init, the changelog's draft, the card's review, a merge of memories, a migration note at
+publish, and the test install. (A migration itself is hallux/hpm/migrate.py's.)
 
 Every one of them costs money, so each asks first: on a terminal a question that names the
 model and the cap, without one only its flag. What the AI gives back is checked by hpm's
@@ -202,6 +203,59 @@ def card_reviewer(world: Path, store: Store, q: Questions, *, given: bool, clien
     return review
 
 
+def note_writer(world: Path, store: Store, q: Questions, *, given: bool, client_factory=None):
+    """For publish: a function that has the AI write the migration note old → new when the
+    data moved, or that says no when the AI may not. The note never ran on real data, and
+    publish says so."""
+    from hallux.hpm import migrate
+    from hallux.hpm.archive import unpack
+    settings = ai.settings(store)
+
+    def write(name: str, release: Release, before: Manifest, after: Manifest, old: int,
+              new: int) -> bool:
+        moved = set(after.files["data"]) != set(before.files["data"])
+        what = (f"{name}'s data moved since {release.version} "
+                f"({list(before.files['data'])} → {list(after.files['data'])})" if moved
+                else f"{name}'s data format goes {old} → {new}")
+        q.say(f"{what}, and there is no note migrations/{old}-to-{new}.md for it")
+        if not may_spend(q, f"have the note {old}-to-{new}.md written", settings, world,
+                         "--write-migration", given):
+            return False
+        target = f"{MANIFESTS}/{name}/migrations/{old}-to-{new}.md"
+        disk = Disk(world)
+
+        def problems_of(answer: ai.Answer) -> str | None:
+            try:
+                migrate.read_note(f"{old}-to-{new}.md", disk.read_text(target))
+            except (OSError, ValueError) as e:
+                return f"hpm can't read {target}: {e}. Write it there."
+            except HpmError as e:
+                return f"hpm checked the note, and found: {e}. Fix it in the same file."
+            return None
+
+        with tempfile.TemporaryDirectory(prefix="hpm-release-") as temp:
+            unpack(release.path, Path(temp) / "p")
+            try:
+                home = world_user(disk) or "/home/user"
+            except HpmError:
+                home = "/home/user"
+            _as_world(Path(temp) / "p", Path(temp) / "world", home)
+            job = migrate.write_note_job(name, old, new, Path(temp) / "world", before, after)
+            q.say(f"the AI is writing {name}'s migration note…")
+            answer = ai.run_job(world, job, settings, client_factory, follow=problems_of)
+        q.say(f"the note cost {ai.cost(answer)}")
+        left = problems_of(answer)
+        if not answer.ok or left:
+            q.say(f"the note can't be used ({answer.why or left}); write it yourself at {target}")
+            return False
+        q.say(f"--- {target}\n" + disk.read_text(target).rstrip())
+        q.say("this note never ran on real data: the test install tries it on a copy of your "
+              "base world (hpm publish --test)")
+        return True
+
+    return write
+
+
 # ---------------------------------------------------------------------- merging memories
 
 def merge(world: Path, store: Store, path: str, ours: str, theirs: str,
@@ -248,9 +302,10 @@ def test_install(store: Store, release: Release, q: Questions, client_factory=No
             q.say(f"the test install leaves out {', '.join(missing)}: not in the store yet")
         plan = plan_install(copy, store, [Want(release.name, extras=tuple(extras),
                                                version=str(release.version))])
+        backup = _test_migrations(plan, store, q, client_factory)
         answers = {a.path: (OVERWRITE if OVERWRITE in a.choices else a.default)
                    for a in plan.questions}
-        outcome = apply(plan, answers)
+        outcome = apply(plan, answers, backup=backup)
         q.say(f"test install into a copy of {base.name}: {outcome.summary()}")
         hardware = config.load(copy)
         model = settings.model_for(base)
@@ -266,3 +321,20 @@ def test_install(store: Store, release: Release, q: Questions, client_factory=No
                 q.say(f"$ {record.typed}\n{record.output.rstrip()}" + (
                     f"\n(error: {record.error})" if record.error else ""))
         q.say(f"the test install cost ~${spent:.4f}; its copy is removed")
+
+
+def _test_migrations(plan, store: Store, q: Questions, client_factory=None):
+    """The migrations a test install needs, run on the copy and accepted whatever the checks
+    say (the copy goes after), with the plan and the checks shown. Returns the backup."""
+    from hallux.hpm import migrate
+    shared = migrate.Shared()
+    for item in plan.incomings() + plan.migrations():
+        m = migrate.Migration(plan, item, store, incoming=item.incoming is not None,
+                              shared=shared, client_factory=client_factory)
+        while m.state == migrate.PLANNING:
+            m.plan_rows()
+            q.say("\n".join(m.plan_lines()))
+            m.migrate()
+        q.say("\n".join(m.checked_lines()))
+        m.accept()
+    return shared.backup
