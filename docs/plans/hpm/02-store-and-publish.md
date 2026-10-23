@@ -1,0 +1,74 @@
+# Step 2: the store, and `hpm publish` without the AI
+
+[The plan](README.md) · the design: [hpm.md](../../hpm/hpm.md), sections 4 and 5;
+[sharing.md](../../hpm/sharing.md), section 3; plan decisions 3, 12
+
+**Needs:** step 1. **Changes:** new `hallux/hpm/store.py`, `cli.py` (only `publish` and
+`show`), `__main__.py`; `pyproject.toml` (the `hpm` command); `tests/test_hpm_store.py`,
+`tests/test_hpm_publish.py`.
+
+After this step you can publish a package whose manifest you wrote yourself, into the store
+on your PC, and look at it. Nothing installs yet. The AI's parts of publish (the changelog's
+draft, the migration's offer, the test install) come with steps 6 and 7.
+
+## Build
+
+**The store** (`store.py`), at `$HPM_HOME`, else `$XDG_DATA_HOME/hallux/hpm/`, else
+`~/.local/share/hallux/hpm/`:
+
+```
+config.toml        model, effort, cap_usd (step 6); base_world (step 6's test install)
+local/<name>/<version>.hpm
+stores/<store>/index.toml      (step 8)
+cache/<store>/<name>-<version>.hpm   (step 8)
+```
+
+`Store.releases(name)`, `Store.latest(name)`, `Store.add(file)` (refuses a version that is
+there already, and one lower than the latest), `Store.find(name)` (local first; stores
+come in step 8).
+
+**Finding the world** (decision 12): `--world PATH`, else the folder you're in and its
+parents, to the first with `.hallux/` in it.
+
+**`hpm publish NAME [--all] [--version V] [--changelog TEXT]`:**
+
+1. Reads the manifest from the world: `/usr/local/share/hpm/<name>/hpm.toml`.
+2. Collects the files its patterns match, through `Disk` (so nothing outside the world, and
+   nothing in `/.hallux`, can get in). `~` patterns are read from the home of the world's
+   user (step 3's `world_user`, written here). A pattern that matches nothing is an error.
+3. **Version:** higher than the store's latest. Without `--version` it suggests one: the
+   last number up when only `app` files changed, the first number up when `data_format` went
+   up, and asks.
+4. **Changelog:** `--changelog`, else `$EDITOR` on a file that has the last entry's title
+   filled in; an empty entry stops the publish. The entry goes at the top of the package's
+   `CHANGELOG.md`, in the world too.
+5. **Data paths that moved:** the `data` patterns are compared with the last release's. If
+   they differ and `data_format` didn't go up, publish stops and says so. (Step 7 adds the
+   offer to have the AI write the migration.)
+6. **Privacy:** a package with `private = true` is published into `local/` as any other;
+   only a push refuses it (step 8). A data package whose files include `memory.md`,
+   `shared.md` or a file named like a chat (`state.json`, `history*`, `chat*`) and isn't
+   marked private gets a warning, and the question whether to mark it.
+7. **Seeds:** a seed file more than twice the size it was in the last release gets a
+   warning ("it may hold your own data now").
+8. Packs the folder (step 1) and adds it to the store.
+
+`--all` publishes the package and each of its extras whose files changed since their last
+release, each with its own version and changelog question.
+
+**`hpm show NAME`:** the manifest, the versions in the store, the last changelog entries,
+the files by kind and their sizes.
+
+## Tests
+
+- The store's folder from each of the three variables; releases, latest, refusals.
+- Finding the world from a folder deep inside it; refusing without one.
+- Publish: the files collected, `~` from the world's user, a pattern that matches nothing,
+  a lower version, an empty changelog, data paths that moved, the privacy warning, the seed
+  warning; `--all` with one extra unchanged.
+- A publish never writes outside the store, but for the world's `CHANGELOG.md`.
+
+## Done when
+
+kittystory and its packs, published from a copy of `test-hallux` with a manifest written by
+hand, are in the store as two `.hpm` files, and `hpm show kittystory` lists them.
