@@ -135,3 +135,66 @@ kittystory with its packs and characters installs into a fresh copy of a world, 
 newer version with one file changed by hand (asked about, not replaced), and is removed again
 with the data kept, all from a test; and a copy of `test-hallux`, whose kittystory was there
 before hpm, is adopted from the release published from it.
+
+## As built
+
+Built 2026-10-23: `hallux/hpm/record.py` (the record, the memory lines, the backups) and
+`hallux/hpm/engine.py` (plans, apply, remove, rollback, adopt); `tests/test_hpm_record.py`
+(16 tests), `tests/test_hpm_engine.py` (42). The whole suite: 2155 passed, the sandbox test
+left out as before. One web addon test (`test_the_manuals_example_works_as_it_says`) failed
+once in that run and passed alone, and its whole file passed three times in a row
+afterwards: a test that is slow under the full suite's load, not touched by hpm.
+
+**The run of "Done when"** on real worlds, copies in the session's scratchpad, with the
+store step 2's run made: an adopt in the `test-hallux` copy kittystory 1.0 was published
+from (all 13 files identical and recorded; the machine's own untagged line, "- kittystory
+(was lt-love, renamed 2026-10-03; …", replaced by the tagged one); an install of kittystory
+and its packs into a copy of `oliver-test` (no questions, the packs under its `/home/user`,
+a backup, a note for each package); and a remove there, which left the packs.
+
+**The API.** `plan_install(world, store, [Want(name, extras, version)], user)`,
+`plan_remove(world, name, data)` and `plan_adopt(world, release, user)` write nothing and
+give a `Plan`: its items (one per package, each with its actions file by file), its
+`questions`, its `memory_questions()`, `grouped()` (by package and folder), `loud` and
+`notes`. `apply(plan, answers, all_files, progress)` carries it out and gives an `Outcome`:
+a `Done` per package, `summary()` ("12 installed · 1 failed: … · 2 skipped: …"), the backup's
+name, and `notes` for step 5's `<installed>`. `rollback(world, name)` is one call.
+
+What the code does that the step above didn't say, or says differently:
+
+- **Every question must be answered** before anything is written: by path in `answers`, or
+  by `all_files` (step 4's `--overwrite all|none`) where that is one of the question's
+  choices. One left over is an error that names it. The old memory line's question is
+  `"memory:<name>"`, and its answer defaults to replace.
+- **The default answers** (for the screens): skip for a `data` file in the way, overwrite
+  for an `app` file; skip for a folder or link in the way (the other answer, `fail`, makes
+  the package fail); keep for a file you changed that an update or remove would remove.
+- **"Merge" isn't offered yet** (plan decision 16): it comes with the AI in step 6.
+- **The manifest, changelog and notes** go to `/usr/local/share/hpm/<name>/` as files of the
+  package, of a fourth kind, `meta`: marked, recorded and removed like `app` files.
+- **The record keeps** each package's `memory_line` and `rules` too, and `home`, so a remove
+  and a rollback know them without the release.
+- **Order:** an extra comes after its app and after the extras it needs (characters after
+  packs), so the extras are taken in the manifest's order. A data package installed alone
+  brings its app, without the app's extras. `requires.packages` that aren't installed yet
+  are added.
+- **`local/`** is the whole store for now: every package that isn't a bundle or another's
+  extra. Friends' stores (`danika/`) come in step 8; until then `danika/` is an error that
+  says so.
+- **A package that isn't complete** in the record (it failed in the middle) counts as new
+  when it is installed again, so the second install says "installed", not "updated".
+- **The data formats:** an older format in the world, or older incoming data, makes the
+  package fail before anything is written ("it needs a migration, which hpm can't do yet",
+  until step 7); a newer format in the world, or data newer than its app, is refused.
+- **A remove** takes away the folders it leaves empty, but never the world's own
+  (`/usr/local/bin`, `/usr/local/share`, `/usr/local/share/apps`, `/usr/local/share/hpm`, a
+  home, and the like). Its backup holds what it removed, so `hpm rollback` undoes a remove
+  too.
+- **A rollback** undoes one package's part of the newest backup that holds it: its files as
+  they were, the files that weren't there taken away again, its record entry, its tagged
+  lines and the untagged line it replaced. The backup then counts as used for that package,
+  so a second rollback goes one further back.
+- **Loud:** `BOOT_FILES` and any `.bashrc`; a card in `/usr/local/bin` that isn't named
+  after the package or its app; rules.
+- **Made folders** go through `Disk.place`, so a folder is never made under `/.hallux` or
+  through a link out of the world.
