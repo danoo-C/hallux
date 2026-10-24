@@ -3,8 +3,9 @@
 [The fixes](README.md) · [the plan](../README.md) · built on [step 3](../03-install-engine.md)
 (adopt) and [step 2](../02-store-and-publish.md) (publish adopts the author's world)
 
-**Status:** planned 2026-10-24, from a read-only review of the user's own run. Not built.
-The decisions below are proposals, not confirmed. What the empty list breaks is read from
+**Status:** planned 2026-10-24, from a read-only review of the user's own run. Decisions
+confirmed by the user 2026-10-24 ("yes, as proposed"). **Built** 2026-10-24: see "As built"
+at the end. What the empty list breaks is read from
 the code, not seen in a run.
 
 **Changes:** `hallux/hpm/engine.py` (`_install_item` when adopting), `tests/test_hpm_engine.py`,
@@ -67,3 +68,18 @@ extras.
 `danika`'s `data/state.json` and `data/tree.json` belong to no package. Init wrote clean
 seed copies for the release (`/usr/local/share/hpm/kittystory/seed/`), and the world's
 played-in copies differ from them, so adopt leaves them the user's. Nothing to fix.
+
+## As built
+
+- `_install_item` in `hallux/hpm/engine.py`: an adopted package's entry lists the keys of its
+  `[extras]` whose packages are in `installed.json`; `_join_app` adds an adopted extra's key
+  to its app's entry, reading the app's manifest from the world.
+- This also covers publishing from a world that *installed* the app (fix 06's analysis): the
+  adopt after publish used to wipe that world's extras from its record.
+- Tests (`tests/test_hpm_cli.py`): `test_publish_all_records_the_extras_in_its_own_world`,
+  `test_publish_from_a_world_that_installed_it_keeps_its_extras`,
+  `test_adopting_an_extra_adds_its_key_to_the_app` (with the update that follows). All three
+  fail without the change.
+- By hand: on a copy of `danika` with a copy of the store, `hpm adopt kittystory` gave
+  `["packs", "characters", "me", "places", "memories"]` (it was `[]`). `danika` itself is
+  fixed by running the same command there.

@@ -778,6 +778,8 @@ def _install_item(plan: Plan, item: Item, answers: dict[str, str], record: dict)
              "rules": list(item.manifest.rules), "files": files}
     if adopting:
         entry["adopted"] = True
+        entry["extras"] = [key for key, extra in item.manifest.extras.items()
+                           if extra.package in record and extra.package != item.name]
     why = None
     for action in item.actions:
         what = "skip" if adopting and action.op == "skip" else _resolved(action, answers)
@@ -820,6 +822,8 @@ def _install_item(plan: Plan, item: Item, answers: dict[str, str], record: dict)
         return Done(item.name, version, item.was, "failed", why, written, removed,
                     tuple(sorted(places)))
     record[item.name] = entry
+    if adopting:
+        _join_app(disk, item, record)
     rec.save(disk, record)
     replace = item.old_line if answers.get(f"memory:{item.name}") == REPLACE else None
     if item.manifest.memory_line or item.manifest.rules or replace:
@@ -828,6 +832,25 @@ def _install_item(plan: Plan, item: Item, answers: dict[str, str], record: dict)
     status = "adopted" if adopting else ("updated" if item.was else "installed")
     return Done(item.name, version, item.was, status, "", written, removed, tuple(sorted(places)),
                 item.migrated)
+
+
+def _join_app(disk: Disk, item: Item, record: dict) -> None:
+    """An adopted extra's key goes into its app's entry, if the app is recorded: publish
+    --all adopts the app before its extras, so the app alone would list none of them."""
+    app = item.manifest.for_app
+    if not app or app not in record:
+        return
+    from hallux.hpm.world import read_world_manifest
+    try:
+        found = read_world_manifest(disk, app)
+    except ValueError:
+        return
+    if found is None:
+        return
+    extras = found[0].extras
+    have = set(record[app].get("extras", []))
+    have |= {key for key, extra in extras.items() if extra.package == item.name}
+    record[app]["extras"] = [key for key in extras if key in have]
 
 
 def _place_of(path: str) -> str:

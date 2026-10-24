@@ -372,6 +372,51 @@ def test_publish_adopts_its_own_world(world, store):
     assert hpm(world, store, "list")[1][0] == "kittystory 1.1  (adopted)"
 
 
+def extras_of(world, name="kittystory"):
+    return rec.load(Disk(world))[name]["extras"]
+
+
+def test_publish_all_records_the_extras_in_its_own_world(world, store):
+    """Fix 04: publish --all adopts the app first and its extras after; the app's entry
+    lists them all the same."""
+    hpm(world, store, "install", "kittystory", "--extras", "packs,characters")
+    rec.save(Disk(world), {})                        # as if it was built here
+    (world / "usr/local/bin/kittystory").write_text("the card, better\n")
+    (world / "home/user/.kittystory/packs/tsundere.pack").write_text("tsundere, better\n")
+    (world / "home/user/.kittystory/chars/Emma/char.md").write_text("Emma, better\n")
+    code, said = hpm(world, store, "publish", "kittystory", "--all", "--yes", "--changelog", "x")
+    assert code == 0, said
+    assert extras_of(world) == ["packs", "characters"]
+
+
+def test_publish_from_a_world_that_installed_it_keeps_its_extras(world, store):
+    """Fix 04, the case of publishing from a second world: its extras were installed, and
+    the adopt after publish must not wipe them from its record."""
+    hpm(world, store, "install", "kittystory", "--extras", "packs,characters")
+    assert extras_of(world) == ["packs", "characters"]
+    (world / "usr/local/bin/kittystory").write_text("the card, with a feature\n")
+    assert hpm(world, store, "publish", "kittystory", "--yes", "--changelog", "x")[0] == 0
+    assert extras_of(world) == ["packs", "characters"]
+
+
+def test_adopting_an_extra_adds_its_key_to_the_app(world, store, tmp_path):
+    hpm(world, store, "install", "kittystory", "--extras", "packs,characters")
+    record = rec.load(Disk(world))
+    record["kittystory"]["extras"] = []
+    del record["kittystory-chars"]
+    rec.save(Disk(world), record)
+    assert hpm(world, store, "adopt", "kittystory-chars")[0] == 0
+    assert extras_of(world) == ["characters"]
+    assert hpm(world, store, "adopt", "kittystory")[0] == 0     # the app: what is recorded
+    assert extras_of(world) == ["packs", "characters"]
+    put(store, tmp_path, CHARS, {"~/.kittystory/chars/Emma/char.md": "Emma 1.1\n"}, version="1.1")
+    put(store, tmp_path, APP, {"/usr/local/bin/kittystory": "the card\n",
+                               "/usr/local/share/apps/kittystory/app.js": "// 1.1\n"},
+        version="1.1")
+    assert hpm(world, store, "update", "kittystory", "--yes")[0] == 0
+    assert rec.load(Disk(world))["kittystory-chars"]["version"] == "1.1"
+
+
 def test_publish_keeps_the_old_line_without_a_terminal_and_says_so(world, store):
     hpm(world, store, "install", "kittystory", "--extras", "none")
     rec.save(Disk(world), {})
