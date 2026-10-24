@@ -29,7 +29,7 @@ from hallux.hpm import record as rec
 from hallux.hpm.archive import ArchiveError, package_files, sha256, unpack
 from hallux.hpm.manifest import Manifest, Version, place
 from hallux.hpm.store import Release, Store
-from hallux.hpm.world import MANIFESTS, HpmError, world_user
+from hallux.hpm.world import MANIFESTS, HpmError, clean_seed_path, world_user
 
 # Answers to a file's question. Merge is for a memory file (memory.md, shared.md): the AI
 # keeps the lines of both, and hpm writes what it gives back (hallux/hpm/ai.py).
@@ -478,8 +478,11 @@ def _check_format(item: Item, items: dict[str, Item], record: dict, store: Store
     item.incoming = Pending(tuple(chained), layout)
 
 
-def _meta_files(folder: Path, name: str) -> dict[str, Path]:
-    """The package's manifest, changelog and notes, for /usr/local/share/hpm/<name>/."""
+def _meta_files(folder: Path, manifest: Manifest) -> dict[str, Path]:
+    """The package's manifest, changelog and notes, for /usr/local/share/hpm/<name>/, and a
+    clean copy of each seed in its seed/ folder (fix 06): the release's seed is the clean
+    one, so a world that installed the package publishes it the way its author's does."""
+    name = manifest.name
     out = {f"{MANIFESTS}/{name}/hpm.toml": folder / "hpm.toml"}
     if (folder / "CHANGELOG.md").is_file():
         out[f"{MANIFESTS}/{name}/CHANGELOG.md"] = folder / "CHANGELOG.md"
@@ -487,6 +490,9 @@ def _meta_files(folder: Path, name: str) -> dict[str, Path]:
     if notes.is_dir():
         for note in sorted(notes.iterdir()):
             out[f"{MANIFESTS}/{name}/migrations/{note.name}"] = note
+    for machine, source in package_files(folder).items():
+        if manifest.kind_of(machine) == "seed":
+            out[clean_seed_path(name, machine)] = source
     return out
 
 
@@ -502,7 +508,7 @@ def _walk(plan: Plan, item: Item, folder: Path, record: dict) -> None:
                         + (" …" if len(unlisted) > 5 else ""))
         return
     entries = [(machine, manifest.kind_of(machine), source) for machine, source in files.items()]
-    entries += [(path, META, source) for path, source in _meta_files(folder, item.name).items()]
+    entries += [(path, META, source) for path, source in _meta_files(folder, manifest).items()]
     seen: set[str] = set()
     for machine, kind, source in entries:
         path = place(machine, plan.home) if machine.startswith("~/") else machine
@@ -637,7 +643,7 @@ def plan_adopt(world: Path | str, release: Release, user: str | None = None) -> 
         plan.close()
         raise HpmError(str(e)) from None
     files = {m: (manifest.kind_of(m), s) for m, s in package_files(folder).items()}
-    files |= {p: (META, s) for p, s in _meta_files(folder, manifest.name).items()}
+    files |= {p: (META, s) for p, s in _meta_files(folder, manifest).items()}
     for machine, (kind, source) in sorted(files.items()):
         if machine.startswith("~/") and plan.home is None:
             continue
@@ -858,6 +864,8 @@ def _place_of(path: str) -> str:
     stays; "~/.kittystory/packs/x.pack" -> "~/.kittystory/packs/"."""
     if posixpath.dirname(path) == "/usr/local/bin":
         return path
+    if path.startswith(MANIFESTS + "/"):          # hpm's own folder, seed copies and all
+        return "/".join(path.split("/")[:6]) + "/"
     return posixpath.dirname(path) + "/"
 
 

@@ -417,6 +417,31 @@ def test_adopting_an_extra_adds_its_key_to_the_app(world, store, tmp_path):
     assert rec.load(Disk(world))["kittystory-chars"]["version"] == "1.1"
 
 
+SEEDED = APP.replace('[extras]', 'seed = ["/usr/local/share/apps/kittystory/state.json"]\n[extras]')
+STATE = "/usr/local/share/apps/kittystory/state.json"
+
+
+def seeded(store, tmp_path):
+    put(store, tmp_path, SEEDED, {"/usr/local/bin/kittystory": "the card\n",
+                                  "/usr/local/share/apps/kittystory/app.js": "// 1.0\n",
+                                  STATE: '{"chat": []}\n'}, version="1.1")
+
+
+def test_a_world_that_installed_it_publishes_the_clean_seed(world, store, tmp_path):
+    """Fix 06: the second world's used seed stays home; the release's goes out again."""
+    from hallux.hpm.archive import read_member
+    seeded(store, tmp_path)
+    hpm(world, store, "install", "kittystory", "--extras", "none")
+    (world / STATE.lstrip("/")).write_text('{"chat": ["hi Emma, it is me"]}\n')
+    code, said = hpm(world, store, "publish", "kittystory", "--yes", "--changelog", "x")
+    assert code == 1                                  # only the used seed: nothing changed
+    (world / "usr/local/bin/kittystory").write_text("the card, with a feature\n")
+    assert hpm(world, store, "publish", "kittystory", "--yes", "--changelog", "x")[0] == 0
+    release = store.latest("kittystory")
+    assert str(release.version) == "1.2"
+    assert read_member(release.path, "files/root" + STATE) == b'{"chat": []}\n'
+
+
 def test_publish_keeps_the_old_line_without_a_terminal_and_says_so(world, store):
     hpm(world, store, "install", "kittystory", "--extras", "none")
     rec.save(Disk(world), {})

@@ -115,7 +115,9 @@ your chat history, the things the machine knows about you.
 - **`seed` files are looked at too.** kittystory's `state.json` is a seed of the app, but in
   your world it holds your chat. hpm.md, section 5 publishes what is in the world, so the AI
   is asked at `hpm init` for a clean seed (a first state with no chat), and publish warns
-  when a seed is far bigger than the one before.
+  when a seed is far bigger than the one before. Install puts a copy of each release's
+  seed beside the manifest too (`/usr/local/share/hpm/<name>/seed/`), so a world that
+  installed the app and publishes it sends that clean copy, not its own used one.
 
 ## 4. Packages are instructions to the AI
 

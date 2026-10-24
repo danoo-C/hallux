@@ -5,8 +5,8 @@
 
 **Status:** planned 2026-10-24, from a read-only analysis the user asked for ("what happens
 when i init APP1 in WORLD1 and then install APP1 to WORLD2 … can i use hpm to publish the
-changes from WORLD2?"). Not built. The decisions below are proposals, not confirmed. What
-goes wrong is read from the code and the two worlds' files; no publish from WORLD2 was run.
+changes from WORLD2?"). Decisions confirmed by the user 2026-10-24 ("yes, as proposed").
+**Built** 2026-10-25: see "As built" at the end.
 
 **Changes:** `hallux/hpm/engine.py` (`_meta_files` also lists the clean seeds),
 `hallux/hpm/publish.py` (one helper for the clean seed's path, shared with the engine),
@@ -98,3 +98,26 @@ first.
 | 1 | **Install writes the clean seed into `/usr/local/share/hpm/<name>/seed/`** in every world, not only the author's | Then every world that has the manifest can publish the same way, with no new question; the copy is the release's own file, so it costs nothing to get |
 | 2 | **The copy is a plain meta file** (recorded, updated, removed with the package) | Same rules as the manifest and changelog next to it; no new kind |
 | 3 | **No change to the archive's layout** | The release's seed in `files/` already is the clean seed; carrying it twice would only add a second place to disagree |
+
+## As built
+
+- `clean_seed_path(name, machine)` is in `hallux/hpm/world.py`, not `publish.py`: the
+  engine and publish both import `world`, and the engine importing `publish` would tie the
+  two together for one line.
+- `_meta_files(folder, manifest)` in `hallux/hpm/engine.py` adds each seed's copy; its two
+  callers (`_walk`, `plan_adopt`) pass the manifest. `_place_of` gives every file under
+  `/usr/local/share/hpm/<name>/` as that one folder, so the machine's note doesn't list the
+  deep `seed/…` folders.
+- Docs: `docs/hpm/hpm.md` (section 5's publish bullet), `docs/hpm/sharing.md` (section 3),
+  `docs/hpm/tutorial.md` ("Publishing from another world", in section 7, with the rule to
+  update before changing).
+- Tests: `test_install_writes_a_clean_copy_of_each_seed` (with the update and the remove),
+  `test_adopt_records_a_clean_copy_that_matches` (engine);
+  `test_a_world_that_installed_it_publishes_the_clean_seed` (cli: a used seed alone is
+  "nothing changed"; a new card publishes the release's seed); `test_clean_seed_path`
+  (publish). The first three fail without the change.
+- By hand, on a copy of `test-kittystory` with a copy of the store: rollback, then update,
+  left `seed/…/state.json` and `tree.json`, the first byte for byte `danika`'s clean one;
+  publish refused with "nothing changed since 1.1"; after a line added to the card, 9.9
+  carried the clean `state.json`. `test-kittystory` itself gets its copies at its next
+  update (or a rollback and update, as above).

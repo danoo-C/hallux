@@ -625,6 +625,59 @@ def test_adopt_records_the_identical_files(world, store):
     plan.close()
 
 
+# ---------------------------------------------------------------- clean seed copies (fix 06)
+
+NOTES = '''name = "kittynotes"
+version = "{version}"
+data_format = {fmt}
+[files]
+app  = ["/usr/local/bin/kittynotes"]
+seed = ["/usr/local/share/apps/kittynotes/state.json", "~/.kittynotes/first.md"]
+'''
+NOTES_FILES = {"/usr/local/bin/kittynotes": "notes\n",
+               "/usr/local/share/apps/kittynotes/state.json": '{"notes": []}\n',
+               "~/.kittynotes/first.md": "# your first note\n"}
+COPIES = {"/usr/local/share/apps/kittynotes/state.json":
+          "usr/local/share/hpm/kittynotes/seed/usr/local/share/apps/kittynotes/state.json",
+          "~/.kittynotes/first.md": "usr/local/share/hpm/kittynotes/seed/~/.kittynotes/first.md"}
+
+
+def test_install_writes_a_clean_copy_of_each_seed(world, store, tmp_path):
+    put(store, tmp_path, NOTES, NOTES_FILES, version="1.0")
+    install(world, store, [Want("kittynotes")])
+    files = rec.load(Disk(world))["kittynotes"]["files"]
+    for machine, copy in COPIES.items():
+        assert (world / copy).read_text() == NOTES_FILES[machine]
+        assert files["/" + copy]["kind"] == "meta"
+    (world / "usr/local/share/apps/kittynotes/state.json").write_text('{"notes": ["mine"]}\n')
+    (world / "home/user/.kittynotes/first.md").write_text("my own note\n")
+    (world / COPIES["~/.kittynotes/first.md"]).write_text("# a better first note\n")
+    new = dict(NOTES_FILES, **{"/usr/local/bin/kittynotes": "notes 1.1\n",
+                               "/usr/local/share/apps/kittynotes/state.json": '{"notes": [], "v": 2}\n'})
+    put(store, tmp_path, NOTES, new, version="1.1")
+    plan = plan_install(world, store, [Want("kittynotes")])
+    marks = {a.path: (a.mark, a.op) for a in plan.items[0].actions}
+    assert marks["/" + COPIES["/usr/local/share/apps/kittynotes/state.json"]] == ("ours", "write")
+    assert marks["/" + COPIES["~/.kittynotes/first.md"]][1] == "ask"           # you changed it
+    apply(plan, answers={"/" + COPIES["~/.kittynotes/first.md"]: SKIP})
+    assert (world / COPIES["/usr/local/share/apps/kittynotes/state.json"]).read_text() == \
+        '{"notes": [], "v": 2}\n'
+    assert (world / "usr/local/share/apps/kittynotes/state.json").read_text() == \
+        '{"notes": ["mine"]}\n'                                              # the seed: kept
+    apply(plan_remove(world, "kittynotes"), all_files=REMOVE)
+    assert not (world / COPIES["/usr/local/share/apps/kittynotes/state.json"]).exists()
+
+
+def test_adopt_records_a_clean_copy_that_matches(world, store, tmp_path):
+    put(store, tmp_path, NOTES, NOTES_FILES, version="1.0")
+    for machine, copy in COPIES.items():
+        (world / copy).parent.mkdir(parents=True, exist_ok=True)
+        (world / copy).write_text(NOTES_FILES[machine])
+    apply(plan_adopt(world, store.latest("kittynotes")))
+    files = rec.load(Disk(world))["kittynotes"]["files"]
+    assert all(files["/" + copy]["kind"] == "meta" for copy in COPIES.values())
+
+
 # ---------------------------------------------------------------- where hpm's own files are
 
 def test_hpms_files_are_only_in_its_hidden_folder(world, store):

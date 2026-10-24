@@ -237,6 +237,12 @@ What the update does, by kind (section 2): `app` files are replaced (one you cha
 asked about), `seed` and `data` files are never touched. So your characters and chats stay
 as they are.
 
+**Publishing from another world.** A world that installed kittystory has its manifest
+too, so you can change the app there and `hpm publish kittystory` from it. It sends the
+release's clean seeds (install keeps a copy in `/usr/local/share/hpm/kittystory/seed/`),
+not that world's played-in ones. hpm doesn't merge: before you change the app in a world,
+`hpm update kittystory` there, or the next publish from it drops what another world added.
+
 ---
 
 ## 8. Undo

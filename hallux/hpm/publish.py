@@ -33,7 +33,8 @@ from hallux.hpm.archive import (
 from hallux.hpm.manifest import Manifest, ManifestError, Version
 from hallux.hpm.store import Release, Store
 from hallux.hpm.world import (
-    MANIFESTS, HpmError, collect, manifest_path, read_world_manifest, world_user,
+    MANIFESTS, HpmError, clean_seed_path, collect, manifest_path, read_world_manifest,
+    world_user,
 )
 
 # A data package holding one of these may hold your own life: memories, a chat.
@@ -270,7 +271,7 @@ def _with_clean_seeds(disk: Disk, name: str, collected):
         if kind != "seed":
             continue
         try:
-            clean = disk.real(f"{MANIFESTS}/{name}/seed/{path.lstrip('/')}", follow=False)
+            clean = disk.real(clean_seed_path(name, path), follow=False)
         except OSError:
             continue
         if clean.is_file() and not clean.is_symlink():

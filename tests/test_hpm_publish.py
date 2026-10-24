@@ -208,6 +208,12 @@ def test_family_problems_names_every_file_two_packages_carry(world, store):
                for p in family_problems(disk, "kittystory", "/home/danika-hous"))
 
 
+def test_clean_seed_path():
+    from hallux.hpm.world import clean_seed_path
+    assert clean_seed_path("a", "/x/y") == "/usr/local/share/hpm/a/seed/x/y"
+    assert clean_seed_path("a", "~/x/y") == "/usr/local/share/hpm/a/seed/~/x/y"
+
+
 def test_no_manifest_in_the_world(world, store):
     with pytest.raises(HpmError, match="this world has no manifest for kittymusic"):
         go(world, store, "kittymusic")

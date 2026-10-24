@@ -521,7 +521,9 @@ own "As built" with the details; what the code does differently from this docume
   `$EDITOR` (or `--changelog`, or the AI's draft with `--draft`), asks about privacy for a
   data package (`--private`), and adopts its own world afterwards, so `hpm list` there shows
   what was published. A clean seed at `/usr/local/share/hpm/<name>/seed/<path>` is published
-  in place of the world's own. The AI's review of the card is asked for (`--review`), not
+  in place of the world's own; init writes one where a seed holds your data, and install
+  writes one for every seed of the release, so any world that has the manifest publishes
+  the same way. The AI's review of the card is asked for (`--review`), not
   always made: it costs a call each time.
 - **Install:** every question is answered before anything is written; without a terminal
   each needs its flag (`--extras`, `--overwrite all|none`, `--old-line replace|keep`,

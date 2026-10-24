@@ -121,6 +121,13 @@ def manifest_path(name: str) -> str:
     return f"{MANIFESTS}/{name}/hpm.toml"
 
 
+def clean_seed_path(name: str, machine: str) -> str:
+    """Where a world keeps the clean copy of a package's seed, the one publish sends in its
+    place: /usr/local/share/hpm/<name>/seed/<the seed's path without its leading />. A ~/
+    seed keeps its ~ (seed/~/.kittystory/x)."""
+    return f"{MANIFESTS}/{name}/seed/{machine.lstrip('/')}"
+
+
 def read_world_manifest(disk: Disk, name: str) -> tuple[Manifest, str] | None:
     """The manifest a world keeps for a package, and its text; None if it has none."""
     try:
