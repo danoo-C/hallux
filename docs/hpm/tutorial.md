@@ -416,8 +416,10 @@ hpm's errors start with `hpm:` and say what to do. The common ones:
 | `NAME has a manifest already` | `init` already ran. Edit `/usr/local/share/hpm/NAME/hpm.toml` instead. |
 | `… isn't installed in this world; hpm install it` | `update` only updates. Use `install` first, or `adopt` if the files are there already. |
 
-Every AI part prints what it cost when it ends ("the AI's part cost ~$0.23"). In the
-Packages tab, a migration also writes a line in the world's log, `.hallux/hallux.log`.
+Every AI part prints what it cost when it ends ("the AI's part cost ~$0.23"), and writes a
+line in the world's log, `.hallux/hallux.log` (`hpm init: done, ~$0.4462, model …`), from a
+terminal or the Packages tab. `grep "hpm " .hallux/hallux.log` lists what the AI cost in
+that world.
 
 ---
 

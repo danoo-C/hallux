@@ -9,7 +9,7 @@ steps were built. One file per fix; each says what went wrong, why, and what to 
 | [02](02-memory-line-double-tag.md) | The memory line ends with two version tags (`[hpm kittystory 1.0] [hpm kittystory 1.1]`) | **Planned** 2026-10-24; proposals, not confirmed |
 | [03](03-manifest-words-left-behind.md) | A new version keeps the manifest's old summary, memory line and requires | **Planned** 2026-10-24; proposals, not confirmed |
 | [04](04-adopt-records-no-extras.md) | An adopted app (the author's world after publish) records none of its extras | **Planned** 2026-10-24; proposals, not confirmed |
-| [05](05-docs-log-line.md) | The tutorial and checklist say hpm's AI writes no log line; it does | **Planned** 2026-10-24; docs only |
+| [05](05-docs-log-line.md) | The tutorial and checklist say hpm's AI writes no log line; it does | **Done** 2026-10-24; docs only |
 | [06](06-install-carries-clean-seeds.md) | A world that installed an app has no clean seeds, so publishing from it sends its used ones | **Planned** 2026-10-24; proposals, not confirmed |
 | [07](07-publish-asks-about-used-seeds.md) | Publish sends a used seed without asking, and an old clean copy without saying | **Planned** 2026-10-24; proposals, not confirmed; builds on 06 |
 

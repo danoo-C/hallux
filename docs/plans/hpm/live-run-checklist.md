@@ -24,9 +24,9 @@ When you are through, or stuck, tell me. I read this file, fix what failed, and 
 results into the steps.
 
 **If something looks wrong:** the point's number and what you saw are all I need. hpm's
-error starts with `hpm:`, and each AI part prints what it cost when it ends. (From a
-terminal, hpm writes nothing to the world's log, `.hallux/hallux.log`; the Packages tab
-logs its migrations there.)
+error starts with `hpm:`, and each AI part prints what it cost when it ends. Each AI
+session also writes a line with its cost in the world's log, `.hallux/hallux.log`
+(`hpm init: done, ~$0.4462, model …`), from a terminal or the Packages tab.
 
 **Names the AI picks.** `hpm init` (point 1) names the extras. The commands use the names
 it is told to use: `kittystory-packs`, `kittystory-chars` and `kittystory-memories`. If

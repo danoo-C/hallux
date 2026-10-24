@@ -2,7 +2,7 @@
 
 [The fixes](README.md) · [the plan](../README.md) · about [step 6](../06-ai-session.md)
 
-**Status:** planned 2026-10-24. A docs fix only; no code. Not done yet.
+**Status:** planned 2026-10-24. A docs fix only; no code. **Done** 2026-10-24: both files say it.
 
 **Changes:** `docs/hpm/tutorial.md`, `docs/plans/hpm/live-run-checklist.md`.
 
