@@ -62,6 +62,7 @@ def init(world: Path, store: Store, name: str, q: Questions, *, yes: bool = Fals
                        f"write {manifest_path(name)} by hand")
     home = world_user(disk, user)
     line = rec.untagged_line(disk, name) or next(iter(rec.memory_lines(disk, name)), None)
+    line = rec.untag(line) if line else None      # hpm adds its own tag when it installs
     job = ai.init_job(name, card, line)
 
     def problems_of(answer: ai.Answer) -> str | None:

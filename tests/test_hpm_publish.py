@@ -283,6 +283,26 @@ def test_a_new_memory_line_is_a_change(world, store):
     assert str(go(world, store)[0].version) == "1.5"
 
 
+def test_a_tag_in_the_memory_line_is_taken_out(world, store):
+    """Fix 02: hpm adds its own tag when it installs; one in the manifest would be a second."""
+    path = world / "usr/local/share/hpm/kittystory/hpm.toml"
+    path.write_text(path.read_text().replace('made from personality packs"',
+                                             'made from personality packs [hpm kittystory 1.0]"'))
+    q = Script()
+    release = go(world, store, q=q)[0]
+    line = 'memory_line = "kittystory: split-screen chat with characters made from personality packs"'
+    assert line in read_member(release.path, "hpm.toml").decode()
+    assert line in path.read_text() and "[hpm" not in path.read_text()
+    assert ('/usr/local/share/hpm/kittystory/hpm.toml: memory_line: took out '
+            '"[hpm kittystory 1.0]"; hpm adds its own when it installs') in q.said
+
+
+def test_a_clean_memory_line_is_not_touched(world, store):
+    q = Script()
+    go(world, store, q=q)
+    assert not any("memory_line" in line for line in q.said)
+
+
 @pytest.mark.parametrize("given, major, expected", [
     ("1.4", False, "1.5"), ("1.4.1", False, "1.4.2"), ("2", False, "2.1"),
     ("1.4", True, "2.0"), ("1.4.9", True, "2.0"),

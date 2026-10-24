@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import json
 import os
 import posixpath
 import re
@@ -25,6 +26,7 @@ import tempfile
 from pathlib import Path
 
 from hallux.disk import Disk
+from hallux.hpm import record as rec
 from hallux.hpm.archive import (
     CHANGELOG, REVIEW, ArchiveError, listing, pack, read_member, sha256, to_machine, to_member,
 )
@@ -206,6 +208,7 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
 
     new_version = _version(name, manifest, before, latest, version, suggested, q)
     new_text = _with_value(text, "version", f'"{new_version}"')
+    new_text = _clean_memory_line(name, manifest, new_text, q)
     new_text = _privacy(name, manifest, collected, new_text, private, q)
     _seeds(collected, theirs, q)
     drafted = draft(name, latest, ours, theirs, new_version) if changelog is None and draft else None
@@ -427,7 +430,8 @@ def _with_value(text: str, key: str, value: str) -> str:
     lines = text.splitlines(keepends=True)
     table = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")),
                  len(lines))
-    pattern = re.compile(rf"^(\s*{key}\s*=\s*)(\"[^\"]*\"|'[^']*'|true|false)(.*)$", re.S)
+    pattern = re.compile(rf"^(\s*{key}\s*=\s*)(\"(?:[^\"\\]|\\.)*\"|'[^']*'|true|false)(.*)$",
+                         re.S)
     found = [i for i in range(table) if pattern.match(lines[i])]
     if len(found) > 1:
         raise HpmError(f"the manifest says {key} twice")
@@ -439,6 +443,23 @@ def _with_value(text: str, key: str, value: str) -> str:
             lines[table - 1] += "\n"
         lines.insert(table, f"{key} = {value}\n")
     return "".join(lines)
+
+
+def _clean_memory_line(name: str, manifest: Manifest, text: str, q: Questions) -> str:
+    """The manifest's memory line without hpm's tags (and without a "- " in front): hpm
+    adds its own tag when it installs, so one copied into the manifest would be a second."""
+    line = manifest.memory_line
+    if not line:
+        return text
+    clean = rec.untag(line)
+    if clean == line.strip():
+        return text
+    end = rec.TAGS.search(line.strip())
+    tags = re.findall(r"\[hpm [^\]\s]+ [^\]\s]+\]", end.group(0)) if end else []
+    took = " ".join(f'"{t}"' for t in tags) or 'the "- " in front'
+    q.say(f"{manifest_path(name)}: memory_line: took out {took}; hpm adds its own when it "
+          f"installs")
+    return _with_value(text, "memory_line", json.dumps(clean, ensure_ascii=False))
 
 
 def _privacy(name: str, manifest: Manifest, collected, text: str, private: bool | None,

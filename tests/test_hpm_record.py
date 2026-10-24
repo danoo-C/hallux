@@ -88,6 +88,28 @@ def test_an_update_replaces_the_line(disk):
         "- kittystory: chat, now with cats [hpm kittystory 1.5]"]
 
 
+@pytest.mark.parametrize("line, clean", [
+    ("- x [hpm a 1.0]", "x"),
+    ("x [hpm a 1.0] [hpm a 1.1]", "x"),
+    ("x [hpm other 2]", "x"),
+    ("a line with no tag", "a line with no tag"),
+    ("x [hpm a 1.0] and more", "x [hpm a 1.0] and more"),      # only the tags at the end
+])
+def test_untag(line, clean):
+    assert rec.untag(line) == clean
+
+
+def test_a_tagged_memory_line_gets_one_tag(disk):
+    """Fix 02: a manifest whose memory_line has a tag copied in (as kittystory 1.0 and 1.1
+    in the store have) installs with hpm's tag only."""
+    rec.set_memory(disk, "kittystory", "1.1", "kittystory: chat [hpm kittystory 1.0]")
+    assert rec.memory_lines(disk, "kittystory") == ["- kittystory: chat [hpm kittystory 1.1]"]
+    rec.set_memory(disk, "kittystory", "1.2", "- kittystory: chat [hpm kittystory 1.1]")
+    assert rec.memory_lines(disk, "kittystory") == ["- kittystory: chat [hpm kittystory 1.2]"]
+    rec.set_memory(disk, "kittystory", "1.3", "x", ("Cats purr. [hpm kittystory 1.2]",))
+    assert "3. Cats purr. [hpm kittystory 1.3]" in memory(disk).splitlines()
+
+
 def test_another_packages_tag_is_left_alone(disk):
     rec.set_memory(disk, "kittystory-packs", "1.0", "packs")
     rec.set_memory(disk, "kittystory", "1.4", "kittystory: chat")

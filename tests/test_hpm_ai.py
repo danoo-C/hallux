@@ -272,7 +272,20 @@ def test_init_keeps_a_good_draft_and_marks_memories_private(world, store):
     assert q.said[-1] == "the AI's part cost ~$0.0100"
     first = stand_in.messages[0]
     assert "/usr/local/bin/kittystory" in first and CARD.strip() in first
-    assert "- kittystory: chat with characters" in first           # the memory's line
+    assert "kittystory: chat with characters" in first             # the memory's line
+
+
+def test_init_gives_the_ai_the_line_without_its_tag(world, store):
+    """Fix 02: after an install or a publish the only line is hpm's, tagged."""
+    (world / ".hallux/memory.md").write_text(
+        "## Invented programs\n- kittystory: chat with characters [hpm kittystory 1.0]\n")
+    _, _, stand_in = run_init(world, store, writes(
+        ("/usr/local/share/hpm/kittystory/hpm.toml", GOOD),
+        ("/usr/local/share/hpm/kittystory-packs/hpm.toml", PACKS),
+        ("/usr/local/share/hpm/kittystory-memories/hpm.toml", MEMORIES)))
+    first = stand_in.messages[0]
+    assert "\nkittystory: chat with characters\n" in first
+    assert "[hpm" not in first and "- kittystory: chat" not in first
 
 
 def test_init_shows_the_problems_to_the_ai_once(world, store):

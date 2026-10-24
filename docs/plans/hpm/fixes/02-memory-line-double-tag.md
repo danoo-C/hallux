@@ -4,8 +4,8 @@
 (the memory lines) and [step 6](../06-ai-session.md) (`hpm init`)
 
 **Status:** planned 2026-10-24, from a read-only review of the user's own run ("please
-append these to the plans/hpm/fixes"). Not built. The decisions below are proposals, not
-confirmed.
+append these to the plans/hpm/fixes"). Decisions confirmed by the user 2026-10-24 ("yes, as
+proposed"). **Built** 2026-10-24: see "As built" at the end.
 
 **Changes:** `hallux/hpm/record.py` (a helper that takes tags off a line, used by
 `set_memory`), `hallux/hpm/assist.py` (init gives the AI the line without its tag),
@@ -93,3 +93,17 @@ without the tag.
 |---|---|---|
 | 1 | **`set_memory` cleans the line too,** not only init and publish | Releases with a tag are in the store already, and maybe in a friend's |
 | 2 | **Publish takes the tag out and says so,** instead of refusing | The fix is mechanical and always the same; refusing would only send the user to sed |
+
+## As built
+
+- `rec.untag(line)` and `rec.TAGS` in `hallux/hpm/record.py`; `set_memory` writes the
+  memory line untagged, and takes tags off its rules too.
+- `assist.init` hands the AI `untag(line)`.
+- `_clean_memory_line` in `hallux/hpm/publish.py`, after the version is set; `_with_value`
+  now reads a basic string with `\"` in it, so a memory line with quotes can be rewritten.
+- Tests: `test_untag`, `test_a_tagged_memory_line_gets_one_tag` (record),
+  `test_a_tag_in_the_memory_line_is_taken_out`, `test_a_clean_memory_line_is_not_touched`
+  (publish), `test_init_gives_the_ai_the_line_without_its_tag` (ai).
+- By hand: on a copy of `test-kittystory` with a copy of the store (`~/hpm-live`),
+  `hpm rollback` then `hpm update kittystory` left one line, with `[hpm kittystory 1.1]`
+  only. Your worlds keep two tags until their next install or update.

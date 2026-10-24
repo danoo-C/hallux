@@ -82,6 +82,18 @@ def _tagged(name: str) -> re.Pattern:
     return re.compile(rf"\[hpm {re.escape(name)} [^\]\s]+\]\s*$")
 
 
+TAGS = re.compile(r"(?:\s*\[hpm [^\]\s]+ [^\]\s]+\])+\s*$")
+
+
+def untag(line: str) -> str:
+    """A memory line as a manifest holds it: without the "- " in front and without the
+    [hpm <name> <version>] tags at the end (any package's), which hpm adds itself."""
+    line = line.strip()
+    if line.startswith("- "):
+        line = line[2:].lstrip()
+    return TAGS.sub("", line)
+
+
 def _section(lines: list[str], title: str) -> tuple[int, int] | None:
     """Where a section is: the index of its title line, and of the line after its last."""
     starts = [i for i, line in enumerate(lines) if line.rstrip("\n").startswith(title.split(" (")[0])
@@ -143,12 +155,14 @@ def set_memory(disk: Disk, name: str, version: str, memory_line: str, rules: tup
     tag = _tag(name, version)
 
     def change(text: str) -> str:
-        line = [f"- {memory_line} {tag}"] if memory_line else []
+        clean = untag(memory_line) if memory_line else ""
+        line = [f"- {clean} {tag}"] if clean else []
         text = _put(text, PROGRAMS, name, line, replace)
         if rules:
             numbered = _numbered(text)
             text = _put(text, RULES, name,
-                        [f"{numbered + i + 1}. {rule} {tag}" for i, rule in enumerate(rules)], None)
+                        [f"{numbered + i + 1}. {TAGS.sub('', rule.strip())} {tag}"
+                         for i, rule in enumerate(rules)], None)
         return text
 
     _change_memory(disk, change)
