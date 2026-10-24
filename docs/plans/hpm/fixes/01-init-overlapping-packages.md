@@ -155,10 +155,9 @@ must be added to the list, or publish won't carry it.
 
 ## Also seen, not part of this fix
 
-- **Step 6 says "the log of the world gets a line"** for each AI session. That wasn't built:
-  from a terminal, hpm writes nothing to `.hallux/hallux.log` (only a failed session and the
-  tab's migrations log). The checklist and the tutorial were corrected on 2026-10-24 to say
-  so. Whether to build the line is a separate question.
+- ~~Step 6's log line wasn't built.~~ Wrong: each AI session does write a line to
+  `.hallux/hallux.log` (`_ended` in `hallux/hpm/ai.py`). The docs that say otherwise are
+  [fix 05](05-docs-log-line.md).
 - **Removing only the app's manifest to run init again** keeps the extras' manifests from
   the first run, and the AI sees and keeps them ("the packages are the same as before").
   With this fix those are checked and shown; whether init should say up front "these
