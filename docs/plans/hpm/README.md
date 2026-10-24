@@ -136,6 +136,7 @@ the review changed 9, 11 and 15.
 | [9](09-manual-docs-live-run.md) | The manual, the docs, the live run | **Written** 2026-10-23; the live run is the user's ([checklist](live-run-checklist.md)) |
 
 Fixes found after the build, from the user's own use, are planned in [fixes/](fixes/README.md).
+Colors for hpm's command line are planned in [colors/](colors/README.md).
 
 ## What the review changed
 
