@@ -31,6 +31,8 @@ from hallux.hpm.archive import (
     CHANGELOG, REVIEW, ArchiveError, listing, pack, read_member, sha256, to_machine, to_member,
 )
 from hallux.hpm.manifest import Manifest, ManifestError, Version
+from hallux.hpm.paint import enabled as paint_on
+from hallux.hpm.paint import paint
 from hallux.hpm.store import Release, Store
 from hallux.hpm.world import (
     MANIFESTS, HpmError, clean_seed_path, collect, manifest_path, read_world_manifest,
@@ -53,6 +55,15 @@ class Questions:
     def __init__(self, interactive: bool | None = None) -> None:
         self.interactive = (sys.stdin.isatty() and sys.stdout.isatty()
                             if interactive is None else interactive)
+        self.color = paint_on(sys.stdout)       # docs/plans/hpm/colors/
+
+    def _prompt(self, text: str) -> str:
+        """A question as input() shows it: bold, its default dim. Under readline the codes
+        are marked as taking no room, so editing the line doesn't shift it."""
+        painted = paint(text, "ask", on=self.color)
+        if painted != text and "readline" in sys.modules:
+            painted = re.sub(r"(\x1b\[[0-9;]*m)", "\x01\\1\x02", painted)
+        return painted
 
     def _needs_terminal(self, question: str, flag: str) -> None:
         if not self.interactive:
@@ -60,13 +71,14 @@ class Questions:
 
     def ask(self, question: str, default: str, flag: str) -> str:
         self._needs_terminal(question, flag)
-        answer = input(f"{question} [{default}]: ").strip()
+        answer = input(self._prompt(f"{question} [{default}]: ")).strip()
         return answer or default
 
     def confirm(self, question: str, default: bool, flag: str) -> bool:
         self._needs_terminal(question, flag)
         while True:
-            answer = input(f"{question} [{'Y/n' if default else 'y/N'}]: ").strip().lower()
+            answer = input(self._prompt(f"{question} [{'Y/n' if default else 'y/N'}]: ")
+                           ).strip().lower()
             if not answer:
                 return default
             if answer in ("y", "yes", "n", "no"):
@@ -76,7 +88,7 @@ class Questions:
         """One of the letters of `keys`, or "" for Enter."""
         self._needs_terminal(question, flag)
         while True:
-            answer = input(f"{question}: ").strip().lower()
+            answer = input(self._prompt(f"{question}: ")).strip().lower()
             if answer == "" or (len(answer) == 1 and answer in keys):
                 return answer
 
@@ -97,8 +109,10 @@ class Questions:
         finally:
             Path(name).unlink(missing_ok=True)
 
-    def say(self, text: str) -> None:
-        print(text)
+    def say(self, text: str, kind: str | None = None) -> None:
+        """A line, in the colors of its kind (hallux/hpm/paint.py): given, or what its
+        first characters say."""
+        print(paint(text, kind, on=self.color))
 
 
 # ---------------------------------------------------------------------- publishing
@@ -318,13 +332,13 @@ def _used_seeds(name: str, collected, bare: list[str], latest: Release | None,
         if answer is None and suggested:
             answer = "release"
             q.say(f"{name}: kept {latest.version}'s seed {path}: it changed in this world and "
-                  f"has no clean copy (--seeds world sends this world's)")
+                  f"has no clean copy (--seeds world sends this world's)", kind="warning")
         if answer is None:
             q.say(f"{name}: the seed {path} changed since {latest.version}, and there's no "
                   f"clean copy of it. It may hold this world's own use (a chat, a story).\n"
                   f"  r  keep {latest.version}'s seed (the default)\n"
                   f"  w  publish this world's file\n"
-                  f"  s  stop")
+                  f"  s  stop", kind="warning")
             answer = {"": "release", "r": "release", "w": "world", "s": "stop"}[
                 q.choose("r, w or s", "rws", "--seeds release|world, or --yes for the last "
                                              "release's")]
@@ -602,7 +616,7 @@ def _privacy(name: str, manifest: Manifest, collected, text: str, private: bool 
                             "--private yes or --private no")
     if not private:
         return text
-    q.say(f"{name} is marked private (private = true in its manifest)")
+    q.say(f"{name} is marked private (private = true in its manifest)", kind="note")
     return _with_value(text, "private", "true")
 
 

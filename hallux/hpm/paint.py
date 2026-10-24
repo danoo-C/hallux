@@ -36,6 +36,7 @@ COST = re.compile(r"~\$[0-9]+(?:\.[0-9]+)?")
 ENDS_IN_COST = re.compile(r"cost ~\$[0-9.]+\s*$")
 DEFAULT = re.compile(r"\[[^\]\n]*\](?=:?\s*$)")    # "[Y/n]" or "[1.2]" at the question's end
 CODES = re.compile(r"\x1b\[[0-9;]*m")
+BACKUP = re.compile(r"  \(backup: [^)]*\)$")    # after a summary: dim
 
 
 def enabled(stream, env=None) -> bool:
@@ -99,6 +100,10 @@ def _line(line: str, kind: str) -> str:
     if kind == "ask":
         return lead + _question(body, rest_codes)
     head = _piece(marker.rstrip(" "), marker_codes) + (" " if marker.endswith(" ") else "")
+    backup = BACKUP.search(body) if kind in ("ok", "fail") else None
+    if backup:
+        return (lead + head + _piece(body[:backup.start()], rest_codes)
+                + _piece(body[backup.start():], STYLES["dim"][1]))
     return lead + head + _piece(body, rest_codes)
 
 

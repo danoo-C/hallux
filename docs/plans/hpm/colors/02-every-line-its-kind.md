@@ -51,3 +51,20 @@ calls), the stand-in `Questions` of the tests (`say` takes `kind`), `tests/test_
 ## Done when
 
 The tests pass, and the whole suite (`--deselect tests/test_sandbox.py`).
+
+## As built
+
+- `Questions.say(text, kind=None)` and `Run.say` paint; `Questions.color` is read once.
+  `_prompt` paints `ask`, `confirm` and `choose`; under readline the codes are wrapped in
+  `\x01…\x02` so line editing keeps its place. `main` paints both `hpm:` lines for stderr.
+- The summary is `fail` if anything failed, `ok` if anything was done, else plain;
+  `paint` dims a trailing `  (backup: …)` on an `ok` or `fail` line.
+- Explicit kinds, 21 in all: the table above, plus the rollback's "kittystory back to 1.0
+  (…)" (ok). "cancelled; nothing was written" raised as an error stays an error (red); said
+  by `_cancelled`, it is a warning. The rest go by their markers.
+- The five test stand-ins (`Said`, `Script`) take `kind=None`; nothing else in the tests
+  changed.
+- Tests in `tests/test_hpm_cli.py`: `test_say_paints_on_a_terminal_and_not_with_no_color`,
+  `test_a_question_is_bold_with_its_default_dim`,
+  `test_the_error_is_red_on_a_terminal_and_plain_in_a_pipe`,
+  `test_an_update_in_colors_reads_the_same_without_them`. Whole suite: 2363 passed.

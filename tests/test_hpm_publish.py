@@ -108,7 +108,7 @@ class Script(Questions):
         answer = self._next("edit", template)
         return template + "edited\n" if answer is None else answer
 
-    def say(self, text):
+    def say(self, text, kind=None):
         self.said.append(text)
 
 

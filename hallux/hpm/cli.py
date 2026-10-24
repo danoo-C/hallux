@@ -47,6 +47,8 @@ from hallux.hpm import record as rec
 from hallux.hpm.archive import read_member
 from hallux.hpm.engine import KEEP, OVERWRITE, REMOVE, REPLACE, SKIP, Plan, Want
 from hallux.hpm.manifest import NAME, Version
+from hallux.hpm.paint import enabled as paint_on
+from hallux.hpm.paint import paint
 from hallux.hpm.publish import Questions, publish, show
 from hallux.hpm.store import LOCAL, Ambiguous, Store
 from hallux.hpm.world import HpmError, find_world, homes, refuse_running
@@ -215,10 +217,10 @@ def main(argv: list[str] | None = None, questions: Questions | None = None,
     try:
         return getattr(run, {"store": "stores"}.get(flags.command, flags.command))()
     except HpmError as e:
-        print(f"hpm: {e}", file=sys.stderr)
+        print(paint(f"hpm: {e}", "error", on=paint_on(sys.stderr)), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("hpm: stopped", file=sys.stderr)
+        print(paint("hpm: stopped", "error", on=paint_on(sys.stderr)), file=sys.stderr)
         return 130
 
 
@@ -237,8 +239,8 @@ class Run:
     def world(self) -> Path:
         return find_world(given=getattr(self.flags, "world", None))
 
-    def say(self, text: str) -> None:
-        self.q.say(text)
+    def say(self, text: str, kind: str | None = None) -> None:
+        self.q.say(text, kind=kind)
 
     # ------------------------------------------------------------------ install and update
 
@@ -276,9 +278,9 @@ class Run:
                 extras = tuple(k for k in record[name].get("extras", []) if k in manifest.extras)
                 wants.append(Want(name, extras=extras, store=where))
             elif self.flags.names:
-                self.say(f"{name} {record[name]['version']} is the newest")
+                self.say(f"{name} {record[name]['version']} is the newest", kind="ok")
         if not wants:
-            self.say("everything is up to date")
+            self.say("everything is up to date", kind="ok")
             return 0
         if self.interactive and not self.flags.yes:
             wants = self._checkboxes(world, wants, record, title=f"{len(wants)} to update")
@@ -432,7 +434,9 @@ class Run:
                                    backup=shared.backup)
         finally:
             plan.close()
-        self.say(outcome.summary() + (f"  (backup: {outcome.backup})" if outcome.backup else ""))
+        kind = "fail" if outcome.count("failed") else ("ok" if outcome.done else "plain")
+        self.say(outcome.summary() + (f"  (backup: {outcome.backup})" if outcome.backup else ""),
+                 kind=kind)
         return 1 if outcome.count("failed") else 0
 
     def _memory_answers(self, plan: Plan) -> dict[str, str]:
@@ -446,7 +450,7 @@ class Run:
                 answers[key] = REPLACE
             elif self.interactive:
                 self.say(f"The machine's memory has its own line about {item.name}:\n"
-                         f"  {item.old_line}")
+                         f"  {item.old_line}", kind="ask")
                 answers[key] = REPLACE if self.q.confirm(
                     "replace it with hpm's?", True, "--old-line replace|keep") else KEEP
             else:
@@ -575,7 +579,7 @@ class Run:
         self.say(f"  {sign} {done.name}{version} {done.status}{was}{files}{why}")
 
     def _cancelled(self) -> int:
-        self.say("cancelled; nothing was written")
+        self.say("cancelled; nothing was written", kind="warning")
         return 1
 
     # ------------------------------------------------------------------ the other commands
@@ -592,7 +596,7 @@ class Run:
         done = outcome.done[0]
         back = f"back to {done.version}" if done.version else "taken away: it wasn't installed before"
         self.say(f"{done.name} {back} ({done.written} files put back, {done.removed} taken away; "
-                 f"backup {outcome.backup})")
+                 f"backup {outcome.backup})", kind="ok")
         return 0
 
     def adopt(self) -> int:
@@ -643,7 +647,8 @@ class Run:
         world = self.world()
         written = assist.init(world, self.store, self.flags.name, self.q, yes=self.flags.yes,
                               user=self.flags.user, client_factory=self.client_factory)
-        self.say(f"kept: {', '.join(written)}. Next: hpm publish {self.flags.name} --all")
+        self.say(f"kept: {', '.join(written)}. Next: hpm publish {self.flags.name} --all",
+                 kind="ok")
         return 0
 
     def publish(self) -> int:
@@ -717,7 +722,7 @@ class Run:
                 f"remove all {len(found)} backups ({_size(rec.backups_size(disk))})? "
                 f"hpm rollback can't go back past them then", False, "--yes"):
             return self._cancelled()
-        self.say(f"removed {rec.clean_backups(disk)} backups")
+        self.say(f"removed {rec.clean_backups(disk)} backups", kind="ok")
         return 0
 
     # ------------------------------------------------------------------ stores on GitHub
@@ -731,12 +736,13 @@ class Run:
             mine.init(self.flags.repo)
             self.say(f"made your store {self.flags.name}: {mine.address}, its clone in "
                      f"{mine.folder}. hpm push NAME sends a package there; a friend adds it "
-                     f"with:\n  hpm store add {self.flags.name} {mine.address}")
+                     f"with:\n  hpm store add {self.flags.name} {mine.address}", kind="ok")
         elif action == "add":
             added = remotes.add(self.flags.name, self.flags.address)
             count = len(added.index.get("packages", {}))
             self.say(f"added the store {added.name} ({count} package{'s' * (count != 1)}): "
-                     f"hpm install {added.name}/<package>, or {added.name}/ for all of them")
+                     f"hpm install {added.name}/<package>, or {added.name}/ for all of them",
+                     kind="ok")
         elif action == "list":
             for name in remote.Mine.names(self.store.home):
                 self.say(f"{name}  yours: {remote.Mine(self.store.home, name).address}")
@@ -751,7 +757,7 @@ class Run:
         elif action == "remove":
             remotes.remove(self.flags.name)
             self.say(f"removed the store {self.flags.name} and its downloads; what you "
-                     f"installed from it stays installed")
+                     f"installed from it stays installed", kind="ok")
         elif action == "refresh":
             for name in [self.flags.name] if self.flags.name else remotes.names():
                 found = remotes.refresh(name)
@@ -897,7 +903,7 @@ class Run:
         mine.commit(f"yank {self.flags.name} {version}", ["index.toml"])
         self.say(f"yanked {self.flags.name} {version} in {mine.name}: nobody gets it by "
                  f"default any more; the newest is "
-                 + (f"{latest}" if latest else "none (every version is yanked)"))
+                 + (f"{latest}" if latest else "none (every version is yanked)"), kind="ok")
         return 0
 
 

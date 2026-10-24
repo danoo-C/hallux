@@ -1,6 +1,7 @@
 """The hpm command (hallux/hpm/cli.py) and its screens (hallux/hpm/screens.py), and the mark
 of a running world (hallux/hpm/world.py, hallux/app.py). Worlds and stores are temporary
 folders; the screens are answered by a script, or driven by their keys on a pipe."""
+import io
 import os
 import sys
 
@@ -76,7 +77,7 @@ class Said(Questions):
         super().__init__(interactive=interactive)
         self.answers, self.said = list(answers), []
 
-    def say(self, text):
+    def say(self, text, kind=None):
         self.said.append(text)
 
     def confirm(self, question, default, flag):
@@ -620,3 +621,70 @@ def test_the_conflict_screen_by_its_keys():
 
 def test_the_pick_screen():
     assert keys_into(Pick("whose home?", ["other", "user"]), "\x1b[B\r") == "user"
+
+
+# ---------------------------------------------------------------- colors (docs/plans/hpm/colors/)
+
+class Terminal(io.StringIO):
+    def isatty(self):
+        return True
+
+
+def test_say_paints_on_a_terminal_and_not_with_no_color(monkeypatch):
+    from hallux.hpm.publish import Questions as Real
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("HPM_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    out = Terminal()
+    monkeypatch.setattr(sys, "stdout", out)
+    Real(interactive=False).say("  ✓ kittystory 1.1 updated")
+    assert out.getvalue() == "  \x1b[1;32m✓\x1b[0m\x1b[32m kittystory 1.1 updated\x1b[0m\n"
+    monkeypatch.setenv("NO_COLOR", "1")
+    out = Terminal()
+    monkeypatch.setattr(sys, "stdout", out)
+    Real(interactive=False).say("  ✓ kittystory 1.1 updated")
+    assert out.getvalue() == "  ✓ kittystory 1.1 updated\n"
+
+
+def test_a_question_is_bold_with_its_default_dim(monkeypatch):
+    from hallux.hpm.publish import Questions as Real
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("HPM_COLOR", "always")
+    asked = []
+    monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or "")
+    monkeypatch.delitem(sys.modules, "readline", raising=False)
+    assert Real(interactive=True).ask("kittystory's version", "1.2", "--version") == "1.2"
+    assert asked == ["\x1b[1mkittystory's version \x1b[0m\x1b[90m[1.2]\x1b[0m: "]
+
+
+def test_the_error_is_red_on_a_terminal_and_plain_in_a_pipe(world, store, monkeypatch, capsys):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("HPM_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    assert hpm(world, store, "update", "kittymusic")[0] == 1
+    assert capsys.readouterr().err == "hpm: kittymusic isn't installed in this world; hpm install it\n"
+    err = Terminal()
+    monkeypatch.setattr(sys, "stderr", err)
+    assert hpm(world, store, "update", "kittymusic")[0] == 1
+    assert err.getvalue() == ("\x1b[1;31mhpm:\x1b[0m\x1b[31m kittymusic isn't installed in this "
+                              "world; hpm install it\x1b[0m\n")
+
+
+def test_an_update_in_colors_reads_the_same_without_them(world, store, tmp_path, monkeypatch):
+    from hallux.hpm.paint import strip_codes
+    from hallux.hpm.publish import Questions as Real
+    monkeypatch.setenv("HPM_COLOR", "always")
+    hpm(world, store, "install", "kittystory", "--extras", "packs")
+    put(store, tmp_path, APP, {"/usr/local/bin/kittystory": "the card 1.1\n",
+                               "/usr/local/share/apps/kittystory/app.js": "// 1.1\n"}, version="1.1")
+    out = Terminal()
+    monkeypatch.setattr(sys, "stdout", out)
+    assert cli.main(["update", "--world", str(world), "--yes"], questions=Real(interactive=False),
+                    store=store, screens=Screens()) == 0
+    painted = out.getvalue()
+    assert "  \x1b[1;32m✓\x1b[0m\x1b[32m kittystory 1.1 updated (was 1.0), 3 files\x1b[0m" in painted
+    summary = [line for line in painted.splitlines() if "(backup: " in line][0]
+    assert summary.startswith("\x1b[32m1 updated\x1b[0m\x1b[90m  (backup: ")
+    plain = strip_codes(painted)
+    assert "  ✓ kittystory 1.1 updated (was 1.0), 3 files" in plain.splitlines()
+    assert "\x1b" not in plain

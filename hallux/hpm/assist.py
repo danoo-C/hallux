@@ -64,7 +64,7 @@ def init(world: Path, store: Store, name: str, q: Questions, *, yes: bool = Fals
     before = _left_from_before(disk, name)
     if before:
         q.say("there from before, and kept as they are (hpm checks them with the new draft): "
-              + ", ".join(before))
+              + ", ".join(before), kind="note")
     line = rec.untagged_line(disk, name) or next(iter(rec.memory_lines(disk, name)), None)
     line = rec.untag(line) if line else None      # hpm adds its own tag when it installs
     job = ai.init_job(name, card, line)
@@ -181,7 +181,7 @@ def _keep_private(disk: Disk, path: str, home: str | None, q: Questions) -> None
     if any(PRIVATE_NAMES.fullmatch(posixpath.basename(p)) for p in files):
         disk.write_file(path, _with_value(text, "private", "true"))
         q.say(f"{manifest.name} holds memories or a chat: marked private, so hpm push never "
-              f"sends it")
+              f"sends it", kind="note")
 
 
 # ---------------------------------------------------------------------- publish's helpers
@@ -218,12 +218,14 @@ def changelog_drafter(world: Path, store: Store, q: Questions, *, given: bool,
             answer = ai.run_job(world, job, settings, client_factory)
         q.say(f"the AI's draft cost {ai.cost(answer)}")
         if not answer.ok:
-            q.say(f"the AI's draft didn't end well ({answer.why}); write the entry yourself")
+            q.say(f"the AI's draft didn't end well ({answer.why}); write the entry yourself",
+                  kind="warning")
             return None
         entry, disagrees = split_manifest_block(answer.text)
         if disagrees:
             q.say(f"the AI says the manifest disagrees with this version (fix it in "
-                  f"{manifest_path(name)} before you publish, if it is right):\n{disagrees}")
+                  f"{manifest_path(name)} before you publish, if it is right):\n{disagrees}",
+                  kind="warning")
         return entry
 
     return draft
@@ -262,7 +264,8 @@ def card_reviewer(world: Path, store: Store, q: Questions, *, given: bool, clien
         answer = ai.run_job(world, ai.review_job(name, card, manifest), settings, client_factory)
         q.say(f"the review cost {ai.cost(answer)}")
         if not answer.ok:
-            q.say(f"the review didn't end well ({answer.why}); the release has none")
+            q.say(f"the review didn't end well ({answer.why}); the release has none",
+                  kind="warning")
             return None
         text = answer.text.strip()
         q.say(f"the review of {name}:\n{text}")
@@ -314,7 +317,8 @@ def note_writer(world: Path, store: Store, q: Questions, *, given: bool, client_
         q.say(f"the note cost {ai.cost(answer)}")
         left = problems_of(answer)
         if not answer.ok or left:
-            q.say(f"the note can't be used ({answer.why or left}); write it yourself at {target}")
+            q.say(f"the note can't be used ({answer.why or left}); write it yourself at {target}",
+                  kind="warning")
             return False
         q.say(f"--- {target}\n" + disk.read_text(target).rstrip())
         q.say("this note never ran on real data: the test install tries it on a copy of your "
@@ -384,7 +388,7 @@ def test_install(store: Store, release: Release, q: Questions, client_factory=No
         spent = sum(r.cost for r in records)              # the boot, the line, the Ctrl-D
         for record in records:
             if record.typed == "(boot)" and record.error:
-                q.say(f"the copy didn't boot: {record.error}")
+                q.say(f"the copy didn't boot: {record.error}", kind="warning")
             elif record.typed == release.name:
                 q.say(f"$ {record.typed}\n{record.output.rstrip()}" + (
                     f"\n(error: {record.error})" if record.error else ""))

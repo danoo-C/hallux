@@ -140,7 +140,7 @@ class Said(Questions):
         super().__init__(interactive=interactive)
         self.answers, self.said = list(answers), []
 
-    def say(self, text):
+    def say(self, text, kind=None):
         self.said.append(text)
 
     def confirm(self, question, default, flag):
