@@ -201,7 +201,8 @@ directory the shell is in. Enter copies it.
 `hpm` moves the programs you build in one world into any other, yours or a friend's, without
 asking the machine for an install file each time. A package is a program's files plus a small
 manifest, `hpm.toml`, that says which files are the app and which are your data. There is one
-store on your PC, above every world (`~/.local/share/hallux/hpm/`, or `$HPM_HOME`).
+store on your PC, above every world (`~/.local/share/hallux/hpm/`, or the folder
+`hpm config set store PATH` names in `~/.config/hallux/hpm.toml`).
 
 ```bash
 .venv/bin/hpm init kittystory                 # in the world it was built in: the AI drafts the manifest

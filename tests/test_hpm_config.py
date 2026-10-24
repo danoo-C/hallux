@@ -177,3 +177,101 @@ def test_root_is_told_once(home, monkeypatch, capsys):
     cfg.load(env_of(home))
     err = capsys.readouterr().err
     assert err.count("hpm runs as root, so it reads") == 1
+
+
+# ---------------------------------------------------------------- hpm config (step 2)
+
+def test_explain(home, tmp_path):
+    env = env_of(home, PATH="")                     # no nano or vi on this PATH
+    assert cfg.explain(env) == [
+        ("store", "~/.local/share/hallux/hpm", "the default", False),
+        ("editor", "(none: no nano or vi either)", "the default", False),
+        ("color", "auto", "the default", False)]
+    write(home, 'store = "~/hpm-live"\neditor = "nano"\ncolor = "never"\n')
+    assert cfg.explain(env) == [("store", "~/hpm-live", "from the file", False),
+                                ("editor", "nano", "from the file", False),
+                                ("color", "never", "from the file", False)]
+    env = env_of(home, HPM_HOME=str(tmp_path / "t"), HPM_EDITOR="ed", NO_COLOR="1")
+    assert cfg.explain(env) == [
+        ("store", str(tmp_path / "t"), "from HPM_HOME (the file says ~/hpm-live)", True),
+        ("editor", "ed", "from HPM_EDITOR (the file says nano)", True),
+        ("color", "never", "from NO_COLOR (the file says never)", True)]
+
+
+def test_set_value(home):
+    env = env_of(home)
+    path, value = cfg.set_value("store", str(home / "hpm-live"), env)    # as the shell gives it
+    assert value == "~/hpm-live" and path.read_text() == 'store = "~/hpm-live"\n'
+    path.write_text('# mine\nstore = "~/hpm-live"   # the store\ncolor = "auto"\n')
+    cfg.set_value("store", "/", env)
+    cfg.set_value("editor", 'my "editor"', env)
+    assert path.read_text() == ('# mine\nstore = "/"\ncolor = "auto"\n'
+                                'editor = "my \\"editor\\""\n')
+    assert cfg.load(env).editor == 'my "editor"'
+    before = path.read_text()
+    with pytest.raises(HpmError, match="hpm has no setting 'colour'"):
+        cfg.set_value("colour", "never", env)
+    with pytest.raises(HpmError, match="is no folder; nothing written"):
+        cfg.set_value("store", "~/nope", env)
+    with pytest.raises(HpmError, match="color must be one of"):
+        cfg.set_value("color", "pink", env)
+    assert path.read_text() == before
+
+
+@pytest.fixture
+def at_home(home, monkeypatch):
+    """hpm as the user runs it: HOME, no HPM_HOME, no HPM_CONFIG."""
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("HPM_HOME")
+    monkeypatch.delenv("HPM_CONFIG")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("HPM_COLOR", raising=False)
+    return home
+
+
+def run_hpm(*args):
+    from hallux.hpm import cli
+
+    class Kept(cli.Questions):
+        def __init__(self):
+            super().__init__(interactive=False)
+            self.said = []
+
+        def say(self, text, kind=None):
+            self.said.append(text)
+    q = Kept()
+    return cli.main(list(args), questions=q), q.said
+
+
+def test_hpm_config_shows_and_sets(at_home):
+    code, said = run_hpm("config")
+    assert code == 0
+    assert said[0] == "file    ~/.config/hallux/hpm.toml  (not there yet: hpm config set makes it)"
+    assert said[1].startswith("store   ~/.local/share/hallux/hpm") and said[1].endswith("the default")
+    assert run_hpm("config", "set", "store", str(at_home / "hpm-live")) == (
+        0, ['✓ store = "~/hpm-live" in ~/.config/hallux/hpm.toml'])
+    said = run_hpm("config")[1]
+    assert said[0] == "file    ~/.config/hallux/hpm.toml"
+    assert said[1].startswith("store   ~/hpm-live") and said[1].endswith("from the file")
+    assert run_hpm("config", "path")[1] == [str(at_home / ".config/hallux/hpm.toml")]
+
+
+def test_hpm_config_set_mends_a_store_that_isnt_there(at_home, capsys):
+    write(at_home, 'store = "~/hpm-gone"\n')
+    assert run_hpm("search", "kitty")[0] == 1
+    assert "is no folder. Fix it with: hpm config set store PATH" in capsys.readouterr().err
+    assert run_hpm("config")[0] == 0                       # still shows what is wrong
+    assert run_hpm("config", "set", "store", "~/hpm-live")[0] == 0
+    assert run_hpm("search", "kitty")[0] == 0
+
+
+def test_the_empty_store_note(at_home, capsys):
+    code, said = run_hpm("search", "kitty")
+    assert said == ["nothing in the store has 'kitty' in its name or summary",
+                    "note: the store at ~/.local/share/hallux/hpm is empty. If yours is "
+                    "elsewhere: hpm config set store PATH"]
+    assert run_hpm("show", "kittystory")[0] == 1
+    assert "note: the store at ~/.local/share/hallux/hpm is empty" in capsys.readouterr().err
+    write(at_home, 'store = "~/hpm-live"\n')                # configured: no note
+    assert run_hpm("search", "kitty")[1] == [
+        "nothing in the store has 'kitty' in its name or summary"]

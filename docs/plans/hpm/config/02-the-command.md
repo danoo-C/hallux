@@ -68,3 +68,31 @@ file, its three keys and who wins; the "As built" bullet. `docs/hpm/tutorial.md`
   `hpm config` says both come from the file, and `hpm search ""` lists the store from
   anywhere. Then the user starts Hallux the way they usually do, opens the Packages tab
   (Ctrl+F12, `g`) and sees the store's packages.
+
+## As built
+
+- `cfg.explain(env)` gives each setting, its value, its source, and whether the environment
+  set it; a value the environment hides adds "(the file says …)". `Run.config` prints it,
+  the source dim and an environment's value cyan.
+- `Run.store` is made on first use, like the Packages tab's: so `hpm config` and
+  `hpm config set store PATH` work while the file points at a folder that isn't there,
+  which is the way to mend it.
+- `set_value` writes a store inside the home with `~` (`hpm config set store ~/hpm-live`
+  reaches hpm as `/home/dano/hpm-live`, the shell's doing) and returns what it wrote.
+  Values are quoted for TOML (`"`, `\`).
+- The empty-store note: after `search` finds nothing, and after the error of `search`,
+  `show`, `install`, `update` or `adopt`, when neither `HPM_HOME` nor the file names a store
+  and the store has no package and no friend's store.
+- Docs: `docs/hpm/hpm.md` (section 4's settings part, the "As built" bullet),
+  `docs/hpm/tutorial.md` (section 3 with the two `hpm config set` lines, the glossary's
+  store, two rows of the errors table, the cheat sheet), `README.MD` (the store's line).
+  `docs/plans/hpm/live-run-checklist.md` keeps its `export HPM_HOME`: it still works, and
+  that file is a record of runs.
+- Tests: 5 more in `tests/test_hpm_config.py` (`explain`, `set_value`, `hpm config`
+  showing and setting, mending a missing store, the empty-store note). Whole suite: 2390.
+- By hand, with `HPM_CONFIG` on scratch files and a copy of the store: `hpm config` from
+  `/tmp` with a file, with `HPM_HOME` and `EDITOR` set, and with no file; `hpm config set`
+  on a new file, keeping a comment, refusing `colour` and a missing folder; the note after
+  `hpm search kitty` and `hpm show kittystory` on an empty default store.
+- **Left for the user:** writing their own file, `hpm config set store ~/hpm-live` and
+  `hpm config set editor nano`, then the check in this step's "Done when".

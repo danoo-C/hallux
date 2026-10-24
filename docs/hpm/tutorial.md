@@ -44,7 +44,7 @@ data without asking.
 | **world** | A Hallux machine: a folder with `.hallux/` in it, like `~/hallux-distros/oliver-test`. hpm works on the world you `cd` into, or the one `--world` names. |
 | **package** | One app, or one part of an app's data, with a name and a version: `kittystory 1.0`. |
 | **manifest** | A package's `hpm.toml`: its name, version, and which files are in it. It lives in the world it was built in, at `/usr/local/share/hpm/<name>/hpm.toml`. |
-| **store** | Where published packages wait, on your PC, outside every world: `~/.local/share/hallux/hpm/`, or the folder `$HPM_HOME` names. Your own packages are in the store called `local`. |
+| **store** | Where published packages wait, on your PC, outside every world: `~/.local/share/hallux/hpm/`, or the folder `hpm config set store` or `$HPM_HOME` names. Your own packages are in the store called `local`. |
 | **extras** | Packages that belong to an app and come with it as checkboxes: kittystory's packs, characters, world, memories. Each is a package of its own (`kittystory-packs`), so it has its own version. |
 | **file kinds** | Each file in a package is `app`, `seed` or `data`. The kind decides what happens on an update (below). |
 
@@ -65,15 +65,19 @@ The three kinds matter most, so here they are side by side:
 ```bash
 cd ~/IT/hallux && python3 install.py              # puts .venv/bin/hpm there
 export PATH="$HOME/IT/hallux/.venv/bin:$PATH"     # so `hpm` works from any folder
-export EDITOR=nano                                # hpm opens manifests and changelogs in it
+hpm config set editor nano                        # hpm opens manifests and changelogs in it
+hpm config set store ~/hpm-live                   # only if your store isn't the default
+hpm config                                        # what hpm uses, and where it came from
 hpm --help
 ```
 
-Put the two `export` lines in your shell's startup file (`~/.zshrc` or `~/.bashrc`) if you
-want them in every terminal.
+Put the `export` line in your shell's startup file (`~/.zshrc` or `~/.bashrc`) if you want
+it in every terminal. The two `hpm config set` lines are written once, into
+`~/.config/hallux/hpm.toml`, and hpm reads that file wherever it runs. Without an editor
+set, hpm uses nano (or vi).
 
 **A store just for trying things:** `export HPM_HOME=~/hpm-try`. hpm then uses that folder
-instead of your real store. `rm -rf ~/hpm-try` empties it again.
+instead of your real store, in that terminal only. `rm -rf ~/hpm-try` empties it again.
 
 ---
 
@@ -391,7 +395,8 @@ cap_usd = 1.00                # at most this per AI session
 | make manifests for an app | `hpm init NAME` (in its world) |
 | release it | `hpm publish NAME --all` |
 | release it, keeping the last release's first state | `hpm publish NAME --seeds release` |
-| see what's in the store | `hpm search WORD`, `hpm show NAME` |
+| see what's in the store | `hpm search WORD` (`hpm search ""` lists all), `hpm show NAME` |
+| see or change hpm's settings | `hpm config`, `hpm config set store ~/hpm-live` |
 | put it into a world | `hpm install NAME --world W` |
 | see what a world has | `hpm list --world W` |
 | get newer versions | `hpm update --world W` |
@@ -421,10 +426,10 @@ hpm's errors start with `hpm:` and say what to do. The common ones:
 | You see | It means |
 |---|---|
 | `the changelog entry is empty; nothing published` | The editor closed without a line written. Run it again and write one, or pass `--changelog "…"`. |
-| `there is no package NAME in the store` | Nothing by that name is published, or `$HPM_HOME` points at another store than you think (`echo $HPM_HOME`). |
+| `there is no package NAME in the store` | Nothing by that name is published, or hpm looks at another store than you think: `hpm config` says which, and why. |
 | `… is in no Hallux world` | You're not inside a world. `cd` into one, or add `--world W`. |
 | `… is running` | Hallux is running on that world. Quit it, or use its Packages tab. |
-| `there is no $EDITOR …` | `export EDITOR=nano`. |
+| `there is no editor …` | `hpm config set editor nano` (hpm looks for nano and vi itself). |
 | `NAME has a manifest already` | `init` already ran. Edit `/usr/local/share/hpm/NAME/hpm.toml` instead. |
 | `… isn't installed in this world; hpm install it` | `update` only updates. Use `install` first, or `adopt` if the files are there already. |
 

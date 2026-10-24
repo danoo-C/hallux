@@ -189,6 +189,24 @@ A world can't see this folder. The AI inside a world can't reach it either: the 
 disk tools stay fenced to the world's own folder. Only Hallux's own code reads the store
 and copies from it.
 
+**hpm's own settings** are in `~/.config/hallux/hpm.toml`, found by your home, so hpm reads
+the same file wherever it runs (a world, the repo, a script, the Packages tab of a Hallux
+started from a shortcut). `XDG_CONFIG_HOME` is not read, so two shells never read two files.
+
+```toml
+store  = "~/hpm-live"   # where the store is, if not the folder above
+editor = "nano"         # for changelog entries and manifests
+color  = "auto"         # auto | always | never
+```
+
+`hpm config` shows each setting and where it came from; `hpm config set KEY VALUE` writes
+one (comments and other lines stay); `hpm config path` names the file. The environment
+wins over the file: `HPM_HOME` for the store, `HPM_EDITOR` for the editor (then the file,
+`$VISUAL`, `$EDITOR`, nano, vi), `HPM_COLOR`, `NO_COLOR` for the colors. A mistake in the
+file is an error that names the file and the key; a `store` that isn't a folder too.
+`HPM_CONFIG` names another file (the tests use it). The AI's settings stay in the store's
+own `config.toml`, above.
+
 ## 5. Publishing
 
 **Once per app: `hpm init kittystory --world test-hallux`.** The AI reads the card, the
@@ -551,6 +569,10 @@ own "As built" with the details; what the code does differently from this docume
   `base_world`; default the world's model, `medium`, $1.00 a session), always after a
   question that names the model and the cap; the tests can't reach it
   (`HALLUX_NO_REAL_MODEL`).
+- **The config file** (`hallux/hpm/config.py`, docs/plans/hpm/config/): section 4.
+  `hpm config`, `hpm config set`, `hpm config path`. An empty store with nothing
+  configured adds a note naming `hpm config set store PATH`. A wrong file is never a
+  traceback, and never stops a world from booting (the Packages tab says it instead).
 - **Colors** (`hallux/hpm/paint.py`, docs/plans/hpm/colors/): on a terminal, green is
   what worked (`✓`, `published`), yellow what needs a look (`warning:`), red what failed
   (`✗`, `hpm:`), cyan a note, magenta the AI and its cost, bold `!!` what to read first.

@@ -21,6 +21,7 @@
     hpm store list | remove NAME | refresh [NAME]
     hpm push NAME… [--all] [--store S] [--review] [--yes]     to your store on GitHub
     hpm yank NAME VERSION [--store S]
+    hpm config [set KEY VALUE | path]         ~/.config/hallux/hpm.toml: store, editor, color
 
 A NAME is a package (kittystory), a package of a store (local/kittystory, danika/kittystory),
 a whole store (local/ or danika/, with the slash and nothing after it: bash would expand
@@ -206,6 +207,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("name", metavar="NAME")
     p.add_argument("version", metavar="VERSION")
     p.add_argument("--store", metavar="S", help="which of your stores (if you have several)")
+
+    p = commands.add_parser("config", help="hpm's settings: ~/.config/hallux/hpm.toml")
+    p.add_argument("action", nargs="?", metavar="set|path",
+                   help="nothing: every setting and where it came from; set KEY VALUE; path")
+    p.add_argument("key", nargs="?", metavar="KEY", help="store, editor or color")
+    p.add_argument("value", nargs="?", metavar="VALUE")
     return cli
 
 
@@ -213,11 +220,15 @@ def main(argv: list[str] | None = None, questions: Questions | None = None,
          store: Store | None = None, screens=None, client_factory=None) -> int:
     flags = parser().parse_args(argv)
     try:                                       # a wrong config file is an error like any other
-        run = Run(flags, questions or Questions(), store or Store(),
-                  screens or TerminalScreens(), client_factory)
+        run = Run(flags, questions or Questions(), store, screens or TerminalScreens(),
+                  client_factory)
         return getattr(run, {"store": "stores"}.get(flags.command, flags.command))()
     except HpmError as e:
         print(paint(f"hpm: {e}", "error", on=paint_on(sys.stderr)), file=sys.stderr)
+        if flags.command in ("search", "show", "install", "update", "adopt"):
+            note = empty_store_note(store)
+            if note:
+                print(paint(note, "note", on=paint_on(sys.stderr)), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print(paint("hpm: stopped", "error", on=paint_on(sys.stderr)), file=sys.stderr)
@@ -229,8 +240,16 @@ class Run:
 
     def __init__(self, flags, questions: Questions, store: Store, screens,
                  client_factory=None) -> None:
-        self.flags, self.q, self.store, self.screens = flags, questions, store, screens
+        self.flags, self.q, self._store, self.screens = flags, questions, store, screens
         self.client_factory = client_factory          # the AI's; the tests give a stand-in
+
+    @property
+    def store(self) -> Store:
+        """The store, made when a command first needs it: `hpm config` must work even when
+        the config file points at a folder that isn't there, to fix it."""
+        if self._store is None:
+            self._store = Store()
+        return self._store
 
     @property
     def interactive(self) -> bool:
@@ -711,6 +730,9 @@ class Run:
                     found += 1
         if not found:
             self.say(f"nothing in the store has {self.flags.word!r} in its name or summary")
+            note = empty_store_note(self.store)
+            if note:
+                self.say(note)
         return 0
 
     def backups(self) -> int:
@@ -733,6 +755,34 @@ class Run:
                 f"hpm rollback can't go back past them then", False, "--yes"):
             return self._cancelled()
         self.say(f"removed {rec.clean_backups(disk)} backups", kind="ok")
+        return 0
+
+    # ------------------------------------------------------------------ the config file
+
+    def config(self) -> int:
+        """hpm config: every setting, its value, where it came from; set KEY VALUE; path."""
+        from hallux.hpm import config as cfg
+        action = self.flags.action
+        if action == "path":
+            self.say(str(cfg.config_path()))
+            return 0
+        if action == "set":
+            if not self.flags.key or self.flags.value is None:
+                raise HpmError("hpm config set KEY VALUE (the keys: "
+                               + ", ".join(cfg.KEYS) + ")")
+            path, value = cfg.set_value(self.flags.key, self.flags.value)
+            self.say(f"✓ {self.flags.key} = {cfg._quoted(value)} in {_tilde(path)}")
+            return 0
+        if action is not None:
+            raise HpmError(f"hpm config has no {action!r}: hpm config, hpm config set KEY "
+                           f"VALUE, hpm config path")
+        path = cfg.config_path()
+        there = "" if path.exists() else span("  (not there yet: hpm config set makes it)",
+                                              "dim", self.color)
+        self.say(f"{'file':<8}{_tilde(path)}{there}")
+        for key, value, source, from_env in cfg.explain():
+            shown = span(f"{value:<28}", "cyan", self.color) if from_env else f"{value:<28}"
+            self.say(f"{key:<8}{shown} {span(source, 'dim', self.color)}")
         return 0
 
     # ------------------------------------------------------------------ stores on GitHub
@@ -929,6 +979,30 @@ def _clean(review: str) -> bool:
     """A review that found nothing."""
     lines = [line.strip("- ").strip().lower() for line in review.splitlines() if line.strip()]
     return lines == ["nothing reaches beyond the program"]
+
+
+def _tilde(path: Path) -> str:
+    """A path as the user types it: ~ for the home."""
+    home = str(Path.home())
+    text = str(path)
+    return "~" + text[len(home):] if text == home or text.startswith(home + "/") else text
+
+
+def empty_store_note(store: Store | None) -> str | None:
+    """When the store is empty and nothing says where it is: where hpm looked, and how to
+    point it elsewhere. None otherwise (or when the store can't be found at all)."""
+    import os
+    from hallux.hpm import config as cfg
+    try:
+        if os.environ.get("HPM_HOME") or cfg.load().store is not None:
+            return None
+        store = store or Store()
+        if store.names() or store.remotes.names():
+            return None
+    except HpmError:
+        return None
+    return (f"note: the store at {_tilde(store.home)} is empty. If yours is elsewhere: "
+            f"hpm config set store PATH")
 
 
 def sha_hex(path: Path) -> str:

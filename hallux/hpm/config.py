@@ -171,20 +171,72 @@ def file_color(env=None) -> str | None:
         return None
 
 
+# ---------------------------------------------------------------------- what wins
+
+def explain(env=None) -> list[tuple[str, str, str, bool]]:
+    """Each setting as `hpm config` shows it: (key, value, where it came from, whether the
+    environment set it). A value the environment hides says what the file has."""
+    env = os.environ if env is None else env
+    config = load(env)
+    home = str(home_of(env))
+
+    def tilde(path) -> str:
+        text = str(path)
+        return "~" + text[len(home):] if text == home or text.startswith(home + "/") else text
+
+    def hidden(key: str) -> str:
+        return f" (the file says {config.said(key)})" if config.said(key) is not None else ""
+
+    out = []
+    if env.get("HPM_HOME"):
+        out.append(("store", tilde(Path(env["HPM_HOME"]).expanduser()),
+                    "from HPM_HOME" + hidden("store"), True))
+    elif config.store is not None:
+        missing = "" if config.store.is_dir() else ": no such folder (hpm config set store PATH)"
+        out.append(("store", tilde(config.store), "from the file" + missing, False))
+    elif env.get("XDG_DATA_HOME"):
+        out.append(("store", tilde(Path(env["XDG_DATA_HOME"]).expanduser() / "hallux" / "hpm"),
+                    "from XDG_DATA_HOME", True))
+    else:
+        out.append(("store", tilde(home_of(env) / ".local/share/hallux/hpm"), "the default",
+                    False))
+    editor, source = editor_command(env)
+    from_env = source in ("HPM_EDITOR", "$VISUAL", "$EDITOR")
+    out.append(("editor", editor or "(none: no nano or vi either)",
+                ("from " + source + hidden("editor")) if from_env
+                else ("from the file" if source == "the file" else "the default"), from_env))
+    if env.get("HPM_COLOR", "").strip().lower() in ("always", "never"):
+        out.append(("color", env["HPM_COLOR"].strip().lower(), "from HPM_COLOR" + hidden("color"),
+                    True))
+    elif env.get("NO_COLOR") or env.get("TERM") == "dumb":
+        why = "NO_COLOR" if env.get("NO_COLOR") else "TERM=dumb"
+        out.append(("color", "never", f"from {why}" + hidden("color"), True))
+    elif config.color is not None:
+        out.append(("color", config.color, "from the file", False))
+    else:
+        out.append(("color", "auto", "the default", False))
+    return out
+
+
 # ---------------------------------------------------------------------- writing it
 
 LINE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=")
 
 
-def set_value(key: str, value: str, env=None) -> Path:
+def set_value(key: str, value: str, env=None) -> tuple[Path, str]:
     """Write one key into the file, made if it isn't there: the key's line changed in place,
     or added at the end; comments and other lines stay. The value is checked as `load`
-    checks it, and nothing is written if it is wrong."""
+    checks it, and nothing is written if it is wrong. Returns the file and the value as
+    written (a store inside the home is written with ~)."""
     from hallux.disk import write_whole
     env = os.environ if env is None else env
     if key not in KEYS:
         raise HpmError(f"hpm has no setting {key!r}; it has {', '.join(KEYS)}")
     path = config_path(env)
+    if key == "store":                        # the shell made ~/hpm-live absolute: back to ~
+        home = str(home_of(env))
+        if value.startswith(home + "/"):
+            value = "~" + value[len(home):]
     checked = check(path, {key: value}, env)
     if key == "store" and not checked["store"].is_dir():
         raise HpmError(f"{checked['store']} is no folder; nothing written")
@@ -214,7 +266,7 @@ def set_value(key: str, value: str, env=None) -> Path:
         write_whole(path, new)
     except OSError as e:
         raise HpmError(f"{path} can't be written: {e.strerror or e}") from None
-    return path
+    return path, value
 
 
 def _quoted(value: str) -> str:
