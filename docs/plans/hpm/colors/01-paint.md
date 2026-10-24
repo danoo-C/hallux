@@ -49,3 +49,13 @@ def paint(text: str, kind: str | None = None, on: bool = True) -> str:
 ## Done when
 
 The tests pass. Nothing calls the module yet, so no output changes.
+
+## As built
+
+- `hallux/hpm/paint.py` as above, plus a `dim` kind (gray, no marker) for pieces such as
+  the `(backup: …)` after a summary, and `strip_codes`. `HPM_COLOR=always` wins over
+  `NO_COLOR`, as the README says it overrides the rest.
+- An AI line has no marker of its own: "the AI " is part of the words, so the whole line is
+  magenta, each `~$…` in it bold.
+- `tests/test_hpm_paint.py`: 38 tests (the switch, a line of each kind, the codes of each
+  kind, a block, off).

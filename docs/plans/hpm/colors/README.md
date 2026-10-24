@@ -9,7 +9,7 @@ Decisions confirmed by the user 2026-10-25 ("go as proposed").
 
 | Step | What | Status |
 |---|---|---|
-| [01](01-paint.md) | `hallux/hpm/paint.py`: the colors, and when they are on | Planned |
+| [01](01-paint.md) | `hallux/hpm/paint.py`: the colors, and when they are on | **Built** 2026-10-25 |
 | [02](02-every-line-its-kind.md) | Every line hpm says gets its kind: success, warning, note, error, loud, AI, question | Planned |
 | [03](03-lists-and-the-look.md) | `list`, `show`, `search` and `store list` get their highlights; docs; the look checked on a real terminal | Planned |
 
