@@ -12,7 +12,7 @@ proposed").
 
 | Step | What | Status |
 |---|---|---|
-| [01](01-the-file.md) | `hallux/hpm/config.py`: the file, read on every start; the store, the editor and the colors take it into account | Planned |
+| [01](01-the-file.md) | `hallux/hpm/config.py`: the file, read on every start; the store, the editor and the colors take it into account | **Built** 2026-10-25 |
 | [02](02-the-command.md) | `hpm config`, `hpm config set`, `hpm config path`; the hints; the docs | Planned |
 
 ## Why

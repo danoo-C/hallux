@@ -41,13 +41,18 @@ BACKUP = re.compile(r"  \(backup: [^)]*\)$")    # after a summary: dim
 
 def enabled(stream, env=None) -> bool:
     """Colors for this stream: HPM_COLOR=always|never first; else off with NO_COLOR (set,
-    not empty) or TERM=dumb; else on if the stream is a terminal."""
+    not empty) or TERM=dumb; else the config file's color; else on if the stream is a
+    terminal."""
     env = os.environ if env is None else env
     forced = env.get("HPM_COLOR", "").strip().lower()
     if forced in ("always", "never"):
         return forced == "always"
     if env.get("NO_COLOR") or env.get("TERM") == "dumb":
         return False
+    from hallux.hpm.config import file_color
+    configured = file_color(env)
+    if configured in ("always", "never"):
+        return configured == "always"
     try:
         return bool(stream.isatty())
     except (AttributeError, ValueError):     # no isatty, or a closed stream

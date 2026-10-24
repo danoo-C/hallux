@@ -29,14 +29,19 @@ SUFFIX = ".hpm"
 
 
 def store_home(env: dict | None = None) -> Path:
-    """Where the store is: $HPM_HOME, else $XDG_DATA_HOME/hallux/hpm, else
+    """Where the store is: $HPM_HOME, else the config file's `store`
+    (~/.config/hallux/hpm.toml, hallux/hpm/config.py), else $XDG_DATA_HOME/hallux/hpm, else
     ~/.local/share/hallux/hpm. HPM_HOME keeps the tests away from your real store."""
     env = os.environ if env is None else env
     if env.get("HPM_HOME"):
         return Path(env["HPM_HOME"]).expanduser()
+    from hallux.hpm.config import home_of, store_from_file
+    configured = store_from_file(env)
+    if configured is not None:
+        return configured
     if env.get("XDG_DATA_HOME"):
         return Path(env["XDG_DATA_HOME"]).expanduser() / "hallux" / "hpm"
-    return Path.home() / ".local" / "share" / "hallux" / "hpm"
+    return home_of(env) / ".local" / "share" / "hallux" / "hpm"
 
 
 @dataclass(frozen=True)

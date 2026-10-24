@@ -93,12 +93,14 @@ class Questions:
                 return answer
 
     def edit(self, template: str, flag: str) -> str:
-        """The text you write, starting from `template`, in $VISUAL or $EDITOR."""
+        """The text you write, starting from `template`, in the editor: HPM_EDITOR, the
+        config file's, $VISUAL, $EDITOR, then nano or vi (hallux/hpm/config.py)."""
+        from hallux.hpm.config import editor_command
         self._needs_terminal("the changelog entry", flag)
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+        editor, _ = editor_command()
         if not editor:
-            raise HpmError(f"there is no $EDITOR to write the changelog entry in; set one, "
-                           f"or pass {flag}")
+            raise HpmError(f"there is no editor to write the changelog entry in (no nano or vi "
+                           f"either): hpm config set editor COMMAND, or pass {flag}")
         handle, name = tempfile.mkstemp(prefix="hpm-changelog-", suffix=".md")
         try:
             with os.fdopen(handle, "w", encoding="utf-8") as f:

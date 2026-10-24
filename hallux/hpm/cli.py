@@ -212,9 +212,9 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None, questions: Questions | None = None,
          store: Store | None = None, screens=None, client_factory=None) -> int:
     flags = parser().parse_args(argv)
-    run = Run(flags, questions or Questions(), store or Store(), screens or TerminalScreens(),
-              client_factory)
-    try:
+    try:                                       # a wrong config file is an error like any other
+        run = Run(flags, questions or Questions(), store or Store(),
+                  screens or TerminalScreens(), client_factory)
         return getattr(run, {"store": "stores"}.get(flags.command, flags.command))()
     except HpmError as e:
         print(paint(f"hpm: {e}", "error", on=paint_on(sys.stderr)), file=sys.stderr)

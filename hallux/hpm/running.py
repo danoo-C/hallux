@@ -89,7 +89,7 @@ class Installs:
     def __init__(self, disk: Disk, store: Store | None = None,
                  changed: Callable[[], None] | None = None) -> None:
         self.disk = disk
-        self.store = store or Store()
+        self._store = store                   # made when first used (the property below)
         self.changed = changed or (lambda: None)
         self._state = LISTING
         self._doing = ""
@@ -120,6 +120,19 @@ class Installs:
         self._landed = False
 
     # ------------------------------------------------------------------ what the tab is shown
+
+
+    @property
+    def store(self) -> Store:
+        """The store, made when first used, so a wrong config file is the tab's "can't be
+        read" and never stops the machine from booting."""
+        if self._store is None:
+            self._store = Store()
+        return self._store
+
+    @store.setter
+    def store(self, store: Store) -> None:
+        self._store = store
 
     def watch(self) -> Seen:
         with self._lock:

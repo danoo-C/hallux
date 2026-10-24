@@ -81,3 +81,28 @@ config tests write their own files and pass `env`.
   `HPM_HOME`, `hpm search ""` lists the six kittystory packages from `/`, from a world and
   from the repo. That is the user's real file, so it is written only with the user's go;
   otherwise the same with `HPM_CONFIG` and a copy.
+
+## As built
+
+- `hallux/hpm/config.py`: `config_path`, `home_of` (`HOME` from the given environment, so
+  the tests can give one), `expand`, `load` (read again only when the file's stamp
+  changes), `check` (every problem at once), `store_from_file`, `editor_command` (returns
+  the editor and where it came from, for step 2's `hpm config`), `file_color`. `set_value`,
+  step 2's writer, is in the module already; its tests come with step 2.
+- `store_home` uses `home_of` for the default too, so a given `HOME` is honored throughout.
+- **Two places a wrong file could have crashed, found while building:** `main` built `Run`
+  (and with it `Store()` and `Questions()`) before its `try`, so a broken file would have
+  been a traceback; it is inside the `try` now. And `machine.py` makes the Packages tab's
+  `Installs` at boot: its store is now made on first use (a property), so a wrong file is
+  the tab's "The store can't be read: …" and never stops a world from booting.
+- `paint.enabled` reads the file through `file_color`, which never raises: colors never stop
+  hpm; the store's lookup tells the error.
+- `tests/conftest.py` sets `HPM_CONFIG` to a path with no file.
+- Tests: `tests/test_hpm_config.py`, 18 (the file's place, `XDG_CONFIG_HOME` ignored, the
+  keys, each mistake, re-reading, the store's order, a missing store folder, **the store
+  found from a world, the repo and `/` in a new process with only `HOME`**, a wrong file as
+  an error not a traceback, the tab booting with a wrong file, the editor's order, the
+  file's color, root told once). Whole suite: 2385 passed.
+- By hand, with `HPM_CONFIG` pointing at a file in the scratch folder and a copy of the
+  store, no `HPM_HOME`: `hpm search ""` listed the 6 packages from `/`, from `danika` and
+  from the repo. The user's real `~/.config/hallux/hpm.toml` was not written.
