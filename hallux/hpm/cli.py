@@ -48,7 +48,7 @@ from hallux.hpm.archive import read_member
 from hallux.hpm.engine import KEEP, OVERWRITE, REMOVE, REPLACE, SKIP, Plan, Want
 from hallux.hpm.manifest import NAME, Version
 from hallux.hpm.paint import enabled as paint_on
-from hallux.hpm.paint import paint
+from hallux.hpm.paint import paint, span
 from hallux.hpm.publish import Questions, publish, show
 from hallux.hpm.store import LOCAL, Ambiguous, Store
 from hallux.hpm.world import HpmError, find_world, homes, refuse_running
@@ -235,6 +235,11 @@ class Run:
     @property
     def interactive(self) -> bool:
         return self.q.interactive
+
+    @property
+    def color(self) -> bool:
+        """Colors on, for the pieces of a listing (docs/plans/hpm/colors/)."""
+        return getattr(self.q, "color", False)
 
     def world(self) -> Path:
         return find_world(given=getattr(self.flags, "world", None))
@@ -561,7 +566,7 @@ class Run:
                 self.say(f"{q.path} is skipped: {answer.why or 'the merge failed'}")
                 answers[q.path] = SKIP
                 continue
-            self.say(f"--- {q.path}, merged\n{text.rstrip()}\n---")
+            self.say(f"--- {q.path}, merged\n{text.rstrip()}\n---", kind="dim")
             if self.q.confirm(f"write the merged {q.path.rsplit('/', 1)[-1]}?", True,
                               "a terminal: merge is chosen on the screen"):
                 merged[q.path] = text
@@ -628,18 +633,20 @@ class Run:
                 latest = self.store.find(name, where)
             except HpmError:
                 latest = None
-            newer = f"  ↑ {latest.version} in the store" if latest and latest.version > Version(
-                entry["version"]) else ""
-            newer += f"  (from {where})" if where != LOCAL else ""
-            marks = [m for m in ("incomplete", "adopted") if entry.get(m)]
+            on = self.color
+            newer = span(f"  ↑ {latest.version} in the store", "cyan", on) \
+                if latest and latest.version > Version(entry["version"]) else ""
+            newer += span(f"  (from {where})", "dim", on) if where != LOCAL else ""
+            marks = [span(m, "red" if m == "incomplete" else "dim", on)
+                     for m in ("incomplete", "adopted") if entry.get(m)]
             extras = f"  extras: {', '.join(entry['extras'])}" if entry.get("extras") else ""
-            self.say(f"{name} {entry['version']}{newer}{extras}"
+            self.say(f"{span(name, 'bold', on)} {entry['version']}{newer}{extras}"
                      + (f"  ({', '.join(marks)})" if marks else ""))
         backups = rec.backups(disk)
         if backups:
             from hallux.hpm.publish import _size
-            self.say(f"backups: {len(backups)}, {_size(rec.backups_size(disk))} "
-                     f"(hpm backups --clean removes them)")
+            self.say(span(f"backups: {len(backups)}, {_size(rec.backups_size(disk))} "
+                          f"(hpm backups --clean removes them)", "dim", self.color))
         return 0
 
     def init(self) -> int:
@@ -682,7 +689,7 @@ class Run:
         return 0
 
     def show(self) -> int:
-        self.say(show(self.store, self.flags.name))
+        self.say(show(self.store, self.flags.name, on=self.color))
         return 0
 
     def search(self) -> int:
@@ -692,14 +699,15 @@ class Run:
         for name in self.store.names():
             manifest = self.store.latest(name).manifest()
             if word in name.lower() or word in manifest.summary.lower():
-                self.say(f"{name} {manifest.version}  {manifest.summary}")
+                self.say(f"{span(name, 'bold', self.color)} {manifest.version}  {manifest.summary}")
                 found += 1
         for where in self.store.remotes.names():          # from the index: nothing downloaded
             for name, entry in sorted(self.store.remotes.packages(where).items()):
                 latest = self.store.latest(name, where)
                 summary = entry.get("summary", "")
                 if latest and (word in name.lower() or word in summary.lower()):
-                    self.say(f"{where}/{name} {latest.version}  {summary}")
+                    self.say(f"{span(where + '/', 'dim', self.color)}{span(name, 'bold', self.color)} "
+                             f"{latest.version}  {summary}")
                     found += 1
         if not found:
             self.say(f"nothing in the store has {self.flags.word!r} in its name or summary")
@@ -712,8 +720,10 @@ class Run:
         from hallux.hpm.publish import _size
         if not self.flags.clean:
             for backup in found:
-                self.say(f"{backup.name}  {', '.join(backup.data['packages'])}")
-            self.say(f"{len(found)} backups, {_size(rec.backups_size(disk))}")
+                self.say(f"{backup.name}  "
+                         + span(', '.join(backup.data['packages']), "bold", self.color))
+            self.say(span(f"{len(found)} backups, {_size(rec.backups_size(disk))}", "dim",
+                          self.color))
             return 0
         if not found:
             self.say("there are no backups")
@@ -745,12 +755,14 @@ class Run:
                      kind="ok")
         elif action == "list":
             for name in remote.Mine.names(self.store.home):
-                self.say(f"{name}  yours: {remote.Mine(self.store.home, name).address}")
+                self.say(f"{span(name, 'bold', self.color)}  yours: "
+                         f"{remote.Mine(self.store.home, name).address}")
             for name in remotes.names():
                 found = remotes.get(name)
                 count = len(found.index.get("packages", {}))
-                self.say(f"{name}  {found.source.get('url')}  {count} package"
-                         f"{'s' * (count != 1)}, index from {found.source.get('fetched')}")
+                self.say(f"{span(name, 'bold', self.color)}  {found.source.get('url')}  "
+                         f"{count} package{'s' * (count != 1)}"
+                         + span(f", index from {found.source.get('fetched')}", "dim", self.color))
             if not remotes.names() and not remote.Mine.names(self.store.home):
                 self.say("no stores yet: hpm store add NAME ADDRESS adds a friend's, hpm store "
                          "init NAME --repo OWNER/REPO makes yours")

@@ -85,3 +85,13 @@ def test_off_is_the_text_as_it_is():
     for line in ("  ✓ x", "hpm: y", "the AI's part cost ~$1.00"):
         assert paint(line, on=False) == line
     assert paint("") == ""
+
+
+def test_a_header_after_a_blank_line_is_painted():
+    assert paint("\n--- /x/hpm.toml\nname = 1", "dim") == "\n\x1b[90m--- /x/hpm.toml\x1b[0m\nname = 1"
+
+
+def test_span():
+    from hallux.hpm.paint import span
+    assert span("kittystory", "bold") == "\x1b[1mkittystory\x1b[0m"
+    assert span("kittystory", "bold", on=False) == "kittystory"

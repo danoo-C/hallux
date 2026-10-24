@@ -32,7 +32,7 @@ from hallux.hpm.archive import (
 )
 from hallux.hpm.manifest import Manifest, ManifestError, Version
 from hallux.hpm.paint import enabled as paint_on
-from hallux.hpm.paint import paint
+from hallux.hpm.paint import paint, span
 from hallux.hpm.store import Release, Store
 from hallux.hpm.world import (
     MANIFESTS, HpmError, clean_seed_path, collect, manifest_path, read_world_manifest,
@@ -681,9 +681,10 @@ def _size(count: int) -> str:
 
 # ---------------------------------------------------------------------- showing
 
-def show(store: Store, name: str) -> str:
+def show(store: Store, name: str, on: bool = False) -> str:
     """What `hpm show NAME` prints: the newest release's manifest, every version in the
-    store, the newest changelog entries, and the files by kind with their sizes."""
+    store, the newest changelog entries, and the files by kind with their sizes. With `on`,
+    its highlights (docs/plans/hpm/colors/, step 3)."""
     releases = store.releases(name)
     if not releases:
         raise HpmError(f"there is no package {name} in the store ({store.local})")
@@ -733,7 +734,30 @@ def show(store: Store, name: str) -> str:
         lines += ["", "changelog:"] + [f"  {line}" if line.strip() else ""
                                        for entry in entries[:SHOWN_ENTRIES]
                                        for line in entry.splitlines()]
-    return "\n".join(lines)
+    return "\n".join(_highlighted(lines) if on else lines)
+
+
+SHOW_LABELS = re.compile(r"^(versions|bundle of|data format|for|needs the addons|needs the "
+                         r"packages|memory line|extras|app files|seed files|data files|\? files"
+                         r"|changelog):")
+
+
+def _highlighted(lines: list[str]) -> list[str]:
+    """`hpm show`'s lines with colors: the first bold, the labels bold, privacy yellow, the
+    rules loud. Only the colors change."""
+    out = []
+    for i, line in enumerate(lines):
+        label = SHOW_LABELS.match(line)
+        if i == 0:
+            line = span(line, "bold")
+        elif line.startswith("private: "):
+            line = span(line, "yellow")
+        elif line.startswith("rules ("):
+            line = span(line, "loud")
+        elif label:
+            line = span(label.group(0), "bold") + line[label.end():]
+        out.append(line)
+    return out
 
 
 def _entries(changelog: str) -> list[str]:

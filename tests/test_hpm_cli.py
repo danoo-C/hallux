@@ -688,3 +688,23 @@ def test_an_update_in_colors_reads_the_same_without_them(world, store, tmp_path,
     plain = strip_codes(painted)
     assert "  ✓ kittystory 1.1 updated (was 1.0), 3 files" in plain.splitlines()
     assert "\x1b" not in plain
+
+
+def test_list_in_colors(world, store, tmp_path, monkeypatch):
+    from hallux.hpm.paint import strip_codes
+    from hallux.hpm.publish import Questions as Real
+    hpm(world, store, "install", "kittystory", "--extras", "packs")
+    put(store, tmp_path, APP, {"/usr/local/bin/kittystory": "1.1\n"}, version="1.1")
+    record = rec.load(Disk(world))
+    record["kittystory-packs"]["incomplete"] = True
+    rec.save(Disk(world), record)
+    plain = hpm(world, store, "list")[1]
+    monkeypatch.setenv("HPM_COLOR", "always")
+    out = Terminal()
+    monkeypatch.setattr(sys, "stdout", out)
+    cli.main(["list", "--world", str(world)], questions=Real(interactive=False), store=store,
+             screens=Screens())
+    painted = out.getvalue().splitlines()
+    assert painted[0].startswith("\x1b[1mkittystory\x1b[0m 1.0\x1b[36m  ↑ 1.1 in the store\x1b[0m")
+    assert "(\x1b[31mincomplete\x1b[0m)" in painted[1]
+    assert [strip_codes(line) for line in painted] == plain

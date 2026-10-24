@@ -411,6 +411,11 @@ Every question on a screen has a flag too (`--extras packs,characters`, `--overw
 
 ## 15. When something goes wrong
 
+On a terminal hpm's lines have colors: green worked, yellow look at it, red failed (the
+error is the red line starting with `hpm:`), magenta is the AI and what it cost.
+`NO_COLOR=1` turns the colors off; `HPM_COLOR=always` keeps them in a pipe
+(`hpm list | less -R`).
+
 hpm's errors start with `hpm:` and say what to do. The common ones:
 
 | You see | It means |

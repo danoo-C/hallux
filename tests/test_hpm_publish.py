@@ -218,6 +218,21 @@ def test_clean_seed_path():
     assert clean_seed_path("a", "~/x/y") == "/usr/local/share/hpm/a/seed/~/x/y"
 
 
+def test_show_in_colors(world, store):
+    from hallux.hpm.paint import strip_codes
+    path = world / "usr/local/share/hpm/kittystory/hpm.toml"
+    path.write_text(path.read_text().replace("[files]", 'rules = ["Everything is pink."]\n[files]'))
+    go(world, store)
+    plain = show(store, "kittystory")
+    painted = show(store, "kittystory", on=True)
+    assert strip_codes(painted) == plain and "\x1b" not in plain
+    lines = painted.splitlines()
+    assert lines[0].startswith("\x1b[1mkittystory 1.4")
+    assert "\x1b[1mversions:\x1b[0m 1.4" in lines
+    assert "\x1b[1;31mrules (they change the whole machine):\x1b[0m" in lines
+    assert any(line.startswith("\x1b[1mapp files:\x1b[0m") for line in lines)
+
+
 def test_no_manifest_in_the_world(world, store):
     with pytest.raises(HpmError, match="this world has no manifest for kittymusic"):
         go(world, store, "kittymusic")

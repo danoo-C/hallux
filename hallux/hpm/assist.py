@@ -88,7 +88,7 @@ def init(world: Path, store: Store, name: str, q: Questions, *, yes: bool = Fals
         _keep_private(disk, path, home, q)
     q.say(answer.text.strip())
     for path in sorted(set(manifests) | set(_family_paths(disk, name))):
-        q.say(f"\n--- {path}\n" + disk.read_text(path).rstrip())
+        q.say(f"\n--- {path}\n" + disk.read_text(path).rstrip(), kind="dim")
     if q.interactive and q.confirm(f"edit {manifest_path(name)} before it is kept?", False,
                                    "--yes"):
         text = q.edit(disk.read_text(manifest_path(name)), "--yes")
@@ -320,7 +320,7 @@ def note_writer(world: Path, store: Store, q: Questions, *, given: bool, client_
             q.say(f"the note can't be used ({answer.why or left}); write it yourself at {target}",
                   kind="warning")
             return False
-        q.say(f"--- {target}\n" + disk.read_text(target).rstrip())
+        q.say(f"--- {target}\n" + disk.read_text(target).rstrip(), kind="dim")
         q.say("this note never ran on real data: the test install tries it on a copy of your "
               "base world (hpm publish --test)")
         return True

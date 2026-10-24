@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import re
 
-KINDS = ("ok", "fail", "skip", "error", "warning", "note", "loud", "ai", "ask", "plain")
+KINDS = ("ok", "fail", "skip", "error", "warning", "note", "loud", "ai", "ask", "dim", "plain")
 
 RESET = "\x1b[0m"
 BOLD, RED, GREEN, YELLOW, MAGENTA, CYAN, GRAY = "1", "31", "32", "33", "35", "36", "90"
@@ -83,8 +83,9 @@ def paint(text: str, kind: str | None = None, on: bool = True) -> str:
     kind = kind or kind_of(text)
     if kind not in STYLES or kind == "plain":
         return text
-    first, newline, rest = text.partition("\n")
-    return _line(first, kind) + newline + rest
+    blank = len(text) - len(text.lstrip("\n"))  # "\n--- path": the header after the gap
+    first, newline, rest = text[blank:].partition("\n")
+    return text[:blank] + _line(first, kind) + newline + rest
 
 
 def _line(line: str, kind: str) -> str:
@@ -125,6 +126,16 @@ def _question(text: str, codes) -> str:
         return _piece(text, codes)
     return (_piece(text[:found.start()], codes) + _piece(found.group(0), (GRAY,))
             + text[found.end():])
+
+
+SPANS = {"bold": (BOLD,), "dim": (GRAY,), "cyan": (CYAN,), "red": (RED,), "yellow": (YELLOW,),
+         "loud": (BOLD, RED)}
+
+
+def span(text: str, style: str, on: bool = True) -> str:
+    """A piece of a line in one style, for the listings (list, search, show): the line
+    itself stays plain, so `say` leaves it as it is."""
+    return _piece(text, SPANS[style]) if on else text
 
 
 def strip_codes(text: str) -> str:

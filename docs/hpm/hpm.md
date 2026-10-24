@@ -551,5 +551,11 @@ own "As built" with the details; what the code does differently from this docume
   `base_world`; default the world's model, `medium`, $1.00 a session), always after a
   question that names the model and the cap; the tests can't reach it
   (`HALLUX_NO_REAL_MODEL`).
+- **Colors** (`hallux/hpm/paint.py`, docs/plans/hpm/colors/): on a terminal, green is
+  what worked (`✓`, `published`), yellow what needs a look (`warning:`), red what failed
+  (`✗`, `hpm:`), cyan a note, magenta the AI and its cost, bold `!!` what to read first.
+  Only the colors change, never the words. Off in a pipe, with `NO_COLOR=1` or `TERM=dumb`;
+  `HPM_COLOR=always` keeps them in a pipe (`hpm list | less -R`), `HPM_COLOR=never` turns
+  them off. The Packages tab keeps its own look.
 - **Not built:** a world with several users can't be planned from the Packages tab (the
   terminal's `--user` can).

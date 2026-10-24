@@ -45,3 +45,27 @@ pipe (`hpm list | less -R`).
 - **The user's look:** the same commands in Windows Terminal, with the user's own theme.
   Whether a color is wrong there (yellow on a light background, say) is the user's call;
   a color is one line of `paint.py` to change.
+
+## As built
+
+- `paint.span(text, style, on)` colors a piece of a listing line; the line itself is plain
+  to `say`, so nothing paints it twice. `Run.color` is the `Questions`' switch (False for
+  the tests' stand-ins).
+- `list`, `search`, `store list`, `backups` as in the table; `list`'s `backups: …` line and
+  `store list`'s `, index from …` are dim too. `show(store, name, on=False)`:
+  `_highlighted` bolds the first line and the labels, makes `private:` yellow and `rules (…)`
+  loud. The `--- path` headers (init, the migration note, a merge) are said as `dim`;
+  `paint` now skips the blank line in front of a block, so `"\n--- path\n…"` gets its
+  header painted.
+- Docs: `docs/hpm/hpm.md` ("As built", a **Colors** bullet), `docs/hpm/tutorial.md`
+  (section 15's first paragraph).
+- Tests: `test_list_in_colors` (cli), `test_show_in_colors` (publish),
+  `test_a_header_after_a_blank_line_is_painted`, `test_span` (paint). Whole suite: 2367
+  passed.
+- **The look, in tmux** (outside the session's sandbox, which blocks tmux's socket), on a
+  copy of `test-kittystory` and of the store: `hpm list` (names bold, backups dim), a
+  rollback (green), an update (bold green `✓`, the summary green with its backup dim), a
+  publish with nothing changed (bold red `hpm:`, the rest red), `hpm show
+  kittystory-memories` (labels bold, `private:` yellow), and `hpm list | cat` with no codes
+  at all. The update said "6 files": since fix 06 the two seed copies are written too.
+- Still to come: the user's look in Windows Terminal, with their theme.
