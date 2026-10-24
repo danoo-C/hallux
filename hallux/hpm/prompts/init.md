@@ -40,6 +40,10 @@ wildcard. A file two kinds match takes the narrower kind: data, then seed, then 
 packages may never hold the same file. Every pattern must match at least one file that is
 there now. Nothing under /proc, /sys, /dev or /.hallux.
 
+An extra may carry files inside the program's folder (a character's sprite in
+/usr/local/share/apps/<name>/sprites/). Then the program's patterns must not reach them:
+list the program's own files (`*.js`, `index.html`, `sprites/cat.svg`) instead of `**`.
+
 What to do:
 
 1. Read the card and look at the files around it, until you know which files are the

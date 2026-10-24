@@ -5,6 +5,7 @@ client then refuses)."""
 import asyncio
 import json
 import os
+import re
 
 import pytest
 from test_machine import FakeModel, result, screen
@@ -323,6 +324,71 @@ def test_init_never_over_a_manifest(world, store):
     (world / "usr/local/share/hpm/kittystory/hpm.toml").write_text(GOOD)
     with pytest.raises(HpmError, match="has a manifest already"):
         run_init(world, store)
+
+
+# ---------------------------------------------------------------- init: the family (fix 01)
+
+SPRITE = "/usr/local/share/apps/kittystory/sprites/emma.svg"
+CHARS = ('name = "kittystory-chars"\nversion = "1.0"\nfor = "kittystory"\n[files]\n'
+         f'data = ["{SPRITE}"]\n')
+WITH_CHARS = GOOD.replace('memories = { package = "kittystory-memories", default = false }\n',
+                          'chars = { package = "kittystory-chars", default = true }\n')
+OWN_FILES = WITH_CHARS.replace('"/usr/local/share/apps/kittystory/**"',
+                               '"/usr/local/share/apps/kittystory/index.html"')
+SHARED = f"{SPRITE} is in kittystory and in kittystory-chars; one package must carry it"
+
+
+@pytest.fixture
+def sprite(world):
+    (world / SPRITE.lstrip("/")).parent.mkdir(parents=True)
+    (world / SPRITE.lstrip("/")).write_text("<svg/>\n")
+    return world
+
+
+def test_init_shows_the_ai_a_file_two_packages_carry(sprite, store):
+    written, q, stand_in = run_init(sprite, store, writes(
+        ("/usr/local/share/hpm/kittystory/hpm.toml", WITH_CHARS),
+        ("/usr/local/share/hpm/kittystory-packs/hpm.toml", PACKS),
+        ("/usr/local/share/hpm/kittystory-chars/hpm.toml", CHARS)),
+        writes(("/usr/local/share/hpm/kittystory/hpm.toml", OWN_FILES)))
+    assert len(stand_in.messages) == 2 and SHARED in stand_in.messages[1]
+    assert (sprite / "usr/local/share/hpm/kittystory/hpm.toml").read_text() == OWN_FILES
+    assert "/usr/local/share/hpm/kittystory-chars/hpm.toml" in written
+
+
+def test_a_shared_file_left_is_inits_error(sprite, store):
+    draft = writes(("/usr/local/share/hpm/kittystory/hpm.toml", WITH_CHARS),
+                   ("/usr/local/share/hpm/kittystory-packs/hpm.toml", PACKS),
+                   ("/usr/local/share/hpm/kittystory-chars/hpm.toml", CHARS))
+    with pytest.raises(HpmError, match="still have problems.*" + re.escape(SHARED)):
+        run_init(sprite, store, draft, draft)
+    assert (sprite / "usr/local/share/hpm/kittystory-chars/hpm.toml").exists()
+
+
+def test_init_checks_and_shows_the_manifests_from_before(sprite, store):
+    """The user's run: only the program's manifest was moved away; the extras' stayed."""
+    for name, text in (("kittystory-chars", CHARS), ("kittystory-packs", PACKS)):
+        (sprite / f"usr/local/share/hpm/{name}").mkdir(parents=True)
+        (sprite / f"usr/local/share/hpm/{name}/hpm.toml").write_text(text)
+    q = Said()
+    with pytest.raises(HpmError, match="still have problems"):
+        run_init(sprite, store, writes(("/usr/local/share/hpm/kittystory/hpm.toml", WITH_CHARS)),
+                 writes(("/usr/local/share/hpm/kittystory/hpm.toml", WITH_CHARS)), q=q)
+    assert any(line.startswith("there from before") and "kittystory-chars" in line
+               for line in q.said)
+    assert any(line.startswith("\n--- /usr/local/share/hpm/kittystory-chars/hpm.toml")
+               for line in q.said)                              # shown, though not written now
+
+
+def test_an_extra_the_program_doesnt_list(sprite, store):
+    stray = CHARS.replace("kittystory-chars", "kittystory-extra")
+    draft = writes(("/usr/local/share/hpm/kittystory/hpm.toml", OWN_FILES.replace(
+                        'chars = { package = "kittystory-chars", default = true }\n', "")),
+                   ("/usr/local/share/hpm/kittystory-packs/hpm.toml", PACKS),
+                   ("/usr/local/share/hpm/kittystory-extra/hpm.toml", stray))
+    with pytest.raises(HpmError, match="kittystory-extra/hpm.toml is not listed under "
+                                       r"\[extras\] of kittystory's manifest"):
+        run_init(sprite, store, draft, draft)
 
 
 # ---------------------------------------------------------------- publish: draft, review, seed

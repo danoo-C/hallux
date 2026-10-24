@@ -5,7 +5,7 @@ steps were built. One file per fix; each says what went wrong, why, and what to 
 
 | Fix | What | Status |
 |---|---|---|
-| [01](01-init-overlapping-packages.md) | `hpm init` keeps manifests that share a file, and only `publish` finds out | **Planned** 2026-10-24; its decisions are proposals, not confirmed |
+| [01](01-init-overlapping-packages.md) | `hpm init` keeps manifests that share a file, and only `publish` finds out | **Built** 2026-10-24 |
 | [02](02-memory-line-double-tag.md) | The memory line ends with two version tags (`[hpm kittystory 1.0] [hpm kittystory 1.1]`) | **Built** 2026-10-24 |
 | [03](03-manifest-words-left-behind.md) | A new version keeps the manifest's old summary, memory line and requires | **Planned** 2026-10-24; proposals, not confirmed |
 | [04](04-adopt-records-no-extras.md) | An adopted app (the author's world after publish) records none of its extras | **Built** 2026-10-24 |

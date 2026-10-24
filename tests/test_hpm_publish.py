@@ -191,6 +191,23 @@ def test_a_file_both_the_app_and_an_extra_carry(world, store):
             go(world, store, name)
 
 
+def test_family_problems_names_every_file_two_packages_carry(world, store):
+    """Fix 01: the one check init and publish share, in publish's words."""
+    from hallux.disk import Disk
+    from hallux.hpm.publish import family_problems
+    disk = Disk(world)
+    assert family_problems(disk, "kittystory", "/home/danika-hous") == []
+    (world / "usr/local/share/hpm/kittystory-chars/hpm.toml").write_text(CHARS.replace(
+        '"~/.kittystory/assets/**"]',
+        '"~/.kittystory/assets/**", "/usr/local/share/apps/kittystory/sprites/*.svg"]'))
+    assert family_problems(disk, "kittystory", "/home/danika-hous") == [
+        "/usr/local/share/apps/kittystory/sprites/emma.svg is in kittystory and in "
+        "kittystory-chars; one package must carry it"]
+    (world / "usr/local/share/hpm/kittystory-packs/hpm.toml").write_text("name = 3\n")
+    assert any(p.startswith("/usr/local/share/hpm/kittystory-packs/hpm.toml has problems")
+               for p in family_problems(disk, "kittystory", "/home/danika-hous"))
+
+
 def test_no_manifest_in_the_world(world, store):
     with pytest.raises(HpmError, match="this world has no manifest for kittymusic"):
         go(world, store, "kittymusic")

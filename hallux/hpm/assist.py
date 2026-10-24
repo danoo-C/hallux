@@ -21,7 +21,7 @@ from hallux.disk import Disk
 from hallux.hpm import ai
 from hallux.hpm import record as rec
 from hallux.hpm.manifest import Manifest, ManifestError
-from hallux.hpm.publish import PRIVATE_NAMES, Questions, _with_value
+from hallux.hpm.publish import PRIVATE_NAMES, Questions, _with_value, family_problems
 from hallux.hpm.store import Release, Store
 from hallux.hpm.world import (
     MANIFESTS, HpmError, collect, manifest_path, read_world_manifest, world_user,
@@ -61,12 +61,16 @@ def init(world: Path, store: Store, name: str, q: Questions, *, yes: bool = Fals
         raise HpmError(f"drafting {name}'s manifest needs the AI: pass --yes to let it, or "
                        f"write {manifest_path(name)} by hand")
     home = world_user(disk, user)
+    before = _left_from_before(disk, name)
+    if before:
+        q.say("there from before, and kept as they are (hpm checks them with the new draft): "
+              + ", ".join(before))
     line = rec.untagged_line(disk, name) or next(iter(rec.memory_lines(disk, name)), None)
     line = rec.untag(line) if line else None      # hpm adds its own tag when it installs
     job = ai.init_job(name, card, line)
 
     def problems_of(answer: ai.Answer) -> str | None:
-        found = _problems(disk, answer.wrote, home)
+        found = _problems(disk, name, answer.wrote, home)
         if not found:
             return None
         return ("hpm checked what you wrote, and found these problems. Fix them in the same "
@@ -83,13 +87,13 @@ def init(world: Path, store: Store, name: str, q: Questions, *, yes: bool = Fals
     for path in manifests:
         _keep_private(disk, path, home, q)
     q.say(answer.text.strip())
-    for path in manifests:
+    for path in sorted(set(manifests) | set(_family_paths(disk, name))):
         q.say(f"\n--- {path}\n" + disk.read_text(path).rstrip())
     if q.interactive and q.confirm(f"edit {manifest_path(name)} before it is kept?", False,
                                    "--yes"):
         text = q.edit(disk.read_text(manifest_path(name)), "--yes")
         disk.write_file(manifest_path(name), text)
-    left = _problems(disk, manifests, home)
+    left = _problems(disk, name, manifests, home)
     q.say(f"the AI's part cost {ai.cost(answer)}")
     if left:
         raise HpmError("the manifests still have problems; fix them by hand, then hpm publish: "
@@ -97,9 +101,50 @@ def init(world: Path, store: Store, name: str, q: Questions, *, yes: bool = Fals
     return manifests
 
 
-def _problems(disk: Disk, wrote: list[str], home: str | None) -> list[str]:
-    out = []
-    for path in sorted(set(p for p in wrote if p.endswith("/hpm.toml"))):
+def _family_paths(disk: Disk, name: str) -> list[str]:
+    """The manifests of the program in the world: its own, and each extra's its [extras]
+    lists that is there."""
+    try:
+        got = read_world_manifest(disk, name)
+    except ManifestError:
+        return [manifest_path(name)]
+    if got is None:
+        return []
+    paths = [manifest_path(name)]
+    for extra in got[0].extras.values():
+        try:
+            disk.read_text(manifest_path(extra.package))
+        except (OSError, ValueError):
+            continue
+        paths.append(manifest_path(extra.package))
+    return paths
+
+
+def _left_from_before(disk: Disk, name: str) -> list[str]:
+    """Manifests of the program's extras that are in the world before init writes: an
+    earlier init's, when only the program's own manifest was moved away."""
+    try:
+        folder = disk.real(MANIFESTS)
+    except OSError:
+        return []
+    if not folder.is_dir():
+        return []
+    return [manifest_path(p.name) for p in sorted(folder.iterdir())
+            if p.name.startswith(name + "-") and (p / "hpm.toml").is_file()]
+
+
+def _problems(disk: Disk, name: str, wrote: list[str], home: str | None) -> list[str]:
+    """What is wrong with the program's manifests: each one alone (those written now and
+    those of the family that are there), an extra the program doesn't list, and the files
+    two of them carry (fix 01)."""
+    written = set(p for p in wrote if p.endswith("/hpm.toml"))
+    out, listed = [], None
+    try:
+        got = read_world_manifest(disk, name)
+        listed = {e.package for e in got[0].extras.values()} if got else None
+    except ManifestError:
+        pass
+    for path in sorted(written | set(_family_paths(disk, name))):
         try:
             manifest = Manifest.load(disk.read_text(path))
         except ManifestError as e:
@@ -111,8 +156,14 @@ def _problems(disk: Disk, wrote: list[str], home: str | None) -> list[str]:
         if path != manifest_path(manifest.name):
             out.append(f"{path} holds the manifest of {manifest.name}, which belongs at "
                        f"{manifest_path(manifest.name)}")
+        if listed is not None and manifest.name != name and path in written \
+                and manifest.name not in listed:
+            out.append(f"{path} is not listed under [extras] of {name}'s manifest; publish "
+                       f"--all would leave it out")
         found = collect(disk, manifest, home)
         out += [f"{path}: {pattern} matches nothing on the machine" for pattern in found.empty]
+    if listed is not None:
+        out += family_problems(disk, name, home, unreadable=False)
     return out
 
 

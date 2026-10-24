@@ -296,19 +296,28 @@ def _migrations(disk: Disk, name: str) -> dict[str, Path]:
     return found
 
 
+def _family_names(disk: Disk, manifest: Manifest) -> tuple[str, Manifest | None]:
+    """The program a package belongs to, and that program's manifest in the world (None if
+    it has none, or one that doesn't read)."""
+    app = manifest.for_app or manifest.name
+    if app == manifest.name:
+        return app, manifest
+    try:
+        got = read_world_manifest(disk, app)
+    except ManifestError:
+        got = None
+    return app, got[0] if got else None
+
+
+def _shared(path: str, a: str, b: str) -> str:
+    return f"{path} is in {a} and in {b}; one package must carry it"
+
+
 def _shared_with_family(disk: Disk, manifest: Manifest, ours: set[str], home: str | None,
                         q: Questions) -> list[str]:
     """The files this package and another package of the same app both carry: the app and
     its extras, whose manifests are in the world beside this one."""
-    app = manifest.for_app or manifest.name
-    if app == manifest.name:
-        app_manifest = manifest
-    else:
-        try:
-            got = read_world_manifest(disk, app)
-        except ManifestError:
-            got = None
-        app_manifest = got[0] if got else None
+    app, app_manifest = _family_names(disk, manifest)
     family = {app} | ({e.package for e in app_manifest.extras.values()} if app_manifest else set())
     family.discard(manifest.name)
     problems = []
@@ -321,8 +330,37 @@ def _shared_with_family(disk: Disk, manifest: Manifest, ours: set[str], home: st
         if got is None:
             continue
         both = sorted(ours & set(collect(disk, got[0], home).files))
-        problems += [f"{path} is in {manifest.name} and in {other}; one package must carry it"
-                     for path in both]
+        problems += [_shared(path, manifest.name, other) for path in both]
+    return problems
+
+
+def family_problems(disk: Disk, app: str, home: str | None,
+                    unreadable: bool = True) -> list[str]:
+    """The files that two packages of one program both carry: the app and every extra its
+    manifest lists, whose manifests are in the world. Each problem names the file and both
+    packages, in publish's words. A manifest that doesn't read is a problem too, unless
+    `unreadable` is False (the caller has told it already)."""
+    try:
+        got = read_world_manifest(disk, app)
+    except ManifestError as e:
+        return [f"{manifest_path(app)} has problems: {e}"] if unreadable else []
+    if got is None:
+        return []
+    members = [(app, got[0])]
+    problems = []
+    for extra in got[0].extras.values():
+        try:
+            found = read_world_manifest(disk, extra.package)
+        except ManifestError as e:
+            if unreadable:
+                problems.append(f"{manifest_path(extra.package)} has problems: {e}")
+            continue
+        if found is not None:
+            members.append((extra.package, found[0]))
+    carried = [(name, set(collect(disk, manifest, home).files)) for name, manifest in members]
+    for i, (a, files_a) in enumerate(carried):
+        for b, files_b in carried[i + 1:]:
+            problems += [_shared(path, a, b) for path in sorted(files_a & files_b)]
     return problems
 
 

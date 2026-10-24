@@ -4,7 +4,8 @@
 (`hpm init`) and [step 2](../02-store-and-publish.md) (publish's checks)
 
 **Status:** planned 2026-10-24, at the user's request ("please write a plan for it in the
-hpm's plan folder"). Not built. The decisions below are proposals, not confirmed.
+hpm's plan folder"). Decisions confirmed by the user 2026-10-24 ("yes, as proposed").
+**Built** 2026-10-24: see "As built" at the end.
 
 **Changes:** `hallux/hpm/publish.py` (the shared-file check becomes a function both
 commands use), `hallux/hpm/assist.py` (`init` runs it), `hallux/hpm/prompts/init.md` (one
@@ -162,3 +163,23 @@ must be added to the list, or publish won't carry it.
   the first run, and the AI sees and keeps them ("the packages are the same as before").
   With this fix those are checked and shown; whether init should say up front "these
   manifests are there from before, and stay" is a small extra, left for the build.
+
+## As built
+
+- `hallux/hpm/publish.py`: `family_problems(disk, app, home, unreadable=True)`, and
+  `_shared_with_family` now shares its words (`_shared`) and its family lookup
+  (`_family_names`).
+- `hallux/hpm/assist.py`: `_problems(disk, name, wrote, home)` checks every manifest written
+  now and every manifest of the family in the world, names an extra the program doesn't
+  list (only one written in this session), then runs `family_problems`. `_family_paths`
+  gives the family's manifests; init shows all of them at the end. `_left_from_before`:
+  init says up front which `<name>-*` manifests are there from before and stay (the "small
+  extra" left for the build).
+- `hallux/hpm/prompts/init.md`: the rule about an extra's files inside the program's folder.
+- Tests: `test_init_shows_the_ai_a_file_two_packages_carry`,
+  `test_a_shared_file_left_is_inits_error`, `test_init_checks_and_shows_the_manifests_from_before`,
+  `test_an_extra_the_program_doesnt_list` (ai); `test_family_problems_names_every_file_two_packages_carry`
+  (publish; the existing `test_a_file_both_the_app_and_an_extra_carry` already pinned
+  publish's words).
+- By hand: on a copy of `danika`, `family_problems` gives nothing with its manifests as they
+  are now, and the same six files publish named once the app's list is put back to `**`.
