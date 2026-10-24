@@ -100,6 +100,10 @@ class Script(Questions):
         answer = self._next(question, default)
         return default if answer is None else answer
 
+    def choose(self, question, keys, flag):
+        answer = self._next(question, "")
+        return "" if answer is None else answer
+
     def edit(self, template, flag):
         answer = self._next("edit", template)
         return template + "edited\n" if answer is None else answer
@@ -477,9 +481,84 @@ def test_a_seed_that_grew_is_told(world, store):
     go(world, store)
     (world / "usr/local/share/apps/kittystory/data/state.json").write_text("{" + "x" * 50 + "}\n")
     q = Script()
-    go(world, store, q=q)
+    go(world, store, q=q, seeds="world")              # fix 07 would ask first
     assert any("the seed /usr/local/share/apps/kittystory/data/state.json" in line
                and "may hold your own data now" in line for line in q.said)
+
+
+# ---------------------------------------------------------------- a used seed (fix 07)
+
+SEED = "/usr/local/share/apps/kittystory/data/state.json"
+SEED_MEMBER = "files/root" + SEED
+
+
+def used(world):
+    (world / SEED.lstrip("/")).write_text('{"chat": ["hi Emma"]}\n')
+    (world / "usr/local/bin/kittystory").write_text("# kittystory\nthe card, new\n")
+
+
+def test_a_used_seed_with_no_clean_copy_is_asked_about(world, store):
+    go(world, store)
+    used(world)
+    q = Script("r")
+    release = go(world, store, q=q)[0]
+    assert q.asked[0] == "r, w or s"
+    assert any("the seed " + SEED + " changed since 1.4, and there's no clean copy" in line
+               for line in q.said)
+    assert read_member(release.path, SEED_MEMBER) == b"{}\n"           # 1.4's seed
+    (world / "usr/local/bin/kittystory").write_text("# kittystory\nthe card, newer\n")
+    release = go(world, store, q=Script("w"))[0]
+    assert read_member(release.path, SEED_MEMBER) == b'{"chat": ["hi Emma"]}\n'
+
+
+def test_stop_writes_nothing(world, store):
+    go(world, store)
+    used(world)
+    before = snapshot(world)
+    with pytest.raises(HpmError, match="write a clean one at /usr/local/share/hpm/kittystory/"
+                                       "seed" + SEED + ", then publish again"):
+        go(world, store, q=Script("s"))
+    assert snapshot(world) == before and len(store.releases("kittystory")) == 1
+
+
+def test_without_a_terminal_the_seeds_need_their_flag(world, store):
+    go(world, store)
+    used(world)
+    with pytest.raises(HpmError, match="no terminal to ask in; pass --seeds release\\|world"):
+        go(world, store, q=Questions(interactive=False), version="1.5")
+    release = go(world, store, q=Questions(interactive=False), version="1.5", seeds="release")[0]
+    assert read_member(release.path, SEED_MEMBER) == b"{}\n"
+    (world / "usr/local/bin/kittystory").write_text("# kittystory\nthe card, newer\n")
+    release = go(world, store, q=Questions(interactive=False), version="1.6", seeds="world")[0]
+    assert read_member(release.path, SEED_MEMBER) == b'{"chat": ["hi Emma"]}\n'
+    (world / "usr/local/bin/kittystory").write_text("# kittystory\nthe card, newest\n")
+    (world / SEED.lstrip("/")).write_text('{"chat": ["bye"]}\n')
+    q = Script()
+    release = go(world, store, q=q, suggested=True)[0]              # --yes: the release's
+    assert "r, w or s" not in q.asked
+    assert read_member(release.path, SEED_MEMBER) == b'{"chat": ["hi Emma"]}\n'
+    assert any("kept 1.6's seed " + SEED in line for line in q.said)
+
+
+def test_a_seed_as_it_was_or_a_first_release_isnt_asked(world, store):
+    used(world)
+    q = Script()
+    go(world, store, q=q)                                            # the first release
+    (world / "usr/local/bin/kittystory").write_text("# kittystory\nthe card, newer\n")
+    go(world, store, q=q)                                            # the seed as in 1.4
+    assert "r, w or s" not in q.asked
+
+
+def test_a_clean_copy_that_differs_is_told(world, store):
+    copy = world / ("usr/local/share/hpm/kittystory/seed" + SEED)
+    copy.parent.mkdir(parents=True)
+    copy.write_text('{"chat": []}\n')
+    q = Script()
+    release = go(world, store, q=q)[0]
+    assert read_member(release.path, SEED_MEMBER) == b'{"chat": []}\n'
+    assert ("note: published the clean seed /usr/local/share/hpm/kittystory/seed" + SEED +
+            "; the world's own state.json differs. To publish a new first state, write it "
+            "there.") in q.said
 
 
 # ---------------------------------------------------------------- --all

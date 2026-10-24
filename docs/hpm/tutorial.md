@@ -390,6 +390,7 @@ cap_usd = 1.00                # at most this per AI session
 |---|---|
 | make manifests for an app | `hpm init NAME` (in its world) |
 | release it | `hpm publish NAME --all` |
+| release it, keeping the last release's first state | `hpm publish NAME --seeds release` |
 | see what's in the store | `hpm search WORD`, `hpm show NAME` |
 | put it into a world | `hpm install NAME --world W` |
 | see what a world has | `hpm list --world W` |

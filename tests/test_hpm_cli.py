@@ -436,7 +436,9 @@ def test_a_world_that_installed_it_publishes_the_clean_seed(world, store, tmp_pa
     code, said = hpm(world, store, "publish", "kittystory", "--yes", "--changelog", "x")
     assert code == 1                                  # only the used seed: nothing changed
     (world / "usr/local/bin/kittystory").write_text("the card, with a feature\n")
-    assert hpm(world, store, "publish", "kittystory", "--yes", "--changelog", "x")[0] == 0
+    code, said = hpm(world, store, "publish", "kittystory", "--changelog", "x", "--version", "1.2")
+    assert code == 0                                  # fix 07: no question, the copy is there
+    assert any(line.startswith("note: published the clean seed ") for line in said)
     release = store.latest("kittystory")
     assert str(release.version) == "1.2"
     assert read_member(release.path, "files/root" + STATE) == b'{"chat": []}\n'

@@ -3,8 +3,8 @@
 [The fixes](README.md) · [the plan](../README.md) · built on [step 2](../02-store-and-publish.md)
 (publish) and [fix 06](06-install-carries-clean-seeds.md)
 
-**Status:** planned 2026-10-24, from the same analysis as fix 06. Not built. The decisions
-below are proposals, not confirmed.
+**Status:** planned 2026-10-24, from the same analysis as fix 06. Decisions confirmed by the
+user 2026-10-24 ("yes, as proposed"). **Built** 2026-10-25: see "As built" at the end.
 
 **Changes:** `hallux/hpm/publish.py` (`_with_clean_seeds` says which seeds had no clean
 copy; a question for each that changed), `hallux/hpm/cli.py` (`--seeds release|world`),
@@ -85,3 +85,27 @@ but only uses that for the size warning.
 | 1 | **Ask only for a seed with no copy that changed since the last release; default: the last release's** | The cases where a world's use can leak, and only those; keeping the old seed is never worse than the release before |
 | 2 | **One flag for all seeds,** `--seeds release\|world` | Like `--overwrite all\|none`; per-seed answers are what the terminal is for |
 | 3 | **A differing clean copy is told, not asked** | The copy is the author's own choice; the note is enough to catch a forgotten one |
+
+## As built
+
+- `hallux/hpm/publish.py`: `_with_clean_seeds` also returns the seeds with no copy and those
+  whose copy differs; `_used_seeds` asks (`q.choose`, `r`/`w`/`s`, Enter is `r`) before the
+  "nothing changed" check, so `r` and `w` change what counts as changed. `r` packs the last
+  release's bytes from a scratch folder (`_publish_one` now holds it and calls
+  `_publish_one_in`). The note about a differing copy is said after the version, next to the
+  size warning. A seed that is new in this release (not in the last one) isn't asked about:
+  there is no release's file to keep.
+- `hallux/hpm/cli.py`: `--seeds release|world`, in the usage too.
+- Docs: `docs/hpm/hpm.md` (section 5's publish bullet; it also gained fix 03's two lines),
+  `docs/hpm/tutorial.md` (the cheat sheet). The usage line of hpm.md has no flags list, so
+  nothing was added there.
+- Tests (`tests/test_hpm_publish.py`): `test_a_used_seed_with_no_clean_copy_is_asked_about`,
+  `test_stop_writes_nothing`, `test_without_a_terminal_the_seeds_need_their_flag`,
+  `test_a_seed_as_it_was_or_a_first_release_isnt_asked`,
+  `test_a_clean_copy_that_differs_is_told`; `test_a_seed_that_grew_is_told` now passes
+  `seeds="world"`; the cli test of fix 06 checks that an installed world isn't asked and is
+  told the note.
+- By hand, on a copy of `test-kittystory` as it is (no copies): without a terminal, publish
+  showed the question for `state.json` and stopped naming `--seeds`; with `--seeds release`
+  or `--yes` (which said "kept 1.1's seed" for `state.json` and `tree.json`) nothing was left
+  to publish: "nothing changed since 1.1".

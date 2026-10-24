@@ -9,7 +9,8 @@
     hpm adopt NAME [--version V] [--old-line …] [--user U] [--yes] [--world W]
     hpm list [--world W]
     hpm publish NAME [--all] [--version V | --yes] [--changelog TEXT] [--user U]
-                     [--private yes|no] [--old-line replace|keep] [--draft] [--review]
+                     [--private yes|no] [--seeds release|world] [--old-line replace|keep]
+                     [--draft] [--review]
                      [--write-migration] [--test] [--world W]
     hpm init NAME [--yes] [--user U] [--world W]          the AI drafts the manifest
     hpm show NAME
@@ -141,6 +142,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--user", metavar="U", help="whose home ~ is, in a world with several")
     p.add_argument("--private", choices=("yes", "no"),
                    help="the answer, if hpm asks whether to mark a package private")
+    p.add_argument("--seeds", choices=("release", "world"),
+                   help="a seed with no clean copy that changed since the last release: keep "
+                        "the release's, or send this world's")
     p.add_argument("--old-line", choices=("replace", "keep"), dest="old_line",
                    help="the machine's own memory line about the program, in this world")
     p.add_argument("--draft", action="store_true",
@@ -655,7 +659,7 @@ class Run:
         released = publish(world, self.flags.name, self.store, self.q, every=self.flags.all,
                            version=self.flags.version, changelog=self.flags.changelog,
                            user=self.flags.user, suggested=self.flags.yes, draft=draft,
-                           review=review, write_note=write_note,
+                           review=review, write_note=write_note, seeds=self.flags.seeds,
                            private=None if self.flags.private is None else self.flags.private == "yes")
         for release in released:                  # the world it came from has it now
             plan = engine.plan_adopt(world, release, user=self.flags.user)

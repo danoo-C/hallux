@@ -107,14 +107,15 @@ def publish(world: Path, name: str, store: Store, questions: Questions, *,
             every: bool = False, version: str | None = None, changelog: str | None = None,
             user: str | None = None, private: bool | None = None, suggested: bool = False,
             today: datetime.date | None = None, draft=None, review=None,
-            write_note=None) -> list[Release]:
+            write_note=None, seeds: str | None = None) -> list[Release]:
     """Publish a package from a world into the store; with `every` (--all), its extras too,
     each that changed since its last release. `draft(name, latest, ours, theirs, version)`
     may give the AI's draft of the changelog entry, and `review(name, card, manifest)` the
     AI's review of a card, saved in the release as review.md (hallux/hpm/assist.py), and
     `write_note(name, latest, before, after, old, new)` has the AI write the migration note
     when the data moved without one. With `suggested` (--yes), each takes the version hpm
-    suggests, without asking. Returns what was published."""
+    suggests, without asking. `seeds` (--seeds) answers for a used seed with no clean copy:
+    "release" or "world". Returns what was published."""
     disk = Disk(world)
     today = today or datetime.date.today()
     first = _world_manifest(disk, name)[0]
@@ -133,7 +134,7 @@ def publish(world: Path, name: str, store: Store, questions: Questions, *,
         release = _publish_one(disk, each, store, questions, home, version=version,
                                changelog=changelog, private=private, suggested=suggested,
                                today=today, unchanged_is_fine=every, draft=draft,
-                               review=review, write_note=write_note)
+                               review=review, write_note=write_note, seeds=seeds)
         if release is not None:
             published.append(release)
             _extras_behind(release, store, questions)
@@ -167,13 +168,21 @@ def _home(disk: Disk, names: list[str], user: str | None) -> str | None:
     return home
 
 
-def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | None, *,
-                 version: str | None, changelog: str | None, private: bool | None,
-                 suggested: bool, today: datetime.date,
-                 unchanged_is_fine: bool, draft=None, review=None,
-                 write_note=None) -> Release | None:
+def _publish_one(*args, **flags) -> Release | None:
+    """One package; a folder of its own for the seeds of the last release it may send
+    again (fix 07)."""
+    with tempfile.TemporaryDirectory(prefix="hpm-seeds-") as scratch:
+        return _publish_one_in(*args, scratch=Path(scratch), **flags)
+
+
+def _publish_one_in(disk: Disk, name: str, store: Store, q: Questions, home: str | None, *,
+                    version: str | None, changelog: str | None, private: bool | None,
+                    suggested: bool, today: datetime.date,
+                    unchanged_is_fine: bool, draft=None, review=None,
+                    write_note=None, seeds: str | None = None,
+                    scratch: Path) -> Release | None:
     manifest, text = _world_manifest(disk, name)
-    collected = _with_clean_seeds(disk, name, collect(disk, manifest, home))
+    collected, bare, differing = _with_clean_seeds(disk, name, collect(disk, manifest, home))
     migrations = _migrations(disk, name)
 
     problems = [f"{pattern} matches nothing in this world: the app moved something, and the "
@@ -195,9 +204,10 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
         manifest, text = _world_manifest(disk, name)
         migrations = _migrations(disk, name)
 
+    theirs = {} if latest is None else listing(latest.path)
+    collected = _used_seeds(name, collected, bare, latest, theirs, q, seeds, suggested, scratch)
     ours = {to_member(path): sha256(real) for path, (_, real) in collected.files.items()}
     ours |= {member: sha256(real) for member, real in migrations.items()}
-    theirs = {} if latest is None else listing(latest.path)
     if latest is not None and not _changed(manifest, before, ours, theirs):
         if unchanged_is_fine:
             q.say(f"{name} {latest.version}: unchanged, not published")
@@ -213,6 +223,10 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
     new_text = _clean_memory_line(name, manifest, new_text, q)
     new_text = _privacy(name, manifest, collected, new_text, private, q)
     _seeds(collected, theirs, q)
+    for path in differing:
+        q.say(f"note: published the clean seed {clean_seed_path(name, path)}; the world's own "
+              f"{posixpath.basename(path)} differs. To publish a new first state, write it "
+              f"there.")
     drafted = draft(name, latest, ours, theirs, new_version, new_text) \
         if changelog is None and draft else None
     entry = _entry(new_version, changelog, today, q, drafted)
@@ -263,19 +277,65 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
 
 
 def _with_clean_seeds(disk: Disk, name: str, collected):
-    """A seed that hpm init had the AI write clean, at /usr/local/share/hpm/<name>/seed/<path>,
-    is published in place of the world's own, which may hold your chat (sharing.md,
-    section 3)."""
+    """A seed with a clean copy at /usr/local/share/hpm/<name>/seed/<path> (hpm init writes
+    one where a seed holds your chat, install one for each seed) is published in place of
+    the world's own (sharing.md, section 3). Also returned: the seeds with no copy, and
+    those whose copy differs from the world's file (fix 07)."""
     files = dict(collected.files)
+    bare, differing = [], []
     for path, (kind, real) in collected.files.items():
         if kind != "seed":
             continue
         try:
             clean = disk.real(clean_seed_path(name, path), follow=False)
         except OSError:
-            continue
-        if clean.is_file() and not clean.is_symlink():
+            clean = None
+        if clean is not None and clean.is_file() and not clean.is_symlink():
             files[path] = (kind, clean)
+            if sha256(clean) != sha256(real):
+                differing.append(path)
+        else:
+            bare.append(path)
+    return dataclasses.replace(collected, files=files), bare, differing
+
+
+def _used_seeds(name: str, collected, bare: list[str], latest: Release | None,
+                theirs: dict[str, tuple[int, str]], q: Questions, seeds: str | None,
+                suggested: bool, scratch: Path):
+    """A seed with no clean copy that changed since the last release may hold this world's
+    own use: asked whether to keep the release's or send the world's (fix 07). --seeds
+    answers for all; --yes keeps the release's. A first release isn't asked: init has just
+    looked at the seeds."""
+    if latest is None:
+        return collected
+    files = dict(collected.files)
+    for path in bare:
+        member = to_member(path)
+        kind, real = files[path]
+        if member not in theirs or sha256(real) == theirs[member][1]:
+            continue
+        answer = seeds
+        if answer is None and suggested:
+            answer = "release"
+            q.say(f"{name}: kept {latest.version}'s seed {path}: it changed in this world and "
+                  f"has no clean copy (--seeds world sends this world's)")
+        if answer is None:
+            q.say(f"{name}: the seed {path} changed since {latest.version}, and there's no "
+                  f"clean copy of it. It may hold this world's own use (a chat, a story).\n"
+                  f"  r  keep {latest.version}'s seed (the default)\n"
+                  f"  w  publish this world's file\n"
+                  f"  s  stop")
+            answer = {"": "release", "r": "release", "w": "world", "s": "stop"}[
+                q.choose("r, w or s", "rws", "--seeds release|world, or --yes for the last "
+                                             "release's")]
+        if answer == "stop":
+            raise HpmError(f"write a clean one at {clean_seed_path(name, path)}, then publish "
+                           f"again")
+        if answer == "release":
+            target = scratch / member
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(read_member(latest.path, member) or b"")
+            files[path] = (kind, target)
     return dataclasses.replace(collected, files=files)
 
 

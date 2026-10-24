@@ -11,7 +11,7 @@ steps were built. One file per fix; each says what went wrong, why, and what to 
 | [04](04-adopt-records-no-extras.md) | An adopted app (the author's world after publish) records none of its extras | **Built** 2026-10-24 |
 | [05](05-docs-log-line.md) | The tutorial and checklist say hpm's AI writes no log line; it does | **Done** 2026-10-24; docs only |
 | [06](06-install-carries-clean-seeds.md) | A world that installed an app has no clean seeds, so publishing from it sends its used ones | **Built** 2026-10-25 |
-| [07](07-publish-asks-about-used-seeds.md) | Publish sends a used seed without asking, and an old clean copy without saying | **Planned** 2026-10-24; proposals, not confirmed; builds on 06 |
+| [07](07-publish-asks-about-used-seeds.md) | Publish sends a used seed without asking, and an old clean copy without saying | **Built** 2026-10-25 |
 
 02 to 05 come from a read-only review of the user's own run on 2026-10-24: kittystory
 published from `~/hallux-distros/danika`, installed from nothing in `test-kittystory`, then

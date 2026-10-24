@@ -523,8 +523,13 @@ own "As built" with the details; what the code does differently from this docume
   what was published. A clean seed at `/usr/local/share/hpm/<name>/seed/<path>` is published
   in place of the world's own; init writes one where a seed holds your data, and install
   writes one for every seed of the release, so any world that has the manifest publishes
-  the same way. The AI's review of the card is asked for (`--review`), not
-  always made: it costs a call each time.
+  the same way. A seed with no clean copy that changed since the last release is asked
+  about: keep the release's (the default), send this world's, or stop (`--seeds
+  release|world`; `--yes` keeps the release's). A clean copy that differs from the world's
+  seed is only told. A new card with the manifest's summary, memory line and requires word
+  for word as before is asked about too (said, with `--yes`), and the AI's changelog draft
+  names what in the manifest disagrees with the change. The AI's review of the card is
+  asked for (`--review`), not always made: it costs a call each time.
 - **Install:** every question is answered before anything is written; without a terminal
   each needs its flag (`--extras`, `--overwrite all|none`, `--old-line replace|keep`,
   `--user`, `--yes`). "Merge" is offered for `memory.md` and `shared.md`: the AI merges,
