@@ -204,6 +204,7 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
         raise HpmError(f"{name}: nothing changed since {latest.version}; nothing to publish")
     if before is not None:
         _check_data(name, manifest, before, latest)
+        _same_words(name, manifest, before, latest, ours, theirs, q, suggested)
     _check_notes(name, manifest, migrations, store)
 
     new_version = _version(name, manifest, before, latest, version, suggested, q)
@@ -211,7 +212,8 @@ def _publish_one(disk: Disk, name: str, store: Store, q: Questions, home: str | 
     new_text = _clean_memory_line(name, manifest, new_text, q)
     new_text = _privacy(name, manifest, collected, new_text, private, q)
     _seeds(collected, theirs, q)
-    drafted = draft(name, latest, ours, theirs, new_version) if changelog is None and draft else None
+    drafted = draft(name, latest, ours, theirs, new_version, new_text) \
+        if changelog is None and draft else None
     entry = _entry(new_version, changelog, today, q, drafted)
     world_changelog = f"{MANIFESTS}/{name}/{CHANGELOG}"
     old_changelog = _read_text(disk, world_changelog)
@@ -385,6 +387,29 @@ def _check_data(name: str, manifest: Manifest, before: Manifest, latest: Release
             f"data_format is still {manifest.data_format}: an update would leave the data "
             f"behind. Raise data_format, and write a migration for it (hpm publish "
             f"--write-migration has the AI write it; docs/hpm/migrations.md)")
+
+
+def _same_words(name: str, manifest: Manifest, before: Manifest, latest: Release,
+                ours: dict[str, str], theirs: dict[str, tuple[int, str]], q: Questions,
+                suggested: bool) -> None:
+    """The card changed, and the summary, memory line and requires are word for word as in
+    the last release: asked if they are still right (fix 03). With --yes, or without a
+    terminal, it is only said."""
+    card = to_member(f"/usr/local/bin/{name}")
+    if card not in ours or card not in theirs or ours[card] == theirs[card][1]:
+        return
+    words = lambda m: (m.summary, rec.untag(m.memory_line) if m.memory_line else "",  # noqa: E731
+                       m.requires_addons, m.requires_packages)
+    if words(manifest) != words(before):
+        return
+    said = (f"{name}: the card changed since {latest.version}, but the summary, memory line "
+            f"and requires are as they were")
+    if suggested or not q.interactive:
+        q.say(f"note: {said}; check them in {manifest_path(name)}")
+        return
+    question = f"{said}. Still right?"
+    if not q.confirm(question, True, "--yes"):
+        raise HpmError(f"edit {manifest_path(name)}, then publish again")
 
 
 def _extras_behind(release: Release, store: Store, q: Questions) -> None:

@@ -320,6 +320,44 @@ def test_a_clean_memory_line_is_not_touched(world, store):
     assert not any("memory_line" in line for line in q.said)
 
 
+STILL_RIGHT = ("kittystory: the card changed since 1.4, but the summary, memory line and "
+               "requires are as they were. Still right?")
+
+
+def test_a_new_card_with_the_old_words_is_asked_about(world, store):
+    """Fix 03."""
+    go(world, store)
+    (world / "usr/local/bin/kittystory").write_text("# kittystory\nthe card, without -g\n")
+    q = Script(False)
+    with pytest.raises(HpmError, match="edit /usr/local/share/hpm/kittystory/hpm.toml, then "
+                                       "publish again"):
+        go(world, store, q=q)
+    assert q.asked[0] == STILL_RIGHT and [str(r.version) for r in store.releases("kittystory")] == ["1.4"]
+    q = Script(True)
+    assert str(go(world, store, q=q)[0].version) == "1.5"
+    q = Script()
+    (world / "usr/local/bin/kittystory").write_text("# kittystory\nthe card, once more\n")
+    go(world, store, q=q, suggested=True)                              # --yes: only said
+    assert STILL_RIGHT not in q.asked
+    assert ("note: kittystory: the card changed since 1.5, but the summary, memory line and "
+            "requires are as they were; check them in /usr/local/share/hpm/kittystory/hpm.toml"
+            in q.said)
+
+
+def test_no_question_when_the_card_or_the_words_changed(world, store):
+    go(world, store)
+    (world / "usr/local/share/apps/kittystory/app.js").write_text("// new\n")   # not the card
+    q = Script()
+    go(world, store, q=q)
+    assert STILL_RIGHT.replace("1.4", "1.5") not in q.asked and STILL_RIGHT not in q.asked
+    (world / "usr/local/bin/kittystory").write_text("# kittystory\nthe card, new\n")
+    path = world / "usr/local/share/hpm/kittystory/hpm.toml"
+    path.write_text(path.read_text().replace('requires.addons = ["web"]', 'requires.addons = []'))
+    q = Script()
+    go(world, store, q=q)
+    assert not any("Still right?" in question for question in q.asked)
+
+
 @pytest.mark.parametrize("given, major, expected", [
     ("1.4", False, "1.5"), ("1.4.1", False, "1.4.2"), ("2", False, "2.1"),
     ("1.4", True, "2.0"), ("1.4.9", True, "2.0"),

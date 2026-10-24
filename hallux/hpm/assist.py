@@ -192,7 +192,8 @@ def changelog_drafter(world: Path, store: Store, q: Questions, *, given: bool,
     may not."""
     settings = ai.settings(store)
 
-    def draft(name: str, release: Release | None, ours: dict, theirs: dict, version) -> str | None:
+    def draft(name: str, release: Release | None, ours: dict, theirs: dict, version,
+              manifest: str | None = None) -> str | None:
         if release is None:
             return None                           # a first release: nothing to compare
         if not may_spend(q, f"draft the changelog of {name} {version}", settings, world,
@@ -212,16 +213,31 @@ def changelog_drafter(world: Path, store: Store, q: Questions, *, given: bool,
                 home = "/home/user"
             _as_world(Path(temp) / "p", old, home)
             job = ai.changelog_job(name, old, machine(added), machine(changed), machine(removed),
-                                   str(version))
+                                   str(version), manifest)
             q.say(f"the AI is drafting the changelog of {name}…")
             answer = ai.run_job(world, job, settings, client_factory)
         q.say(f"the AI's draft cost {ai.cost(answer)}")
         if not answer.ok:
             q.say(f"the AI's draft didn't end well ({answer.why}); write the entry yourself")
             return None
-        return answer.text.strip()
+        entry, disagrees = split_manifest_block(answer.text)
+        if disagrees:
+            q.say(f"the AI says the manifest disagrees with this version (fix it in "
+                  f"{manifest_path(name)} before you publish, if it is right):\n{disagrees}")
+        return entry
 
     return draft
+
+
+def split_manifest_block(text: str) -> tuple[str, str]:
+    """The changelog's entry, and the block after a line "Manifest:" that names what in the
+    manifest disagrees with the change ("" if there is none)."""
+    lines = text.strip().splitlines()
+    at = next((i for i, line in enumerate(lines) if line.strip().rstrip(":").lower() == "manifest"
+               and line.strip().endswith(":")), None)
+    if at is None:
+        return text.strip(), ""
+    return "\n".join(lines[:at]).strip(), "\n".join(lines[at + 1:]).strip()
 
 
 def _as_world(package: Path, into: Path, home: str) -> None:

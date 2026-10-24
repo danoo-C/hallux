@@ -3,8 +3,9 @@
 [The fixes](README.md) · [the plan](../README.md) · built on [step 2](../02-store-and-publish.md)
 (publish) and [step 6](../06-ai-session.md) (the changelog's draft)
 
-**Status:** planned 2026-10-24, from a read-only review of the user's own run. Not built.
-The decisions below are proposals, not confirmed.
+**Status:** planned 2026-10-24, from a read-only review of the user's own run. Decisions
+confirmed by the user 2026-10-24 ("yes, as proposed"). **Built** 2026-10-24: see "As built"
+at the end. The paid check is not run yet: it waits for the user's go.
 
 **Changes:** `hallux/hpm/publish.py` (a notice when the card changed and the manifest's
 words didn't), `hallux/hpm/ai.py` and `hallux/hpm/prompts/changelog.md` (the draft also
@@ -86,3 +87,18 @@ Publishing that as 1.2 and updating `test-kittystory` puts the right line in its
 | 1 | **A plain notice, asked only when the card changed and all three fields didn't** | Free and certain; a question after every publish would be ignored |
 | 2 | **The changelog's draft names what disagrees,** in the same session | It already reads the change; a few more tokens, no new session |
 | 3 | **The AI names, the user edits** the manifest | The manifest is the author's promise to friends; hpm writes only `version` and what fix 02 cleans |
+
+## As built
+
+- `_same_words` in `hallux/hpm/publish.py`, after the data checks and before the version:
+  the card's sha differs from the last release's and `summary`, `memory_line` (untagged)
+  and both `requires` are equal. On a terminal it asks (`n` stops with "edit …, then
+  publish again"); with `--yes` or no terminal it says `note: …; check them in …`.
+- The changelog's draft gets the manifest as it will be published (`changelog_job(…,
+  manifest)`, `draft(…, manifest)`), and `prompts/changelog.md` asks for a `Manifest:`
+  block. `assist.split_manifest_block` cuts it off; the block is said above the entry.
+- Tests: `test_a_new_card_with_the_old_words_is_asked_about`,
+  `test_no_question_when_the_card_or_the_words_changed` (publish);
+  `test_the_draft_names_what_in_the_manifest_disagrees`, `test_split_manifest_block` (ai).
+  `test_publish_adopts_its_own_world` (cli) now finds its "published" line among the
+  others, since that test changes the card and the notice comes first.

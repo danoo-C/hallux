@@ -436,6 +436,28 @@ def test_the_changelog_drafted_by_the_ai(world, store):
     assert changelog.startswith("## 1.1 (") and "- the start page is new" in changelog
 
 
+def test_the_draft_names_what_in_the_manifest_disagrees(world, store):
+    """Fix 03: the block after "Manifest:" is said, and kept out of the entry."""
+    manifests(world)
+    publish(world, store, "--version", "1.0", "--changelog", "first")
+    (world / "usr/local/share/apps/kittystory/index.html").write_text("<html>new</html>\n")
+    stand_in = StandIn(says("- the start page is new\n\nManifest:\n"
+                            "- memory_line still mentions packs, which this version removes"))
+    code, q = publish(world, store, "--yes", "--draft", stand_in=stand_in)
+    assert code == 0
+    assert 'memory_line = "kittystory: chat with characters made from packs"' in stand_in.messages[0]
+    changelog = (world / "usr/local/share/hpm/kittystory/CHANGELOG.md").read_text()
+    assert "- the start page is new" in changelog and "Manifest" not in changelog
+    assert "memory_line still mentions" not in changelog
+    assert any("the manifest disagrees" in line and "memory_line still mentions packs" in line
+               for line in q.said)
+
+
+def test_split_manifest_block():
+    assert assist.split_manifest_block("- a\n- b\n") == ("- a\n- b", "")
+    assert assist.split_manifest_block("- a\nManifest:\n- x\n") == ("- a", "- x")
+
+
 def test_the_review_goes_with_the_release(world, store):
     manifests(world)
     stand_in = StandIn(says("- nothing reaches beyond the program"))

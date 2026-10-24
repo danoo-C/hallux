@@ -368,7 +368,7 @@ def test_publish_adopts_its_own_world(world, store):
     rec.save(Disk(world), {})                        # as if it was built here, not installed
     (world / "usr/local/bin/kittystory").write_text("the card, better\n")
     code, said = hpm(world, store, "publish", "kittystory", "--yes", "--changelog", "better")
-    assert code == 0 and said[0] == "published kittystory 1.1: 2 files, 24 bytes"
+    assert code == 0 and "published kittystory 1.1: 2 files, 24 bytes" in said
     assert hpm(world, store, "list")[1][0] == "kittystory 1.1  (adopted)"
 
 

@@ -7,7 +7,7 @@ steps were built. One file per fix; each says what went wrong, why, and what to 
 |---|---|---|
 | [01](01-init-overlapping-packages.md) | `hpm init` keeps manifests that share a file, and only `publish` finds out | **Built** 2026-10-24 |
 | [02](02-memory-line-double-tag.md) | The memory line ends with two version tags (`[hpm kittystory 1.0] [hpm kittystory 1.1]`) | **Built** 2026-10-24 |
-| [03](03-manifest-words-left-behind.md) | A new version keeps the manifest's old summary, memory line and requires | **Planned** 2026-10-24; proposals, not confirmed |
+| [03](03-manifest-words-left-behind.md) | A new version keeps the manifest's old summary, memory line and requires | **Built** 2026-10-24; its paid check waits for the user |
 | [04](04-adopt-records-no-extras.md) | An adopted app (the author's world after publish) records none of its extras | **Built** 2026-10-24 |
 | [05](05-docs-log-line.md) | The tutorial and checklist say hpm's AI writes no log line; it does | **Done** 2026-10-24; docs only |
 | [06](06-install-carries-clean-seeds.md) | A world that installed an app has no clean seeds, so publishing from it sends its used ones | **Planned** 2026-10-24; proposals, not confirmed |

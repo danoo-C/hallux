@@ -300,13 +300,15 @@ def init_job(name: str, card: str, memory_line: str | None) -> Job:
 
 
 def changelog_job(name: str, release: Path, added: list[str], changed: list[str],
-                  removed: list[str], version: str) -> Job:
+                  removed: list[str], version: str, manifest: str | None = None) -> Job:
     def listed(word: str, paths: list[str]) -> list[str]:
         return [f"{word}:"] + [f"  {p}" for p in paths[:200]] + (
             [f"  … and {len(paths) - 200} more"] if len(paths) > 200 else []) if paths else []
     text = "\n".join([f"{name}, from its last release to {version}.", ""]
                      + listed("Added", added) + listed("Changed", changed)
                      + listed("Removed", removed))
+    if manifest:
+        text += f"\n\nIts manifest for {version}, as it will be published:\n<<<\n{manifest.rstrip()}\n>>>"
     return Job("changelog", text, release=release)
 
 
