@@ -137,6 +137,7 @@ the review changed 9, 11 and 15.
 
 Fixes found after the build, from the user's own use, are planned in [fixes/](fixes/README.md).
 Colors for hpm's command line are planned in [colors/](colors/README.md).
+hpm's own config file is planned in [config/](config/README.md).
 
 ## What the review changed
 
