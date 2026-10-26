@@ -92,3 +92,5 @@ Confirmed by the user on 2026-10-21.
 | [3](03-apps.md) | `app.json`, `open_page`, `reload`, `close_page`, windows, `loaded` / `failed` / `closed` | **Built** 2026-10-21, 6406b5b |
 | [4](04-bridge.md) | `ask`, `reply`, `emit`, `tell`, errors, rate and time limits, `web.toml` | **Built** 2026-10-21, a9ba350 |
 | [5](05-manual-and-live-run.md) | The manual, the docs, the live run | **Built** 2026-10-22, committed; the live run is the user's: [live-run-checklist.md](live-run-checklist.md) |
+
+Fixes found after the build, from the user's own use, are planned in [fixes/](fixes/README.md).
