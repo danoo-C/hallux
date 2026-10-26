@@ -339,9 +339,11 @@ def test_scores_that_a_reader_of_the_manual_wrote_play(name, report):
     assert rendered.report() == report                    # between 50 and 100, as it advises
 
 
-def test_the_score_in_the_readme_plays():
-    readme = (Path(__file__).resolve().parent.parent / "README.MD").read_text(encoding="utf-8")
-    music = readme[readme.index("### The music addon"):readme.index("### Writing an addon")]
+def test_the_score_in_the_addons_guide_plays():
+    """The short score of the addons guide (docs/guide/addons.md), which the README links."""
+    guide = Path(__file__).resolve().parent.parent / "docs" / "guide" / "addons.md"
+    text = guide.read_text(encoding="utf-8")
+    music = text[text.index("## 3. The music addon"):text.index("## 4. Background jobs")]
     [text] = [block for block in re.findall(r"```text\n(.*?)```", music, re.S)
               if block.startswith("BPM")]
     read, rendered = play(text)
