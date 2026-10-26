@@ -4,9 +4,10 @@
 (the child) and [fix 01](01-dont-wait-for-the-window.md) (late answers)
 
 **Status:** planned 2026-10-26, from a read-only look at the user's report (the fixes'
-[README](README.md) has it). The user chose this fix; the decisions at the end are my
-proposals, not confirmed yet. **It begins with a check** (free, no model), because two
-things it rests on are not measured yet.
+[README](README.md) has it). The user chose this fix; the decisions at the end were my
+proposals, and the user's "okay, please do fix 2" took them as they are. **It begins with
+a check** (free, no model), because two things it rests on were not measured. **Built**
+2026-10-26 on branch `web-fixes`, after the check: see "As built" at the end.
 
 **Changes:** `addons/web.py` (`connect` starts the engine in a thread; a `warm` command in
 the child; one key in `addons/web.toml`), `tests/test_addon_web.py`,
@@ -42,6 +43,52 @@ by-hand run gives the cold numbers.
 
 The check decides decision 3 below (keep the warm page, or close it). If warming saves
 little, the fix stops there, written up in this file, and only fix 01 is built.
+
+### What the check found (2026-10-26, part 1: offscreen)
+
+A throwaway script (`warmcheck.py`, in the session's scratch folder; the project not
+touched) made, in a fresh process each time: a window with nothing before it (`none`); a
+warm page, kept, then a window (`keep`); a warm page, closed again, then a window
+(`close`). Three runs of each. The session's sandbox keeps it from the display, so it ran
+with `QT_QPA_PLATFORM=offscreen`; turning the sandbox off for it was refused.
+
+| | none | keep | close |
+|---|---|---|---|
+| Making the warm page (profile, page, `about:blank` loaded) | | 0.05 s | 0.05 s |
+| Making the window (what blocks the answer to `open`) | 0.04–0.05 s | 0.00 s | 0.00 s |
+| The window loaded | 0.09–0.14 s | 0.03 s | 0.03 s |
+| Memory with no window (the child and Chromium's processes) | 77 MB | 471 MB | 388 MB |
+| Memory with the window | 484 MB | 571 MB | 485 MB |
+
+- **The gain lasts when the warm page is closed:** Chromium's processes stay, and the
+  window after it was made at once. So decision 3: **close it.**
+- **What it costs:** about 310 MB while no window is open (388 against 77), from Hallux's
+  start to its end. With a window open it costs nothing more (485 against 484).
+- **Offscreen shows no slow start at all,** with warm caches: 0.05 s, where the user's logs
+  show more than 5 s. The slow part is what offscreen leaves out (the display, Wayland,
+  the GPU process in software) or cold caches. Part 2, on the real display, is the user's
+  to run.
+
+### Part 2: the real display (the user, 2026-10-26)
+
+The user ran `warmcheck.py none` in their own terminal, on WSLg, with warm caches:
+
+```text
+MESA: error: ZINK: failed to choose pdev
+{"scenario": "none", "platform": "wayland", "app_ready": 0.11, "rss_start": 79,
+ "window_built": 0.29, "window_loaded": 0.39, "rss_window": 604}
+```
+
+- **The display costs little:** 0.29 s for the first window, against 0.05 s offscreen. So
+  the 5 seconds and more in the logs are most likely **cold caches** after a restart of
+  the PC or WSL (Chromium's libraries and resources, some 265 MB, read from the disk), not
+  the display. Not measured: that needs a run right after `wsl --shutdown`.
+- **That is what warming at boot moves:** whatever the first window costs, the warm page
+  pays it first, in the background, during the boot (23 seconds on 2026-10-26) and the AI's
+  turns before `open_page`. Part 1 showed a window made after the warm takes no time.
+- **A window on the real display takes more memory,** 604 MB against 484 offscreen.
+- **The verdict:** built, with decision 3 as "close the warm page". The cold numbers come
+  from the user's by-hand try (the "Done when").
 
 ## What to build
 
@@ -104,3 +151,38 @@ My proposals, 2026-10-26; not confirmed yet.
 | 3 | **Keep or close the warm page: the check decides** | Keeping it costs memory all the time; closing it may lose the gain |
 | 4 | **On by default, `start_engine_at_boot = false` to turn it off** | The user's worlds use web apps often; the memory is the price, and it's one line to give it back |
 | 5 | **Not the AI's business:** nothing in the manual changes | The AI calls `open_page` as before; only the wait is shorter |
+
+## As built (2026-10-26)
+
+- **`connect(emit)`** starts the thread `_start_early` once (`_early`), when
+  `start_engine_at_boot` is on and `_can_show()`. A second `connect`, as the tests make,
+  starts nothing more.
+- **`_can_show()`:** stdin and stdout are terminals, `WAYLAND_DISPLAY` or `DISPLAY` is set,
+  and `QT_QPA_PLATFORM` isn't `offscreen` (the tests set it; nothing could be shown
+  there). Streams that are replaced or closed count as no terminal.
+- **`_start_early`** makes the `_Link` outside `_lock`. Then, holding it: if `_link` exists
+  (a call started its own meanwhile) or `stop()` ran since it began (`_stops`, a counter
+  `stop()` raises), it closes its child; otherwise it becomes `_link` and sends `warm`
+  through fix 01's `ask_or_later` with a zero wait, so the answer goes to a function that
+  writes the log line. A child that doesn't start is a warning in the log, and the first
+  `open_page` starts one as before.
+- **The child's `warm`:** a profile with the settings a window has off, an interceptor
+  that blocks everything (`Shut`), a page that loads `about:blank`, never shown, no
+  bridge, no scheme handler, no event. Once loaded, the page and then its profile are
+  deleted. It answers `ok` right after making them: making the first profile is what
+  starts Chromium, so the answer comes when the slow part is done.
+- **The log:** "the engine started at boot in N s", then "Chromium warmed in N s", both
+  counted from the thread's start; or a warning.
+- **Scripted runs:** hpm's test install runs `run_script` with no addons, so it starts
+  nothing. `hallux --script FILE` from a terminal loads the addons and passes
+  `_can_show()`, so it warms too: a second of work, ended with the run. `--script -` fed
+  through a pipe doesn't.
+- **Tests:** 6 new in `tests/test_addon_web.py`, and `test_web_toml` got the new key (59
+  in all): the start and the warm with a stand-in child (`boot_child`, which writes each
+  child's process number), `stop()` while the child is still starting, a call during the
+  start, nothing without a display or with the setting off, `_can_show()` itself, and the
+  real engine's `warm` with a window after it (and the `trap` server untouched). All 7 fail
+  with fix 01's `web.py` and pass with this one. The whole suite: 2405 passed; the one
+  failure is the hpm test fix 01's "As built" names, not this fix's.
+- **Not checked:** a real start in a terminal, on a display: the session's sandbox keeps it
+  from the display. That and the cold numbers are the user's try in "Done when".

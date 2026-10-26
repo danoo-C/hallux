@@ -4,8 +4,9 @@
 (the child) and [step 3](../03-apps.md) (`open_page`)
 
 **Status:** planned 2026-10-26, from a read-only look at the user's report (the fixes'
-[README](README.md) has it and the logs). The user chose this fix; the decisions at the
-end are my proposals, not confirmed yet.
+[README](README.md) has it and the logs). The user chose this fix, and said "create the
+new branch and start the fixes" without a word on the decisions at the end: built with
+them as proposed. **Built** 2026-10-26 on branch `web-fixes`: see "As built" at the end.
 
 **Changes:** `addons/web.py` (the addon's side only: `open_page`, `_Link`, the other
 functions' check for a page still opening, the manual in `prompt()`),
@@ -128,3 +129,36 @@ My proposals, 2026-10-26; not confirmed yet.
 | 3 | **60 seconds, then a loud `failed`** and a `close` for the window | A window that never comes must not wait in silence (the user's "fail loudly"); 60 is far beyond the 9.1 seconds of a first start ever measured |
 | 4 | **"Still opening" at once,** for every function but `stop()` and `open_page` | Asking would only time out after 2 seconds with a less clear error |
 | 5 | **No change in the child** | It can't answer while it builds the window; everything it sends already says enough |
+
+## As built (2026-10-26)
+
+- **`_Link.ask_or_later(message, seconds, later)`** is the one new way to ask: it waits as
+  `ask` does, and on a timeout looks into the queue once more under `late_lock`; if the
+  answer still isn't there, `later(seq)`, called under that lock, returns the function that
+  takes the answer. `_read` gives an answer whose seq is in `late` to that function, outside
+  the lock, and queues the rest. Fix 02's `warm` can use it as it is.
+- **The timeout is an error of its own,** `_NoAnswer`, a `WebError` with the same words, so
+  `ask_or_later` tells it from a child that is gone. `ask` still raises it as before.
+- **`window_later(name, folder, seq)`** puts the page in `pages` and `opening`, and starts the
+  timer, all under `late_lock`, so the late answer can't come before the page is marked.
+- **`_never_opened`** (the 60 seconds) takes `_lock`, then `late_lock`, the same order as every
+  call; it drops the page's entry in `late`, so a window that comes after all has its answer
+  dropped, and sends `close` with a zero wait through `ask_or_later`. The event says "the
+  window didn't open within 60 seconds".
+- **The "still opening" check is in `_folder_of`,** which `reload`, `reply`, `tell` and
+  `close_page` already call: one place.
+- **The log:** the addon writes to `hallux.web`, under Hallux's own logger, so its lines land
+  in the world's `hallux.log`: "the window takes longer than 5 s; it is starting", then
+  "the window came after N s", or a warning when it failed or never came. No addon logged
+  before; it uses only Python's `logging`, nothing of Hallux.
+- **One test of the plan was wrong:** "the window the user closes while it is still
+  opening" can't happen with the real child: Qt's thread is busy making the window, so the
+  user's close comes after the answer. The test sends `closed` just before the late answer
+  instead, and the code handles both orders.
+- **Tests:** 7 new in `tests/test_addon_web.py` (53 in all), six with a stand-in child that
+  is slow to make its window (`slow_child`), and one with the real engine, given 1 ms to make
+  its window. All 7 fail with the old `web.py` and pass with the new. The whole suite: 2399
+  passed; one failure is not this fix's: `test_hpm_store.py::test_the_store_is_found_from_the_three_variables`
+  reads the user's real `~/.config/hallux/hpm.toml` (its `store_home({...})` names no
+  `HPM_CONFIG`), which exists since 2026-10-25.
+- **Not checked:** a real cold start. That is the user's try in "Done when".

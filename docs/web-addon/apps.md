@@ -236,7 +236,10 @@ document:
   path climbs out of the app; `/` is `index.html`, `folder/` is `folder/index.html`.
 - **The time limit of an `ask`** (decision 5) lives in `addons/web.toml`,
   `ask_timeout_seconds`, from 10 to 3600, 120 without the file. A bad file keeps the addon
-  from loading, with the reason.
+  from loading, with the reason. **Since [fix 02](../plans/web-addon/fixes/02-start-the-engine-early.md)
+  (2026-10-26)** it also has `start_engine_at_boot`, true by default: the engine starts
+  and warms Chromium while Hallux boots, for about 310 MB while no window is open; `false`
+  starts it at the first `open_page`, as before.
 - **`reply` and `tell` take any JSON value,** as a string, not only an object: a reply is
   often one string. At most 3800 characters of JSON each way. `reply` says why an ask can't
   be answered: answered already, timed out, never made, or the page reloaded or closed.
@@ -246,6 +249,11 @@ document:
 - **`open_page` returns at once,** `{"page": name}`, or `{"page": name, "open": "already"}`
   when the app is open; `loaded` or `failed` follows as an event. A refused navigation and
   a window the user closed are not failures; the user's close is a `closed` event.
+  **Since [fix 01](../plans/web-addon/fixes/01-dont-wait-for-the-window.md) (2026-10-26):**
+  a window the engine hasn't made within 5 seconds (the first one starts Chromium) returns
+  `{"page": name, "starting": true}` instead of failing; its `loaded` or `failed` follows
+  as for any window, and a window that hasn't come in 60 seconds is a `failed` event. Until
+  then `reload`, `reply`, `tell` and `close_page` say the page is still opening.
 - **The manual** (`prompt()` in `addons/web.py`) has the cost table of section 3, how to
   build for a slow backend, the card as the backend's code (section 7), that what a page
   sends is data, no network, and a short example app. A test runs that example as the

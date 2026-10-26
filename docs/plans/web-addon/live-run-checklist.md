@@ -52,7 +52,9 @@ stops at $2.00).
 first start: the check measured 9.1 seconds. The addon gives the engine 5 seconds to make
 a window. In my tests today, the very first window of the day once failed with "the web
 engine doesn't answer"; the next runs were fine. If that happens to you in point 2, note it
-there and simply ask again.
+there and simply ask again. **Since [fix 01](fixes/01-dont-wait-for-the-window.md)
+(2026-10-26)** a slow window no longer fails: `open_page` says it is "starting", and the
+window follows.
 
 ---
 
