@@ -1,7 +1,13 @@
 # Sharing packages with friends
 
-**Status:** proposed 2026-10-23. No code, no plan. It builds on [hpm.md](hpm.md) (packages,
-the store on your PC, publishing) and [migrations.md](migrations.md).
+**Status:** design declared done by the user 2026-10-23, and **built** the same day, public
+stores only ([docs/plans/hpm/](../plans/hpm/README.md), step 8; [As built](#as-built) at the
+end). Its run with a real GitHub account is the user's, still to do. Every question is decided, all as
+recommended ([Decisions](#decisions)). It builds on [hpm.md](hpm.md) (packages, the store on
+your PC, publishing) and [migrations.md](migrations.md). Changed after the review of
+2026-10-23 ([docs/hpm-review-2026-10-23.md](../hpm-review-2026-10-23.md), taken as
+recommended): where your store's clone is kept, which address a friend adds, public stores
+only at first, and a check at install that needs no AI.
 
 **Where it came from:** of three levels offered (only your PC; friends; a public store
 anyone can use), the user chose **level 2, friends**. A public store is left for later
@@ -55,8 +61,15 @@ latest = "1.0"
 ```
 
 **Who can see it.** A public repository can be read by anyone who has the link. A private
-one only by people you add on GitHub; they then sign in once (`gh auth login`) and hpm uses
-that. Which to use is open question 1.
+one only by people you add on GitHub; they would sign in once (`gh auth login`) and hpm
+would download through `gh`. Which to use is decision 1: public. The first version reads
+public stores only; reading a private one through `gh` comes when someone needs it.
+
+**The address a friend adds** is the repository's, as they would copy it from the browser
+(`https://github.com/<you>/hpm-store`). hpm asks GitHub for the repository's main branch
+and reads `index.toml` from there. GitHub serves such files from a cache for a few minutes,
+so right after a push a friend may still see the index as it was; a refresh a little later
+shows the new one.
 
 **More than one store.** You can add a friend's store as they add yours, and a group can
 share one store where everyone sends packages as a pull request and one person merges them.
@@ -79,8 +92,11 @@ hpm push kittystory            → to your GitHub store
 3. **Checks the card**, if the AI hasn't reviewed this version yet (section 4). What it
    finds is shown, and you decide whether to push anyway.
 4. Makes a GitHub release `kittystory-1.4` with the archive, through `gh`, and adds the
-   version to `index.toml` with its checksum.
-5. Says what it pushed, and the line a friend needs to add the store.
+   version to `index.toml` with its checksum. The index is changed in a clone of your store
+   that `hpm store init` made on your PC (`mine/danika/` in hpm's folder), then committed
+   and pushed with `git`.
+5. Says what it pushed, the line a friend needs to add the store, and that GitHub may
+   show the old index for a few minutes.
 
 A version that was pushed is never changed. A wrong release is followed by a fixed one
 (1.4.1), and `hpm yank kittystory 1.4` marks the bad one in the index, so nobody installs it
@@ -99,7 +115,9 @@ your chat history, the things the machine knows about you.
 - **`seed` files are looked at too.** kittystory's `state.json` is a seed of the app, but in
   your world it holds your chat. hpm.md, section 5 publishes what is in the world, so the AI
   is asked at `hpm init` for a clean seed (a first state with no chat), and publish warns
-  when a seed is far bigger than the one before.
+  when a seed is far bigger than the one before. Install puts a copy of each release's
+  seed beside the manifest too (`/usr/local/share/hpm/<name>/seed/`), so a world that
+  installed the app and publishes it sends that clean copy, not its own used one.
 
 ## 4. Packages are instructions to the AI
 
@@ -114,8 +132,12 @@ copied card is enough.
 - **At publish, the AI reviews the card** and lists anything that reaches beyond the app:
   files outside the package's own paths, changes to the world's rules, the machine's memory
   or other programs' cards. The review is saved with the release and shown to whoever
-  installs it.
-- **Rules are loud.** A package that carries rules (hpm.md, open question 5) says so in red
+  installs it. It was made at the publisher's end, which is fine between friends.
+- **At install, hpm's own code checks what needs no AI,** at the installer's end: a package
+  that writes a file the machine reads at every boot (`/etc/passwd`, `/etc/motd`,
+  `/etc/hostname`, `.bashrc` and the rest of `BOOT_FILES` in `hallux/disk.py`) or another
+  program's card in `/usr/local/bin` is shown loudly on the install screen, as rules are.
+- **Rules are loud.** A package that carries rules (hpm.md, decision 5) says so in red
   on the install screen.
 - **A package can only write what its manifest lists**, and never into `/.hallux` (except
   the memory line and the world's record, which Hallux's code writes). This is enforced by
@@ -128,8 +150,9 @@ copied card is enough.
 
 ## 5. Names
 
-In a friend's world, packages are named by store: `danika/kittystory`. `hpm install
-kittystory` works when only one store has the name, and asks otherwise. The world's record
+In a friend's world, packages are named by store: `danika/kittystory`, and `danika/` alone
+means every package of the store (hpm.md section 6a). `hpm install kittystory` works when
+only one store has the name, and asks otherwise. The world's record
 remembers which store a package came from, so `hpm update` takes the next version from the
 same store.
 
@@ -140,12 +163,40 @@ server, logins, and handling of abuse, which section 4 shows is a real concern f
 that are instructions to an AI. It is left until stores on GitHub have shown that people
 share packages.
 
-## Open questions
+## Decisions
 
-| Question | Recommendation |
+All decided as recommended (the user, 2026-10-23: "i read trogh the questions and go all
+recommended").
+
+| Question | Decision |
 |---|---|
 | 1. Is your store public or private on GitHub? | **Public**, with the link only given to friends: no sign-in for them. Private if a package ever must not be seen by others |
 | 2. Do archives go in GitHub releases, or into the repository itself? | **Releases**: the repository stays small, and a version can't be changed by accident |
 | 3. Is `gh` (GitHub's command line) needed, or does hpm talk to GitHub itself? | **`gh`** for pushing; reading a public store needs nothing but downloads |
 | 4. Is the AI's review of a card a hard stop? | No, it is shown, and you decide. It is also shown to whoever installs |
 | 5. Does a store name have to be your GitHub name? | No, you choose it when you make the store (`hpm store init danika`) |
+
+## As built
+
+Built 2026-10-23 in `hallux/hpm/remote.py` and the store, the engine, the command and the
+Packages tab; plan step 8's "As built" has the details. What the code does differently from
+this document:
+
+- **The commands:** `hpm store init NAME --repo OWNER/REPO`, `hpm store add NAME ADDRESS`,
+  `hpm store list | remove NAME | refresh [NAME]`, `hpm push NAME… [--all]`, `hpm yank NAME
+  VERSION`. `--store S` picks one of your stores if you have several.
+- **Your store's clone** is `mine/<name>/` with `mine/<name>.toml` naming its repository; a
+  friend's store is `stores/<name>/` (`index.toml`, `source.toml`).
+- **The index** keeps `sha256` as bare hex and `latest` as the newest version that isn't
+  yanked; one GitHub release and one commit of the index per package pushed.
+- **A friend's archive** downloads when it is first needed, into `cache/`, and is checked
+  against the index's sha256 and its own name and version every time it is used. Extras
+  come from the same store as their app, else from your own.
+- **An index older than an hour** is refreshed by `install`, `update` and `search`; one that
+  can't be reached is used as it was, with a note.
+- **Push** refuses private packages and a version pushed already, shows the review made at
+  publish, can have the AI make one when there is none (`--review`, in a world), and pushes
+  a card whose review found something only on yes (`--yes`).
+- **The Packages tab** shows a friend's packages once downloaded (`danika/kittystory`);
+  `R` downloads them in a thread, so the tab never waits on the network.
+- **Not built:** reading a private store through `gh`, and `hpm show` of a friend's package.

@@ -184,6 +184,9 @@ class Disk:
         self.hidden = self.root / HIDDEN_NAME
         self.memory_file = self.hidden / "memory.md"
         self.cwd = cwd
+        # The memory is edited by the AI's tools and, from a thread of its own, by the panel's
+        # Packages tab (hpm): one at a time, so neither edit is lost.
+        self._memory_lock = threading.Lock()
 
     # ------------------------------------------------------------------ paths
 
@@ -414,10 +417,14 @@ class Disk:
         return {"text": self.memory_file.read_text(encoding="utf-8") if exists else ""}
 
     def memory_edit(self, old: str, new: str) -> dict:
-        text = self.memory_read()["text"]
-        text = replace_once(text, old, new) if old else text + new
-        self.hidden.mkdir(exist_ok=True)
-        temp = self.memory_file.with_suffix(".tmp")
-        temp.write_text(text, encoding="utf-8", newline="")
-        os.replace(temp, self.memory_file)        # atomic: a crash never leaves half a memory
+        return self.memory_change(lambda text: replace_once(text, old, new) if old else text + new)
+
+    def memory_change(self, change: Callable[[str], str]) -> dict:
+        """Read the memory, change it and write it back, with nobody else in between."""
+        with self._memory_lock:
+            text = change(self.memory_read()["text"])
+            self.hidden.mkdir(exist_ok=True)
+            temp = self.memory_file.with_suffix(".tmp")
+            temp.write_text(text, encoding="utf-8", newline="")
+            os.replace(temp, self.memory_file)    # atomic: a crash never leaves half a memory
         return {"ok": True, "size": len(text)}

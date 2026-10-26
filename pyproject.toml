@@ -32,6 +32,7 @@ web = [
 
 [project.scripts]
 hallux = "hallux.app:main"
+hpm = "hallux.hpm.cli:main"            # the package manager, docs/hpm/
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -43,3 +44,4 @@ include = ["hallux*"]
 
 [tool.setuptools.package-data]
 hallux = ["prompt.md", "agent.md", "prompt_jobs.md"]
+"hallux.hpm" = ["prompts/*.md"]          # hpm's AI jobs: init, changelog, merge, review

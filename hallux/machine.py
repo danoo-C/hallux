@@ -29,6 +29,7 @@ from hallux.addons import Addon, Events, stop_all
 from hallux.agents import Job, JobEvent, Jobs, Session, Worker, shared_options
 from hallux.config import Hardware
 from hallux.disk import Disk
+from hallux.hpm.running import Installs
 from hallux.importing import Imports, Note
 from hallux.passwords import Passwords
 from hallux.protocol import (
@@ -169,6 +170,15 @@ def imported_block(notes: Sequence[Note]) -> str:
         for note in notes)
 
 
+def installed_block(notes: Sequence[dict]) -> str:
+    """What the panel's Packages tab (hpm) installed or removed since the AI's last answer,
+    as one <installed> on a line of its own, in front of a message. Nothing, without notes.
+    Its names come from packages, from outside the machine: they go in the body, as JSON."""
+    if not notes:
+        return ""
+    return envelope("installed", json_body({"packages": list(notes)})) + "\n"
+
+
 class Machine:
     def __init__(self, root: Path, hardware: Hardware, terminal: Terminal,
                  client_factory: Callable[..., ClaudeSDKClient] = ClaudeSDKClient,
@@ -216,6 +226,8 @@ class Machine:
         # front of its next message. A walk or a copy that changes what the tab shows has the
         # terminal draw it again.
         self.imports = Imports(self.disk, changed=lambda: self.terminal.refresh())
+        # What the panel's Packages tab installs (hpm, docs/hpm/): the same, for packages.
+        self.installs = Installs(self.disk, changed=lambda: self.terminal.refresh())
 
     # ---------------------------------------------------------------- for hallux's own panel
 
@@ -318,7 +330,8 @@ class Machine:
                 log.info("reboot")
         finally:
             self.imports.close()                 # a copy that runs is stopped: nothing of
-            self.terminal.stop()                 # the user's is written once Hallux is off
+            self.installs.close()                # the user's is written once Hallux is off
+            self.terminal.stop()
 
     async def power_on(self) -> bool:
         """One boot-to-shutdown lifetime. Returns True if the machine wants to reboot."""
@@ -327,6 +340,7 @@ class Machine:
         self.jobs.new_boot()
         self.forget_events()
         self.imports.forget()                    # the copies before it are the old session's
+        self.installs.forget()                   # and the packages: the memory has them now
         for reason in ("event_budget_usd", "max_budget_usd", "model"):
             self.note(reason, None)              # a new boot: nothing spent, heard or waiting
         # What runs, which the bar shows: the settings the session starts with, and of the
@@ -823,7 +837,8 @@ class Machine:
         In front of that block go the notes of the copies the user made from the panel since
         the last answer, as <imported>, in front of a message of any kind. They are told as
         the job events are. A boot carries only a copy that ended while its session started:
-        power_on forgets the ones from before.
+        power_on forgets the ones from before. The packages the Packages tab installed or
+        removed go the same way, as <installed>, after the copies.
 
         A message the model fails on ends a full-screen program, so that nobody is stuck in
         it. With `stay` it doesn't, and None comes back: the message was one that nobody at
@@ -833,18 +848,19 @@ class Machine:
         comes back as it is, nothing of it shown, and the caller's loop puts the program
         back."""
         notes = self.imports.waiting()
+        installed = self.installs.waiting()
         if carried is None:
             carried = [] if tag == "boot" else self.jobs.waiting()
             front = events_block(carried)
         else:
             front = ""
         text, interrupted = await self.exchange(
-            client, imported_block(notes) + front + self.envelope(tag, body, **attrs),
-            activity, fatal)
+            client, imported_block(notes) + installed_block(installed) + front
+            + self.envelope(tag, body, **attrs), activity, fatal)
         if interrupted:                          # Ctrl-C while the AI was working: nothing of
             carried = self.jobs.waiting()        # that answer was shown, so they go again
             text, _ = await self.exchange(
-                client, imported_block(notes) + events_block(carried)
+                client, imported_block(notes) + installed_block(installed) + events_block(carried)
                 + self.envelope("key", "", name="C-c", interrupted="yes"), activity, fatal)
         if text is None:                         # the model failed; the error is reported
             if fatal:
@@ -855,6 +871,7 @@ class Machine:
             return Reply(screen="", prompt=None, halt=halt_on_error)
         self.jobs.told(carried)
         self.imports.told(notes)
+        self.installs.told(installed)
         reply = parse(text)
         shown = self.stream.shown if self.stream else ""
         self.apply_writes(reply, new_machine)

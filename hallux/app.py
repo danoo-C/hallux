@@ -55,6 +55,19 @@ def main() -> None:
     except ValueError as e:
         sys.exit(f"hallux: {e}")
 
+    # The world is marked as running while this process runs it, whichever way it ends, so
+    # that hpm in your terminal doesn't write into it (docs/hpm/hpm.md, section 10). A hard
+    # kill leaves the mark; hpm sees then that its process is gone.
+    from hallux.hpm.world import mark_running, unmark_running
+    mark = mark_running(root)
+    try:
+        _run(root, hardware, flags, headless)
+    finally:
+        unmark_running(root, mark)
+
+
+def _run(root: Path, hardware: Hardware, flags: argparse.Namespace, headless: bool) -> None:
+    """One run of a machine, once its settings are read: headless, or in your terminal."""
     _log_to(root)
     log.info("power on: %s", hardware)
     events = addons.Events()                    # what the addons report, for the whole run
@@ -78,18 +91,25 @@ def main() -> None:
     machine = Machine(root, hardware, terminal, addons=attached, events=events,
                       from_flags=from_flags)
     from hallux.panel import Panel              # hallux's own panel, opened with Ctrl+F12:
-    from hallux.panel_tabs.agents import AgentsTab      # four tabs, around the machine
+    from hallux.panel_tabs.agents import AgentsTab      # five tabs, around the machine
     from hallux.panel_tabs.config import ConfigTab
     from hallux.panel_tabs.details import DetailsTab
     from hallux.panel_tabs.files import FilesTab
+    from hallux.panel_tabs.packages import PackagesTab
     settings = ConfigTab(machine.view, machine.change, machine.save, machine.refill,
                          agents=any(addon.agent for addon in attached))    # their six rows
     watching = [tab(machine.jobs.watch, machine.jobs.kill) for tab in (AgentsTab, DetailsTab)]
     imports = machine.imports
     files = FilesTab(imports.watch, imports.drop, imports.reads, imports.start, imports.stop,
                      imports.clear)
-    terminal.set_panel(Panel([*watching, files, settings], bar=bar, power_cut=terminal.power_cut,
-                             ctrl_c=terminal.count_ctrl_c))
+    installs = machine.installs                 # hpm, in the world you are in (docs/hpm/)
+    packages = PackagesTab(installs.watch, installs.catalog, installs.installed,
+                           installs.plan_install, installs.plan_remove, installs.go,
+                           installs.stop, installs.back, installs.migration_go,
+                           installs.migration_cancel, installs.refresh, installs.unfetched,
+                           installs.store_notes)
+    terminal.set_panel(Panel([*watching, files, packages, settings], bar=bar,
+                             power_cut=terminal.power_cut, ctrl_c=terminal.count_ctrl_c))
     try:
         asyncio.run(machine.run())
     except Exception as e:                      # the SDK or the CLI failed: "hardware" error

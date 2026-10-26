@@ -156,7 +156,7 @@ same machine back.
 | Typing, arrows, Backspace, Home/End, ↑/↓ | Line editing, handled instantly by the terminal |
 | Ctrl-C, Ctrl-D, Ctrl-Z, Ctrl-L, Ctrl-R, Tab, F1–F12, … | Sent to the machine, which reacts like bash or the running program would |
 | Ctrl-Z in a full-screen program, then `fg` | The program is put aside with its screen and everything typed into it, and the shell is back. `fg` brings it back as it was, `jobs` lists what is suspended, and `kill %1` ends it |
-| **Ctrl+F12** | Opens Hallux's own panel, over the shell or a full-screen program: the settings in its Config tab, the background jobs in its Agents and Details tabs, and the files you drag onto the window in its Files tab. Esc or Ctrl+F12 closes it. The key never reaches the machine |
+| **Ctrl+F12** | Opens Hallux's own panel, over the shell or a full-screen program: the settings in its Config tab, the background jobs in its Agents and Details tabs, the files you drag onto the window in its Files tab, and hpm's packages in its Packages tab. Esc or Ctrl+F12 closes it. The key never reaches the machine |
 | **Ctrl+Shift+Del**, or **Ctrl-C three times within a second** | Hard power-off: Hallux quits immediately, whatever the AI is doing |
 
 ### The `hallux` command
@@ -195,6 +195,47 @@ directory the shell is in. Enter copies it.
 - **It works on the computer the window is on.** The terminal sends a path, not the file,
   so a drop over ssh can't work, and neither can anything that has no path, such as a
   picture dragged out of a browser. A Windows path (`C:\…`, `\\wsl$\…`) is translated.
+
+### Packages: `hpm`
+
+`hpm` moves the programs you build in one world into any other, yours or a friend's, without
+asking the machine for an install file each time. A package is a program's files plus a small
+manifest, `hpm.toml`, that says which files are the app and which are your data. There is one
+store on your PC, above every world (`~/.local/share/hallux/hpm/`, or the folder
+`hpm config set store PATH` names in `~/.config/hallux/hpm.toml`).
+
+```bash
+.venv/bin/hpm init kittystory                 # in the world it was built in: the AI drafts the manifest
+.venv/bin/hpm publish kittystory --all        # a release into the store on your PC, with its extras
+.venv/bin/hpm install kittystory --world ~/hallux-distros/oliver-test     # checkboxes for its extras
+.venv/bin/hpm update                          # in a world: everything with a newer version
+.venv/bin/hpm list                            # what this world has, and what is newer
+.venv/bin/hpm rollback kittystory             # undo its last install, update or remove
+```
+
+(`.venv/bin/hpm` is there after `python install.py`; run it again if it isn't, or use
+`.venv/bin/python -m hallux.hpm`.) Without `--world`, hpm works on the world you are in.
+
+- **Nothing of yours is overwritten unasked.** A file in the way is asked about: overwrite,
+  skip, keep both, or, for a memory file, merge (by the AI, and refused if it loses a line).
+  An update never touches your data. Every write is backed up first, and `hpm rollback`
+  undoes it.
+- **A running world is changed from its Packages tab:** Ctrl+F12, then `g`. The same
+  checkboxes and questions; the machine is told with your next line what was installed.
+  From your terminal, hpm refuses a running world.
+- **When an app changes how it stores its data,** its new version brings a note, and the
+  AI migrates your data with it: a plan you see first, the new files written to one side,
+  checks, and nothing changes until you accept. `hpm rollback` brings back the old data and
+  the old version together.
+- **Friends:** `hpm store init NAME --repo you/hpm-store` makes your store on GitHub (with
+  `gh`), `hpm push kittystory` sends a release there, and a friend runs `hpm store add NAME
+  https://github.com/you/hpm-store` and `hpm install NAME/kittystory`. A package marked
+  private (memories, a chat) never leaves your PC.
+- **The AI's parts cost money and ask first** (`init`, a changelog draft, a card's review, a
+  merge, a migration), with the model and the cap of the store's `config.toml` (default:
+  the world's model, effort medium, at most $1.00 a session).
+
+New to it? [docs/hpm/tutorial.md](docs/hpm/tutorial.md) walks through it from zero. The design and how it was built: [docs/hpm/](docs/hpm/README.md).
 
 ## Addons
 
@@ -547,8 +588,10 @@ hallux/
   statusbar.py       the bottom status row
   panel.py           Hallux's own settings panel (Ctrl+F12): the host with its tab row
   panel_tabs/        the panel's tabs, one file each: agents.py, details.py, files.py,
-                     config.py
+                     packages.py, config.py
   importing.py       files dragged onto the window: reading the drop, the tree, the copy
+  hpm/               the package manager: manifest, archive, store, engine, migrations,
+                     friends' stores on GitHub, its AI's session and prompts
   disk.py, tools.py  the path jail and the agent's tools
   addons.py          loading addons, calling their functions, their events
   agents.py          the addons' agents: the background jobs, their caps and their sessions
@@ -587,6 +630,7 @@ and persistence, is checked with `--check reboot` and `--script`.
   their events
 - [docs/addon-music.md](docs/addon-music.md): the music addon and its score format
 - [docs/addon-agents.md](docs/addon-agents.md): addon agents, background jobs and job control
+- [docs/hpm/](docs/hpm/README.md): hpm, the package manager: packages, migrations, sharing
 
 ## License
 

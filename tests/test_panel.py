@@ -296,7 +296,7 @@ def test_opening_starts_fresh():
 
 
 def test_two_tabs_with_the_same_first_letter_are_refused():
-    with pytest.raises(ValueError, match="same letter: Config and Costs"):
+    with pytest.raises(ValueError, match="the same key, c: Config and Costs"):
         Panel([StandIn("Agents"), StandIn("Config"), StandIn("Costs")])
 
 

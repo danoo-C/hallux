@@ -170,6 +170,7 @@ There are three kinds of commands:
    |-- .hallux/memory.md           what the machine is + hallux rules
    |-- .hallux/config.toml         model + effort (the machine can't see it)
    |-- .hallux/passwords.json      password hashes (the AI never sees a password)
+   |-- .hallux/hpm/                what hpm installed, and its backups (docs/hpm/)
    |-- etc/hostname, etc/os-release
    |-- home/user/.bashrc           PS1="cow daysi moo> ", aliases
    |-- home/user/fib.py            your files
