@@ -17,6 +17,7 @@ import contextlib
 import errno
 import importlib.util
 import json
+import logging
 import os
 import posixpath
 import queue
@@ -35,6 +36,7 @@ CHILD = [sys.executable, os.path.abspath(__file__), "--child"]
 START_SECONDS = 9.0                    # for the child to say hello; Hallux gives a call 10
 ANSWER_SECONDS = 2.0                   # for the child to answer one message
 OPEN_SECONDS = 5.0                     # to send an app of up to 10 MB and make its window
+OPENING_SECONDS = 60.0                 # a window still not made: it failed (fixes/01)
 CRASH_LINE_MAX = 200                   # characters of the child's last line, in an error
 SYSTEM_FONTS = "/etc/fonts/fonts.conf"
 
@@ -72,21 +74,28 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web.toml
 ASK_TIMEOUT = (10, 3600, 120)          # seconds a page waits for reply: least, most, default
 
 
+log = logging.getLogger("hallux.web")    # into Hallux's own log
+
+
 class WebError(Exception):
     """What the AI is told when the web engine can't do what was asked."""
+
+
+class _NoAnswer(WebError):
+    """The child is there, but its answer didn't come in time."""
 
 
 def read_config(path: str = CONFIG_FILE) -> dict:
     """addons/web.toml, if the user wrote one. A bad one stops the addon from loading: the
     status bar then says why."""
     if not os.path.exists(path):
-        return {"ask_timeout_seconds": ASK_TIMEOUT[2]}
+        return {"ask_timeout_seconds": ASK_TIMEOUT[2], "start_engine_at_boot": True}
     try:
         with open(path, "rb") as file:
             config = tomllib.load(file)
     except (OSError, tomllib.TOMLDecodeError) as e:
         raise WebError(f"addons/web.toml can't be read: {e}") from None
-    unknown = sorted(set(config) - {"ask_timeout_seconds"})
+    unknown = sorted(set(config) - {"ask_timeout_seconds", "start_engine_at_boot"})
     if unknown:
         raise WebError(f"addons/web.toml: unknown key {unknown[0]}")
     seconds = config.get("ask_timeout_seconds", ASK_TIMEOUT[2])
@@ -94,7 +103,10 @@ def read_config(path: str = CONFIG_FILE) -> dict:
             or not ASK_TIMEOUT[0] <= seconds <= ASK_TIMEOUT[1]):
         raise WebError(f"addons/web.toml: ask_timeout_seconds must be a whole number from "
                        f"{ASK_TIMEOUT[0]} to {ASK_TIMEOUT[1]}")
-    return {"ask_timeout_seconds": seconds}
+    at_boot = config.get("start_engine_at_boot", True)
+    if not isinstance(at_boot, bool):
+        raise WebError("addons/web.toml: start_engine_at_boot must be true or false")
+    return {"ask_timeout_seconds": seconds, "start_engine_at_boot": at_boot}
 
 
 def prompt() -> str:
@@ -107,7 +119,10 @@ backend, and its folder is its database.
 THE FUNCTIONS (call addon_listen("web") before the first open_page)
 - open_page(folder): opens the app in that folder in a window of its own. Returns
   {"page": name} at once; the page being ready arrives later as an event. If it is open
-  already, its window comes to the front, unchanged: reload shows changes.
+  already, its window comes to the front, unchanged: reload shows changes. It may return
+  "starting": true: the web engine is still starting, and the window follows in a few
+  seconds; its loaded or failed event tells you how it went. Nothing failed. Until then
+  the page's other functions say it is still opening.
 - reload(page): reads the app's files again and loads the page again.
 - close_page(page): closes one window. stop(): closes them all.
 - reply(page, id, data): answers the page's ask number id; data is JSON, as a string.
@@ -204,6 +219,8 @@ def open_page(disk, folder: str) -> dict:
     name = app["name"]
     with _lock:
         link = _child()
+        if name in link.opening:
+            return {"page": name, "starting": True}
         if name in link.pages:
             answer = link.ask({"cmd": "raise", "app": name})
             if "error" not in answer:
@@ -212,10 +229,17 @@ def open_page(disk, folder: str) -> dict:
         if len(link.pages) >= PAGES_MAX:
             raise WebError(f"{PAGES_MAX} pages are open already "
                            f"({', '.join(sorted(link.pages))}): close one first")
-        answer = link.ask({"cmd": "open", "app": name, "files": files,
-                           "title": f"{app['title']} \u2014 hallux", "size": app["size"],
-                           "ask_timeout": _config["ask_timeout_seconds"]},
-                          OPEN_SECONDS)
+        # The first window starts Chromium, which can take longer than a call may wait. Then
+        # the page is "starting", and its answer is taken when it comes (fixes/01).
+        answer = link.ask_or_later(
+            {"cmd": "open", "app": name, "files": files,
+             "title": f"{app['title']} \u2014 hallux", "size": app["size"],
+             "ask_timeout": _config["ask_timeout_seconds"]},
+            OPEN_SECONDS, later=lambda seq: link.window_later(name, folder, seq))
+        if answer is None:
+            log.info("web %s: the window takes longer than %g s; it is starting", name,
+                     OPEN_SECONDS)
+            return {"page": name, "starting": True}
         if "error" in answer:
             raise WebError(answer["error"])
         link.pages[name] = folder
@@ -233,7 +257,7 @@ def reload(disk, page: str) -> dict:
                        f"close_page it and open_page it again")
     with _lock:
         link = _child()
-        _folder_of(page)                              # still open
+        _folder_of(page)                              # still open, and not opening
         answer = link.ask({"cmd": "reload", "app": page, "files": files}, OPEN_SECONDS)
         if "error" in answer:
             link.pages.pop(page, None)
@@ -278,8 +302,9 @@ def tell(page: str, data: str) -> dict:
 
 def stop() -> dict:
     """Close every web window. Nothing happens if none is open."""
-    global _link
+    global _link, _stops
     with _lock:
+        _stops += 1                                   # an engine starting at boot isn't kept
         if _link is not None:
             _link.close()
             _link = None
@@ -290,14 +315,59 @@ EXPOSED = [open_page, reload, close_page, reply, tell, stop]
 
 
 def connect(emit) -> None:
-    """Hallux hands over emit: what happens in a page goes through it."""
-    global _emit
+    """Hallux hands over emit: what happens in a page goes through it. It is also the
+    moment Hallux starts: the engine starts then too, in the background (fixes/02)."""
+    global _emit, _early
     _emit = emit
+    if _early is None and _config["start_engine_at_boot"] and _can_show():
+        _early = threading.Thread(target=_start_early, name="web engine at boot", daemon=True)
+        _early.start()
+
+
+def _can_show() -> bool:
+    """A window could be shown here: Hallux runs in a terminal, on a display. Not in the
+    tests, nor in a run fed through a pipe."""
+    has_display = bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"))
+    offscreen = os.environ.get("QT_QPA_PLATFORM") == "offscreen"
+    try:
+        terminal = sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):              # replaced or closed streams
+        terminal = False
+    return terminal and has_display and not offscreen
+
+
+def _start_early() -> None:
+    """Start the child and have it warm Chromium, so the first window doesn't wait for
+    either. The child is made outside _lock: a call or stop() never waits for its hello."""
+    global _link
+    started, stops = time.monotonic(), _stops
+    try:
+        link = _Link()
+    except WebError as e:
+        log.warning("web: the engine didn't start at boot: %s", e)
+        return
+    with _lock:
+        if _link is not None or _stops != stops:      # a call made one, or stop() came
+            link.close()
+            return
+        _link = link
+        log.info("web: the engine started at boot in %.1f s", time.monotonic() - started)
+
+        def warmed(answer: dict) -> None:
+            if "error" in answer:
+                log.warning("web: warming Chromium failed: %s", answer["error"])
+            else:
+                log.info("web: Chromium warmed in %.1f s", time.monotonic() - started)
+
+        with contextlib.suppress(WebError):           # gone already: the next call says why
+            link.ask_or_later({"cmd": "warm"}, 0.0, later=lambda seq: warmed)
 
 
 _lock = threading.Lock()               # one question at a time
 _link = None                           # the pipe to the child, once something needed it
 _emit = None                           # where events go, once Hallux has connected
+_early = None                          # the thread that starts the engine at boot
+_stops = 0                             # how many times stop() ran: the early start checks it
 _config = read_config()                # a bad web.toml: the addon doesn't load
 
 
@@ -332,6 +402,8 @@ def _folder_of(page: str) -> str:
     link = _link if _link is not None and _link.alive() else None
     if link is None or page not in link.pages:
         raise WebError(f"no page called {str(page)[:40]} is open")
+    if page in link.opening:                          # the child is still making its window
+        raise WebError(f"the page {page} is still opening: wait for its loaded event")
     return link.pages[page]
 
 
@@ -444,6 +516,11 @@ class _Link:
         self.asked = 0
         self.pages: dict = {}                         # name: its folder, for every open window
         self.closing = False                          # we end it: no page failed
+        # Answers that came too late for their question go to a function instead (fixes/01).
+        # The lock keeps an answer from slipping between the queue and that table.
+        self.late_lock = threading.Lock()
+        self.late: dict = {}                          # seq: the function that takes its answer
+        self.opening: dict = {}                       # page: (seq, its timer, when it was asked)
         self.reader = threading.Thread(target=self._read, name="web child", daemon=True)
         self.reader.start()
         try:
@@ -460,12 +537,19 @@ class _Link:
             with contextlib.suppress(ValueError):
                 message = json.loads(line)
                 if isinstance(message, dict) and "seq" in message:
-                    self.answers.put(message)
+                    with self.late_lock:
+                        taker = self.late.pop(message["seq"], None)
+                        if taker is None:
+                            self.answers.put(message)
+                    if taker is not None:
+                        taker({key: value for key, value in message.items() if key != "seq"})
                 elif isinstance(message, dict):       # no question asked: something happened
                     if message.get("event") == "closed":
+                        self._forget_opening(message.get("page"))
                         self.pages.pop(message.get("page"), None)
                     _tell(message)
         self.answers.put(None)
+        self._forget_opening()
         if not self.closing and self.pages:           # it crashed: every window went with it
             why = self._why_stopped()
             for page in list(self.pages):
@@ -476,29 +560,108 @@ class _Link:
         return self.process.poll() is None
 
     def ask(self, message: dict, seconds: float = ANSWER_SECONDS) -> dict:
+        return self._answer(self._send(message), seconds)
+
+    def ask_or_later(self, message: dict, seconds: float, later) -> dict | None:
+        """Ask, and wait `seconds` for the answer. If it doesn't come by then, None, and
+        later(seq) is called, under late_lock, the moment the question is handed over: it
+        returns the function that will take the answer, in the reader's thread."""
+        seq = self._send(message)
+        try:
+            return self._answer(seq, seconds)
+        except _NoAnswer:
+            pass
+        with self.late_lock:
+            answer = self._answer(seq, 0.0, waits=False)    # it came while we gave up
+            if answer is None:
+                self.late[seq] = later(seq)
+            return answer
+
+    def _send(self, message: dict) -> int:
         self.asked += 1
         try:
             self.process.stdin.write(json.dumps(message | {"seq": self.asked}) + "\n")
             self.process.stdin.flush()
         except (OSError, ValueError):                 # the pipe broke, or is closed
             raise WebError(self._why_stopped()) from None
-        return self._answer(self.asked, seconds)
+        return self.asked
 
-    def _answer(self, seq: int, seconds: float) -> dict:
-        """The answer to message `seq`. One that arrives after its question gave up is dropped."""
+    def _answer(self, seq: int, seconds: float, waits: bool = True) -> dict | None:
+        """The answer to message `seq`. One that arrives after its question gave up is dropped,
+        unless the question's answer was handed over (ask_or_later). With waits=False, only
+        what is queued already is looked at, and None if it isn't there."""
         deadline = time.monotonic() + seconds
         while True:
             try:
-                answer = self.answers.get(timeout=max(0.0, deadline - time.monotonic()))
+                if waits:
+                    answer = self.answers.get(timeout=max(0.0, deadline - time.monotonic()))
+                else:
+                    answer = self.answers.get_nowait()
             except queue.Empty:
+                if not waits:
+                    return None
                 if seq == 0:
                     raise WebError("the web engine didn't start") from None
-                raise WebError("the web engine doesn't answer") from None
+                raise _NoAnswer("the web engine doesn't answer") from None
             if answer is None:
                 self.answers.put(None)                # it stays gone for the next question
                 raise WebError(self._why_stopped())
             if answer.get("seq") == seq:
                 return {key: value for key, value in answer.items() if key != "seq"}
+
+    def window_later(self, name: str, folder: str, seq: int):
+        """A window the child is still making (ask_or_later, under late_lock): the page
+        counts as open and opening, a timer fails it after OPENING_SECONDS, and the answer,
+        when it comes, ends the opening, or fails the page."""
+        timer = threading.Timer(OPENING_SECONDS, self._never_opened, (name, seq))
+        timer.daemon = True
+        self.pages[name] = folder
+        self.opening[name] = (seq, timer, time.monotonic())
+        timer.start()
+
+        def take(answer: dict) -> None:
+            with self.late_lock:
+                entry = self.opening.get(name)
+                if entry is None or entry[0] != seq:  # closed, timed out or replaced meanwhile
+                    return
+                del self.opening[name]
+            entry[1].cancel()
+            seconds = time.monotonic() - entry[2] + OPEN_SECONDS
+            if "error" in answer:
+                self.pages.pop(name, None)
+                log.warning("web %s: the window failed after %.1f s: %s", name, seconds,
+                            answer["error"])
+                _tell({"event": "failed", "page": name, "why": answer["error"]})
+            else:
+                log.info("web %s: the window came after %.1f s", name, seconds)
+        return take
+
+    def _never_opened(self, name: str, seq: int) -> None:
+        """OPENING_SECONDS went by and the window still isn't made: it failed. The child
+        is told to close it, in case it comes after all."""
+        with _lock:
+            with self.late_lock:
+                entry = self.opening.get(name)
+                if entry is None or entry[0] != seq:
+                    return
+                del self.opening[name]
+                self.late.pop(seq, None)              # its answer, if it comes, is dropped
+            self.pages.pop(name, None)
+            if self.alive():
+                with contextlib.suppress(WebError):
+                    self.ask_or_later({"cmd": "close", "app": name}, 0.0,
+                                      later=lambda seq: lambda answer: None)
+        why = f"the window didn't open within {OPENING_SECONDS:g} seconds"
+        log.warning("web %s: %s", name, why)
+        _tell({"event": "failed", "page": name, "why": why})
+
+    def _forget_opening(self, page: str | None = None) -> None:
+        """No window is coming for this page (or for any, without one): stop its timer."""
+        with self.late_lock:
+            names = list(self.opening) if page is None else [page]
+            entries = [self.opening.pop(name) for name in names if name in self.opening]
+        for entry in entries:
+            entry[1].cancel()
 
     def _why_stopped(self) -> str:
         """The child ended: if it crashed, the last thing it printed says why."""
@@ -513,6 +676,7 @@ class _Link:
 
     def close(self) -> None:
         self.closing = True
+        self._forget_opening()
         if self.alive():
             with contextlib.suppress(OSError, ValueError):
                 self.process.stdin.write('{"cmd": "quit"}\n')
@@ -920,6 +1084,38 @@ def child_main() -> int:
             self.view.deleteLater()
             self.profile.deleteLater()
 
+    class Shut(QWebEngineUrlRequestInterceptor):
+        """The warm page's wall: nothing passes."""
+
+        def interceptRequest(self, info) -> None:
+            info.block(True)
+
+    warming: list = []                                # the warm page, until it is gone
+
+    def warm() -> None:
+        """Start Chromium before any window needs it (fixes/02): a profile off the record
+        with every setting a window has off, a page that may load nothing, about:blank.
+        Never shown, no bridge, no files, no event. Making the profile starts Chromium; it
+        is closed once loaded, and Chromium's processes stay for the windows to come."""
+        profile = QWebEngineProfile()
+        profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
+        profile.setPersistentCookiesPolicy(
+            QWebEngineProfile.PersistentCookiesPolicy.NoPersistentCookies)
+        for setting in OFF:
+            profile.settings().setAttribute(setting, False)
+        shut = Shut()
+        profile.setUrlRequestInterceptor(shut)
+        page = QWebEnginePage(profile)
+
+        def done(ok: bool) -> None:
+            page.deleteLater()                        # the page before its profile, always
+            profile.deleteLater()
+            warming.clear()
+
+        page.loadFinished.connect(done)
+        warming.append((profile, shut, page))
+        page.load(QUrl("about:blank"))
+
     windows: dict = {}                                # app name: its Window
 
     class Engine(QObject):
@@ -942,6 +1138,9 @@ def child_main() -> int:
         def answer(self, message: dict) -> dict:
             command, name = message.get("cmd"), message.get("app")
             if command == "ping":
+                return {"ok": True}
+            if command == "warm":
+                warm()
                 return {"ok": True}
             if command == "open":                     # the addon checked what it sends
                 if name in windows:

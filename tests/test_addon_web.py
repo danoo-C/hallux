@@ -492,6 +492,288 @@ def test_open_page_returns_at_once_and_loaded_follows(web):
     assert web.open_page(app_disk(), "/home/user/chat") == {"page": "chat", "open": "already"}
 
 
+# A window slow to come (docs/plans/web-addon/fixes/01): the first one starts Chromium, which
+# can take longer than open_page waits.
+
+def slow_child(web, monkeypatch, tmp_path, delay: float, answer: dict | None,
+               closed_first: bool = False):
+    """A child that makes its window in `delay` seconds and then answers `answer` (None: never),
+    with a loaded event after an ok; closed_first sends a closed event just before that answer.
+    It writes every message it gets to a file, and returns what it got."""
+    fake_child(web, monkeypatch, tmp_path, f"""
+        import time
+        got = open(sys.argv[1], "a")
+        print(json.dumps({{"seq": 0, "ok": True}}), flush=True)
+        for line in sys.stdin:
+            message = json.loads(line)
+            got.write(line)
+            got.flush()
+            if message["cmd"] == "quit":
+                break
+            if message["cmd"] != "open":
+                print(json.dumps({{"seq": message["seq"], "ok": True}}), flush=True)
+                continue
+            time.sleep({delay!r})
+            if {closed_first!r}:
+                print(json.dumps({{"event": "closed", "page": message["app"]}}), flush=True)
+            if {answer!r} is not None:
+                print(json.dumps({{"seq": message["seq"], **{answer!r}}}), flush=True)
+                if "ok" in {answer!r}:
+                    print(json.dumps({{"event": "loaded", "page": message["app"]}}), flush=True)
+    """)
+    got = tmp_path / "got.jsonl"
+    monkeypatch.setattr(web, "CHILD", web.CHILD + [str(got)])
+    monkeypatch.setattr(web, "OPEN_SECONDS", 0.3)
+    return lambda: [json.loads(line)["cmd"] for line in got.read_text().splitlines()]
+
+
+def failures(heard):
+    return [e for e in heard if e.get("event") == "failed"]
+
+
+@needs_qt
+def test_a_slow_window_is_starting_and_opens(web, monkeypatch, tmp_path):
+    heard = []
+    web.connect(heard.append)
+    sent = slow_child(web, monkeypatch, tmp_path, delay=1.5, answer={"ok": True})
+    starting = {"page": "chat", "starting": True}
+    assert web.open_page(app_disk(), "/home/user/chat") == starting
+    assert web.open_page(app_disk(), "/home/user/chat") == starting   # asks nothing
+    for call in (lambda: web.reply("chat", 1, "{}"), lambda: web.tell("chat", "{}"),
+                 lambda: web.reload(app_disk(), "chat"), lambda: web.close_page("chat")):
+        with pytest.raises(web.WebError,
+                           match="^the page chat is still opening: wait for its loaded event$"):
+            call()
+    events(heard, "loaded", 10)
+    assert web._link.opening == {} and web._link.pages == {"chat": "/home/user/chat"}
+    assert web.tell("chat", "{}") == {"ok": True}
+    assert web.open_page(app_disk(), "/home/user/chat") == {"page": "chat", "open": "already"}
+    assert sent() == ["open", "tell", "raise"]
+    assert failures(heard) == []
+
+
+@needs_qt
+def test_a_slow_window_that_fails_is_a_failed_event(web, monkeypatch, tmp_path):
+    heard = []
+    web.connect(heard.append)
+    slow_child(web, monkeypatch, tmp_path, delay=1.0, answer={"error": "no display"})
+    assert web.open_page(app_disk(), "/home/user/chat") == {"page": "chat", "starting": True}
+    events(heard, "failed", 10)
+    assert failures(heard) == [{"event": "failed", "page": "chat", "why": "no display"}]
+    assert web._link.pages == {} and web._link.opening == {}
+
+
+@needs_qt
+def test_a_window_that_never_comes_fails_out_loud(web, monkeypatch, tmp_path):
+    heard = []
+    web.connect(heard.append)
+    sent = slow_child(web, monkeypatch, tmp_path, delay=0.0, answer=None)
+    monkeypatch.setattr(web, "OPENING_SECONDS", 1.0)
+    assert web.open_page(app_disk(), "/home/user/chat") == {"page": "chat", "starting": True}
+    events(heard, "failed", 10)
+    assert failures(heard) == [{"event": "failed", "page": "chat",
+                                "why": "the window didn't open within 1 seconds"}]
+    assert web._link.pages == {} and web._link.opening == {}
+    time.sleep(0.3)
+    assert sent() == ["open", "close"]                # in case it comes after all
+    with pytest.raises(web.WebError, match="^no page called chat is open$"):
+        web.tell("chat", "{}")
+
+
+@needs_qt
+def test_a_window_the_user_closes_while_it_opens_is_no_failure(web, monkeypatch, tmp_path):
+    heard = []
+    web.connect(heard.append)
+    slow_child(web, monkeypatch, tmp_path, delay=0.8, answer={"ok": True}, closed_first=True)
+    monkeypatch.setattr(web, "OPENING_SECONDS", 1.0)
+    assert web.open_page(app_disk(), "/home/user/chat") == {"page": "chat", "starting": True}
+    events(heard, "closed", 10)
+    time.sleep(1.5)                                   # past OPENING_SECONDS: the timer stopped
+    assert failures(heard) == []
+    assert web._link.pages == {} and web._link.opening == {}
+
+
+@needs_qt
+def test_an_answer_that_comes_as_the_wait_ends_is_not_lost(web, monkeypatch, tmp_path):
+    fake_child(web, monkeypatch, tmp_path, """
+        print(json.dumps({"seq": 0, "ok": True}), flush=True)
+        for line in sys.stdin:
+            message = json.loads(line)
+            print(json.dumps({"seq": message["seq"], "pong": True}), flush=True)
+    """)
+    with web._lock:
+        link = web._child()
+    real = link._answer
+
+    def too_late(seq, seconds, waits=True):           # the answer is queued, but the wait ended
+        if not waits:
+            return real(seq, seconds, waits)
+        while link.answers.empty():
+            time.sleep(0.01)
+        raise web._NoAnswer("the web engine doesn't answer")
+
+    monkeypatch.setattr(link, "_answer", too_late)
+    handed = []
+    assert link.ask_or_later({"cmd": "ping"}, 0.1, later=handed.append) == {"pong": True}
+    assert handed == [] and link.late == {}
+
+
+@needs_qt
+def test_the_manual_says_what_starting_means(addon):
+    assert '"starting": true: the web engine is still starting' in addon.manual
+
+
+# The engine started at boot (docs/plans/web-addon/fixes/02).
+
+def boot_child(web, monkeypatch, tmp_path, hello_after: float = 0.0):
+    """A child that says hello after `hello_after` seconds and answers everything ok. Every
+    child started writes its process number to one file, and what it got to another."""
+    fake_child(web, monkeypatch, tmp_path, f"""
+        import os, time
+        pids, got = open(sys.argv[1], "a"), open(sys.argv[2], "a")
+        pids.write(f"{{os.getpid()}}\\n")
+        pids.flush()
+        time.sleep({hello_after!r})
+        print(json.dumps({{"seq": 0, "ok": True}}), flush=True)
+        for line in sys.stdin:
+            message = json.loads(line)
+            got.write(line)
+            got.flush()
+            if message["cmd"] == "quit":
+                break
+            print(json.dumps({{"seq": message["seq"], "ok": True}}), flush=True)
+    """)
+    pids, got = tmp_path / "pids", tmp_path / "got.jsonl"
+    monkeypatch.setattr(web, "CHILD", web.CHILD + [str(pids), str(got)])
+    monkeypatch.setattr(web, "_can_show", lambda: True)
+    monkeypatch.setattr(web, "_early", None)
+
+    def started():
+        return [int(p) for p in pids.read_text().split()] if pids.exists() else []
+
+    def sent():
+        return [json.loads(l)["cmd"] for l in got.read_text().splitlines()] if got.exists() else []
+    return started, sent
+
+
+def alive(pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
+def wait_for(condition, seconds=10):
+    deadline = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < deadline, "it never happened"
+        time.sleep(0.05)
+
+
+@needs_qt
+def test_connect_starts_the_engine_and_warms_it(web, monkeypatch, tmp_path):
+    started, sent = boot_child(web, monkeypatch, tmp_path)
+    web.connect(lambda event: None)
+    wait_for(lambda: sent() == ["warm"])
+    link = web._link
+    assert web.open_page(app_disk(), "/home/user/chat") == {"page": "chat"}
+    assert web._link is link and len(started()) == 1 and sent() == ["warm", "open"]
+    assert link.late == {}                            # the warm's answer was taken
+
+
+@needs_qt
+def test_stop_while_the_engine_starts_keeps_nothing(web, monkeypatch, tmp_path):
+    started, sent = boot_child(web, monkeypatch, tmp_path, hello_after=1.0)
+    web.connect(lambda event: None)
+    wait_for(lambda: started())
+    began = time.monotonic()
+    web.stop()
+    assert time.monotonic() - began < 0.5             # it didn't wait for the hello
+    web._early.join(10)
+    assert web._link is None and sent() == ["quit"]  # the child it made, closed: no warm
+    wait_for(lambda: not alive(started()[0]))
+
+
+@needs_qt
+def test_a_call_during_the_start_at_boot_leaves_one_engine(web, monkeypatch, tmp_path):
+    started, sent = boot_child(web, monkeypatch, tmp_path, hello_after=1.0)
+    web.connect(lambda event: None)
+    wait_for(lambda: started())
+    assert web.open_page(app_disk(), "/home/user/chat") == {"page": "chat"}
+    web._early.join(10)
+    first, second = started()
+    assert web._link.process.pid == second             # the call's own engine is kept
+    assert sorted(sent()) == ["open", "quit"]           # the early one: closed, never warmed
+    wait_for(lambda: not alive(first))
+
+
+@needs_qt
+def test_nothing_starts_at_boot_without_a_display_or_with_the_setting_off(web, monkeypatch,
+                                                                         tmp_path):
+    started, _ = boot_child(web, monkeypatch, tmp_path)
+    monkeypatch.setitem(web._config, "start_engine_at_boot", False)
+    web.connect(lambda event: None)
+    assert web._early is None
+    monkeypatch.setitem(web._config, "start_engine_at_boot", True)
+    monkeypatch.setattr(web, "_can_show", lambda: False)
+    web.connect(lambda event: None)
+    assert web._early is None
+    time.sleep(0.3)
+    assert started() == []
+
+
+@needs_qt
+def test_a_window_can_be_shown_only_in_a_terminal_on_a_display(web, monkeypatch):
+    class Tty:
+        def __init__(self, tty):
+            self.tty = tty
+
+        def isatty(self):
+            return self.tty
+
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr(sys, "stdin", Tty(True))
+    monkeypatch.setattr(sys, "stdout", Tty(True))
+    assert web._can_show()
+    monkeypatch.setattr(sys, "stdout", Tty(False))    # pytest, or hallux --script - | ...
+    assert not web._can_show()
+    monkeypatch.setattr(sys, "stdout", Tty(True))
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    assert not web._can_show()
+    monkeypatch.delenv("QT_QPA_PLATFORM")
+    monkeypatch.delenv("WAYLAND_DISPLAY")
+    assert not web._can_show()
+    monkeypatch.setenv("DISPLAY", ":0")
+    assert web._can_show()
+
+
+@needs_qt
+def test_the_real_engine_warms_and_its_windows_work_as_before(web, trap):
+    _, hits = trap
+    heard = []
+    web.connect(heard.append)
+    assert ask(web, {"cmd": "warm"}) == {"ok": True}
+    assert web.open_page(app_disk(), "/home/user/chat") == {"page": "chat"}
+    found = results(web, "chat")
+    assert found["done"] == "yes" and found["report"]["blocked"] == 0
+    assert [e["event"] for e in heard] == ["loaded"]  # nothing for the warm page
+    assert hits == []
+
+
+@needs_qt
+def test_a_real_window_slow_to_come_opens_all_the_same(web, monkeypatch):
+    heard = []
+    web.connect(heard.append)
+    monkeypatch.setattr(web, "OPEN_SECONDS", 0.001)   # no real window comes this fast
+    assert web.open_page(app_disk(), "/home/user/chat") == {"page": "chat", "starting": True}
+    assert events(heard, "loaded") == [{"event": "loaded", "page": "chat"}]
+    assert web.open_page(app_disk(), "/home/user/chat") == {"page": "chat", "open": "already"}
+    assert results(web, "chat")["done"] == "yes"
+
+
 @needs_qt
 def test_a_third_page_is_refused_and_close_page_makes_room(web):
     for name in ("one", "two"):
@@ -733,14 +1015,21 @@ def test_an_ask_nobody_hears_fails_at_its_time_limit(quick):
 @needs_qt
 def test_web_toml(web, tmp_path):
     missing = tmp_path / "none.toml"
-    assert web.read_config(str(missing)) == {"ask_timeout_seconds": 120}
+    assert web.read_config(str(missing)) == {"ask_timeout_seconds": 120,
+                                             "start_engine_at_boot": True}
     good = tmp_path / "good.toml"
     good.write_text("ask_timeout_seconds = 300\n")
-    assert web.read_config(str(good)) == {"ask_timeout_seconds": 300}
+    assert web.read_config(str(good)) == {"ask_timeout_seconds": 300,
+                                          "start_engine_at_boot": True}
+    good.write_text("start_engine_at_boot = false\n")
+    assert web.read_config(str(good)) == {"ask_timeout_seconds": 120,
+                                          "start_engine_at_boot": False}
     for text, told in (("ask_timeout_seconds = 5", "from 10 to 3600"),
                        ("ask_timeout_seconds = 3601", "from 10 to 3600"),
                        ("ask_timeout_seconds = 12.5", "whole number"),
                        ("ask_timeout_seconds = true", "whole number"),
+                       ("start_engine_at_boot = 1", "must be true or false"),
+                       ('start_engine_at_boot = "yes"', "must be true or false"),
                        ("colour = 1", "unknown key colour"),
                        ("this isn't toml", "can't be read")):
         bad = tmp_path / "bad.toml"

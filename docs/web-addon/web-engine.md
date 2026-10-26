@@ -278,6 +278,17 @@ document, or differs from it:
   speak of both). A call that gets no answer fails with "the web engine doesn't answer",
   and `stop()` ends the child; a child that died is started again by the next call.
   Chromium reserves far more address space than it uses, so a plain limit would break it.
+- **`open_page` waited for the window after all,** against section 8a, so the first window
+  after a cold start often failed with "the web engine doesn't answer" and then opened,
+  cut off from Hallux. [Fix 01](../plans/web-addon/fixes/01-dont-wait-for-the-window.md)
+  (2026-10-26) makes such a window "starting": its answer is taken when it comes, and a
+  window that hasn't come in 60 seconds fails out loud.
+- **The engine starts at boot,** not at the first `open_page`:
+  [fix 02](../plans/web-addon/fixes/02-start-the-engine-early.md) (2026-10-26). When Hallux
+  runs in a terminal on a display, the addon starts the child in the background as it
+  loads, and the child warms Chromium with a page that loads `about:blank` and is closed
+  again. Chromium's processes stay: about 310 MB while no window is open. Off with
+  `start_engine_at_boot = false` in `addons/web.toml`.
 
 **The bridge (section 5)**
 

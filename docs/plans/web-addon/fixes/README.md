@@ -6,8 +6,8 @@ what to build.
 
 | Fix | What | Status |
 |---|---|---|
-| [01](01-dont-wait-for-the-window.md) | The first window after Hallux starts often fails with "the web engine doesn't answer", and then opens anyway, cut off from Hallux | **Planned** 2026-10-26 |
-| [02](02-start-the-engine-early.md) | The first window waits for Chromium to start; start it while Hallux boots | **Planned** 2026-10-26; begins with a free check |
+| [01](01-dont-wait-for-the-window.md) | The first window after Hallux starts often fails with "the web engine doesn't answer", and then opens anyway, cut off from Hallux | **Built** 2026-10-26 (see its "As built"); the user's cold-start try is still to come |
+| [02](02-start-the-engine-early.md) | The first window waits for Chromium to start; start it while Hallux boots | **Built** 2026-10-26 (see its "As built"); the user's cold-start try is still to come |
 
 Both come from a read-only look at the user's report on 2026-10-26: "when [I] restart
 hallux, open a big app like kittystory, it says web doesnt respond, the window stays open
