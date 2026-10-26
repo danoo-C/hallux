@@ -19,9 +19,10 @@ def saved(root):
 
 
 def readme_example():
-    """The config.toml that the README shows."""
-    readme = (Path(__file__).resolve().parent.parent / "README.MD").read_text(encoding="utf-8")
-    return readme.split("## Configuration")[1].split("```toml\n")[1].split("```")[0]
+    """The config.toml that the tutorial shows (docs/guide/tutorial.md, its Settings)."""
+    guide = Path(__file__).resolve().parent.parent / "docs" / "guide" / "tutorial.md"
+    return guide.read_text(encoding="utf-8").split("## 10. Settings")[1].split(
+        "```toml\n")[1].split("```")[0]
 
 
 def test_defaults(tmp_path):
